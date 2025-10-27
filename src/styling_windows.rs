@@ -5,7 +5,7 @@
  * regardless of target platform.
  */
 
-pub use super::styling_primitives::{Color, ControlStyle, FontDescription, FontWeight, StyleId};
+pub use super::styling_primitives::{Color, ControlStyle, FontWeight, StyleId};
 
 use windows::Win32::Graphics::Gdi::{DeleteObject, HBRUSH, HFONT, HGDIOBJ};
 

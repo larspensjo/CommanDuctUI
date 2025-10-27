@@ -10,7 +10,7 @@
 use crate::{
     app::Win32ApiInternalState,
     error::{PlatformError, Result as PlatformResult},
-    types::{AppEvent, MenuAction, MenuItemConfig, WindowId},
+    types::{AppEvent, MenuItemConfig, WindowId},
     window_common::NativeWindowData,
 };
 

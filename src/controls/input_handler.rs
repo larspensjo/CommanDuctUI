@@ -7,7 +7,6 @@
 
 use crate::PlatformResult;
 use crate::app::Win32ApiInternalState;
-use crate::error::PlatformError;
 use crate::styling::Color;
 use crate::types::{ControlId, WindowId};
 use std::sync::Arc;

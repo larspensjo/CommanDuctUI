@@ -12,17 +12,24 @@
 use super::app::Win32ApiInternalState;
 use super::controls::treeview_handler; // Ensure treeview_handler is used for its functions
 use super::error::{PlatformError, Result as PlatformResult};
-use super::types::{CheckState, ControlId, LayoutRule, MenuItemConfig, TreeItemId, WindowId};
+use super::types::{CheckState, ControlId, LayoutRule, TreeItemId, WindowId};
 
 use std::sync::Arc;
 use windows::{
     Win32::{
-        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
-        Graphics::Gdi::InvalidateRect,
+        Foundation::{GetLastError, LPARAM, WPARAM},
         UI::{Controls::WC_EDITW, Input::KeyboardAndMouse::EnableWindow, WindowsAndMessaging::*},
     },
     core::HSTRING,
 };
+
+#[derive(Debug)]
+pub(crate) struct InputCreationOptions {
+    pub initial_text: String,
+    pub read_only: bool,
+    pub multiline: bool,
+    pub vertical_scroll: bool,
+}
 
 /*
  * Executes the `DefineLayout` command.
@@ -260,15 +267,19 @@ pub(crate) fn execute_create_input(
     window_id: WindowId,
     parent_control_id: Option<ControlId>,
     control_id: ControlId,
-    initial_text: String,
-    read_only: bool,
-    multiline: bool,
-    vertical_scroll: bool,
+    options: InputCreationOptions,
 ) -> PlatformResult<()> {
     log::debug!(
         "CommandExecutor: execute_create_input for WinID {window_id:?}, ControlID {}",
         control_id.raw()
     );
+
+    let InputCreationOptions {
+        initial_text,
+        read_only,
+        multiline,
+        vertical_scroll,
+    } = options;
 
     internal_state.with_window_data_write(window_id, |window_data| {
         if window_data.has_control(control_id) {

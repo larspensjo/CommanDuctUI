@@ -260,8 +260,7 @@ pub(crate) fn handle_wm_ctlcolorstatic(
 
                     // Fallback for transparent label if parent brush isn't found: use system window brush.
                     // This is better than falling through to legacy logic which would override the text color.
-                    let brush: HBRUSH =
-                        unsafe { GetSysColorBrush(windows::Win32::Graphics::Gdi::COLOR_WINDOW) };
+                    let brush: HBRUSH = unsafe { GetSysColorBrush(COLOR_WINDOW) };
                     return Ok(Some(LRESULT(brush.0 as isize)));
                 }
             }
@@ -276,8 +275,7 @@ pub(crate) fn handle_wm_ctlcolorstatic(
                 unsafe {
                     SetTextColor(hdc_static_ctrl, color);
                     SetBkMode(hdc_static_ctrl, TRANSPARENT);
-                    let brush: HBRUSH =
-                        GetSysColorBrush(windows::Win32::Graphics::Gdi::COLOR_WINDOW);
+                    let brush: HBRUSH = GetSysColorBrush(COLOR_WINDOW);
                     return Ok(Some(LRESULT(brush.0 as isize)));
                 }
             }

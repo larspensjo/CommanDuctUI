@@ -1068,8 +1068,7 @@ pub(crate) fn handle_nm_click(
             .copied()
             .ok_or_else(|| {
                 PlatformError::InvalidHandle(format!(
-                    "HTREEITEM {:?} missing in map during label click",
-                    h_item_hit
+                    "HTREEITEM {h_item_hit:?} missing in map during label click"
                 ))
             })
     });

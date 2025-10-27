@@ -587,10 +587,12 @@ impl Win32ApiInternalState {
                 window_id,
                 parent_control_id,
                 control_id,
-                initial_text,
-                read_only,
-                multiline,
-                vertical_scroll,
+                command_executor::InputCreationOptions {
+                    initial_text,
+                    read_only,
+                    multiline,
+                    vertical_scroll,
+                },
             ),
             PlatformCommand::SetControlText {
                 window_id,
