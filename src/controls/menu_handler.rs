@@ -127,6 +127,7 @@ pub(crate) unsafe fn add_menu_item_recursive_impl(
  *
  * The command ID is looked up in the window's menu map and, if found,
  * converted into an `AppEvent::MenuActionClicked`.
+ * [CDU-CmdEventPatternV1] WM_COMMAND notifications are translated back into `AppEvent`s so the application sees semantic menu actions.
  */
 pub(crate) fn handle_wm_command_for_menu(
     window_id: WindowId,
@@ -161,13 +162,16 @@ pub(crate) fn handle_wm_command_for_menu(
 mod tests {
     use super::*;
     use crate::{
-        WindowId,
+        AppEvent, WindowId,
         app::Win32ApiInternalState,
         types::{MenuAction, MenuItemConfig},
         window_common::NativeWindowData,
     };
     use std::sync::Arc;
-    use windows::Win32::UI::WindowsAndMessaging::{CreateMenu, DestroyMenu};
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{CreateMenu, DestroyMenu},
+    };
 
     // Arrange common environment for menu tests
     fn setup_test_env() -> (Arc<Win32ApiInternalState>, WindowId, NativeWindowData) {
@@ -219,5 +223,31 @@ mod tests {
         assert!(actions.contains(&MenuAction::LoadProfile));
         assert!(actions.contains(&MenuAction::SaveProfileAs));
         assert!(actions.contains(&MenuAction::RefreshFileList));
+    }
+
+    #[test]
+    // [CDU-CmdEventPatternV1] Menu WM_COMMAND notifications are converted back into semantic `AppEvent::MenuActionClicked` values.
+    fn test_handle_wm_command_for_menu_returns_event() {
+        let (internal_state, window_id, mut native_data) = setup_test_env();
+        let action_id = native_data.register_menu_action(MenuAction::RefreshFileList);
+        {
+            let mut guard = internal_state.active_windows().write().unwrap();
+            guard.insert(window_id, native_data);
+        }
+
+        let event = handle_wm_command_for_menu(
+            window_id,
+            action_id,
+            HWND::default(),
+            &internal_state,
+        )
+        .expect("event should be produced");
+
+        match event {
+            AppEvent::MenuActionClicked { action } => {
+                assert_eq!(action, MenuAction::RefreshFileList);
+            }
+            other => panic!("Unexpected event: {other:?}"),
+        }
     }
 }

@@ -30,6 +30,7 @@ const WC_BUTTON: PCWSTR = windows::core::w!("BUTTON");
  * exist and to get the parent HWND. Then, it creates the native button
  * control without holding any locks. Finally, it acquires a write lock briefly
  * to register the new control, checking for race conditions.
+ * [CDU-Control-ButtonV1][CDU-IdempotentCommandsV1] Push buttons are created exactly once per logical ID and surface clicks via AppEvents.
  */
 pub(crate) fn handle_create_button_command(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -124,6 +125,7 @@ pub(crate) fn handle_bn_clicked(
     control_id: ControlId,
     hwnd_control: HWND,
 ) -> AppEvent {
+    // [CDU-Control-ButtonV1] Button notifications re-enter the command pipeline as type-safe events carrying the original ControlId.
     log::debug!(
         "ButtonHandler: BN_CLICKED for ID {} (HWND {hwnd_control:?}) in WinID {window_id:?}",
         control_id.raw()
@@ -131,5 +133,26 @@ pub(crate) fn handle_bn_clicked(
     AppEvent::ButtonClicked {
         window_id,
         control_id,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    // [CDU-Control-ButtonV1] BN_CLICKED notifications emit the expected `AppEvent::ButtonClicked`.
+    fn bn_clicked_translates_to_app_event() {
+        let event = handle_bn_clicked(WindowId(9), ControlId::new(5), HWND::default());
+        match event {
+            AppEvent::ButtonClicked {
+                window_id,
+                control_id,
+            } => {
+                assert_eq!(window_id, WindowId(9));
+                assert_eq!(control_id, ControlId::new(5));
+            }
+            other => panic!("Unexpected event: {other:?}"),
+        }
     }
 }

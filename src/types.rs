@@ -43,6 +43,7 @@ pub struct TreeItemId(pub u64);
  * and the platform layer. Wrapping the raw `i32` ID prevents accidental
  * mixing with unrelated integer values and documents the intended usage.
  * The platform layer maps these logical IDs to native control handles.
+ * [CDU-ControlLogicalIdsV1] Every control is referenced through this strongly typed wrapper instead of raw HWND values.
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ControlId(pub i32);

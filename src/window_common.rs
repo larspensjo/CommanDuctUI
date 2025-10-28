@@ -163,6 +163,7 @@ impl NativeWindowData {
     }
 
     pub(crate) fn apply_style_to_control(&mut self, control_id: ControlId, style_id: StyleId) {
+        // [CDU-Styling-ApplyV1] Track which logical control has an applied `StyleId` so redraw hooks can resolve palette/font info.
         self.applied_styles.insert(control_id, style_id);
     }
 
@@ -193,6 +194,7 @@ impl NativeWindowData {
      * rectangle for each control without calling any Win32 APIs. The
      * algorithm mirrors the runtime layout engine and is recursively
      * applied by `apply_layout_rules_for_children`.
+     * [CDU-LayoutSystemV1] Declarative docking rules are validated here without touching the Win32 APIs.
      */
     fn calculate_layout(parent_rect: RECT, rules: &[LayoutRule]) -> HashMap<ControlId, RECT> {
         let mut sorted = rules.to_vec();
@@ -807,6 +809,7 @@ impl Win32ApiInternalState {
                 log::debug!(
                     "WM_CLOSE received for WinID {window_id:?}. Generating WindowCloseRequestedByUser."
                 );
+                // [CDU-WindowLifecycleEventsV1] WM_CLOSE translates into a declarative `WindowCloseRequestedByUser` event before the native destruction proceeds.
                 event_to_send = Some(AppEvent::WindowCloseRequestedByUser { window_id });
                 lresult_override = Some(SUCCESS_CODE);
             }
@@ -1262,6 +1265,8 @@ mod tests {
      */
 
     #[test]
+    // [CDU-ControlLogicalIdsV1][CDU-ControlEnableDisableV1][CDU-Tech-WindowsRsV1]
+    // Control registration via logical IDs using windows-rs HWNDs powers later enable/disable commands.
     fn test_register_control_hwnd_lookup() {
         // Arrange
         let mut data = NativeWindowData::new(WindowId(1));
@@ -1275,6 +1280,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-CmdEventPatternV1] Menu action lookup tables make WM_COMMAND notifications translatable to AppEvents.
     fn test_register_menu_action_increments_counter() {
         // Arrange
         let mut data = NativeWindowData::new(WindowId(2));
@@ -1291,6 +1297,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-Control-LabelV1][CDU-ControlTextUpdateV1] Label metadata keeps severity alongside text updates.
     fn test_set_and_get_label_severity() {
         // Arrange
         let mut data = NativeWindowData::new(WindowId(3));
@@ -1304,12 +1311,25 @@ mod tests {
         );
     }
 
+    #[test]
+    // [CDU-Styling-ApplyV1] Applying a style pins the selected `StyleId` so redraw hooks can query it later.
+    fn test_apply_style_to_control_records_id() {
+        let mut data = NativeWindowData::new(WindowId(4));
+        let control_id = ControlId::new(8);
+        data.apply_style_to_control(control_id, StyleId::DefaultText);
+        assert_eq!(
+            data.get_style_for_control(control_id),
+            Some(StyleId::DefaultText)
+        );
+    }
+
     /*
      * Unit tests for the pure layout calculation. These tests ensure the
      * geometry is computed correctly without creating any native windows.
      */
 
     #[test]
+    // [CDU-LayoutSystemV1] Docking rules produce deterministic rectangles even without native HWNDs.
     fn test_calculate_layout_top_and_fill() {
         // Arrange
         let rules = vec![
@@ -1345,6 +1365,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-LayoutSystemV1] Proportional fills divide available space using the declarative weights.
     fn test_calculate_layout_proportional_fill() {
         // Arrange
         let rules = vec![
@@ -1382,6 +1403,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-LayoutSystemV1][CDU-Control-PanelV1] Nested panel layouts respect parent-child docking relationships.
     fn test_calculate_layout_nested_panels() {
         // Arrange
         let outer_rule = LayoutRule {

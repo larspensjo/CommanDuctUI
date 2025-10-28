@@ -37,6 +37,7 @@ use windows::{
 /*
  * Creates a Win32 COLORREF from the platform-agnostic `Color` struct.
  * Win32 expects colors in BGR format, so this function handles the conversion.
+ * [CDU-Styling-CustomDrawV1] Custom draw hooks consume `Color` definitions and convert them into Win32 COLORREF values.
  */
 fn color_to_colorref(color: &Color) -> COLORREF {
     COLORREF((color.r as u32) | ((color.g as u32) << 8) | ((color.b as u32) << 16))
@@ -47,6 +48,7 @@ fn color_to_colorref(color: &Color) -> COLORREF {
  * This function takes the necessary parameters to create a label, including its parent,
  * logical ID, initial text, and class. It registers the new label's HWND with the
  * NativeWindowData and sets its initial severity, all within a single write transaction.
+ * [CDU-Control-LabelV1] Label creation maps logical IDs to native STATIC controls so status text surfaces remain declarative.
  */
 pub(crate) fn handle_create_label_command(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -203,6 +205,7 @@ pub(crate) fn handle_update_label_text_command(
  * a `StyleId` is applied to the control. If so, it uses the text color and
  * background brush from the corresponding `ParsedControlStyle`. If no style is
  * applied, it falls back to the legacy severity-based coloring for the status bar.
+ * [CDU-Styling-CustomDrawV1] WM_CTLCOLORSTATIC is intercepted so TreeView/Label renderers can apply fonts and palette rules supplied by styles.
  */
 pub(crate) fn handle_wm_ctlcolorstatic(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -283,4 +286,21 @@ pub(crate) fn handle_wm_ctlcolorstatic(
         });
 
     style_result.ok().flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    // [CDU-Styling-CustomDrawV1] Converting colors to COLORREF preserves RGB ordering for custom draw paths.
+    fn color_conversion_matches_bgr_layout() {
+        let color = Color {
+            r: 0x11,
+            g: 0x22,
+            b: 0x33,
+        };
+        let converted = color_to_colorref(&color);
+        assert_eq!(converted.0, 0x0033_2211);
+    }
 }

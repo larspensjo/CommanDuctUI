@@ -56,6 +56,7 @@ unsafe extern "system" fn forwarding_panel_proc(
 /*
  * Executes the `CreatePanel` command by creating a STATIC control and
  * registering it within the window's `NativeWindowData`.
+ * [CDU-Control-PanelV1] Panels act as logical containers so higher-level layout rules can address them just like any control.
  */
 pub(crate) fn handle_create_panel_command(
     internal_state: &Arc<Win32ApiInternalState>,

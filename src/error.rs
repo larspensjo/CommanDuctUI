@@ -56,4 +56,5 @@ impl std::error::Error for PlatformError {
 }
 
 /// A specialized `Result` type for platform layer operations.
+// [CDU-Tech-ErrorHandlingV1] Command handlers use this alias to bubble rich PlatformError values back to the application.
 pub type Result<T> = std::result::Result<T, PlatformError>;

@@ -13,6 +13,7 @@ use crate::{
     window_common,
 };
 
+// [CDU-Tech-WindowsRsV1] All Win32 API interactions below flow through the `windows` crate bindings.
 use windows::{
     Win32::{
         Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, WPARAM},
@@ -46,7 +47,7 @@ use std::sync::{
  * the application's lifecycle and UI elements. It is managed by `PlatformInterface`
  * and accessed by the `WndProc` and command handlers.
  * It is passed as user data to some functions.
- * TOOD: I think all member should be made private here. Instead, accessor functions should be provided.
+ * [CDU-Tech-ThreadSafetyV1] Shared state is wrapped in Arc/RwLock/Mutex primitives so UI commands/events stay data-race free.
  */
 pub(crate) struct Win32ApiInternalState {
     h_instance: HINSTANCE,
@@ -363,6 +364,7 @@ impl Win32ApiInternalState {
      * was the last window, posts `WM_QUIT` so the message loop exits. The
      * `is_quitting` flag ensures we honor a prior quit request once all windows
      * have closed.
+     * [CDU-AppQuitV1] Posting `WM_QUIT` here gives the app logic a declarative `QuitApplication` command that stops the message pump cleanly.
      */
     pub(crate) fn check_if_should_quit_after_window_close(&self) {
         if self.should_quit_on_last_window_close() {
@@ -639,6 +641,7 @@ impl Win32ApiInternalState {
         style_id: StyleId,
         style: ControlStyle,
     ) -> PlatformResult<()> {
+        // [CDU-Styling-DefineV1] Style definitions are parsed once and stored so multiple controls can reference them by `StyleId`.
         log::debug!("Win32ApiInternalState: define_style for StyleId::{style_id:?}");
 
         // --- Parse FontDescription into HFONT ---
@@ -875,6 +878,7 @@ impl PlatformInterface {
     /*
      * A `WindowId` is generated and associated with the native window's state.
      * The window is not shown until a `PlatformCommand::ShowWindow` is received.
+     * [CDU-WindowCreationV1] Creating a top-level window wires logical metadata to the native HWND before it is ever shown.
      */
     pub fn create_window(&self, config: WindowConfig) -> PlatformResult<WindowId> {
         let window_id = self.internal_state.prepare_new_window()?;
@@ -922,6 +926,7 @@ impl PlatformInterface {
      * Processes initial commands, then enters the message loop, dequeuing and
      * executing commands from the event handler before processing OS messages.
      * Returns when the application quits.
+     * [CDU-CmdEventPatternV1] The main loop dequeues `PlatformCommand`s first and then emits `AppEvent`s back to the handler, enforcing the command/event contract.
      */
     pub fn main_event_loop(
         &self,
@@ -1063,7 +1068,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::controls::treeview_handler::TreeViewInternalState;
     use crate::types::TreeItemId;
     use crate::window_common::NativeWindowData;
     use windows::Win32::{Foundation::HWND, UI::Controls::HTREEITEM};
@@ -1078,6 +1082,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-Dialogs-FileV1][CDU-Dialogs-FolderV1] File/folder dialog buffers round-trip into `PathBuf` using the UTF-16 helper exercised here.
     fn roundtrip_simple() {
         let mut wide: Vec<u16> = "C:\\temp\\file.txt".encode_utf16().collect();
         wide.push(0); // Add null terminator
@@ -1086,6 +1091,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-Dialogs-FileV1][CDU-Dialogs-FolderV1] Even when Win32 omits a null terminator, dialog paths still deserialize deterministically.
     fn no_null_terminator() {
         let wide: Vec<u16> = "D:\\data\\incomplete".encode_utf16().collect();
         // No null terminator added
@@ -1102,6 +1108,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-WindowCreationV1] Preparing a window reserves a slot in the native map before the HWND exists.
     fn prepare_new_window_registers_entry() {
         // Arrange
         let state = Win32ApiInternalState::new("PrepareTest".to_string()).unwrap();
@@ -1113,6 +1120,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-WindowCreationV1] Attaching the HWND fulfills the window creation contract by wiring the logical ID to the native handle.
     fn attach_hwnd_updates_native_data() {
         // Arrange
         let state = Win32ApiInternalState::new("AttachTest".to_string()).unwrap();
@@ -1129,6 +1137,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-Styling-DefineV1] Style definitions are parsed and retained so later commands can reference them by `StyleId`.
     fn define_style_stores_parsed_style() {
         // Arrange
         let state = Win32ApiInternalState::new("StyleTest".to_string()).unwrap();
@@ -1156,6 +1165,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-WindowLifecycleEventsV1] Window teardown removes native state so `WindowDestroyed` observers don't see stale HWNDs.
     fn remove_window_data_removes_entry() {
         // Arrange
         let (state, window_id, data) = setup_state();
@@ -1171,6 +1181,8 @@ mod tests {
     }
 
     #[test]
+    // [CDU-Control-TreeViewV1][CDU-TreeView-PopulationV1][CDU-TreeView-ItemStateV1][CDU-TreeView-ItemSelectionV1][CDU-Tech-ThreadSafetyV1]
+    // Exercising the tree view state accessor proves that item mappings survive concurrent command mutations.
     fn with_treeview_state_mut_preserves_state_on_success() {
         // Arrange
         let (state, window_id, mut data) = setup_state();
@@ -1200,6 +1212,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-IdempotentCommandsV1][CDU-Tech-ErrorHandlingV1] TreeView commands fail gracefully without corrupting state when handlers return errors.
     fn with_treeview_state_mut_preserves_state_on_error() {
         // Arrange
         let (state, window_id, mut data) = setup_state();
@@ -1229,6 +1242,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-AppQuitV1] As long as windows remain, the quit path defers posting WM_QUIT.
     fn should_quit_on_last_window_close_false_when_windows_exist() {
         // Arrange
         let (state, window_id, data) = setup_state();
@@ -1243,6 +1257,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-AppQuitV1] When the final window disappears, the quit logic triggers immediately.
     fn should_quit_on_last_window_close_true_when_no_windows() {
         // Arrange
         let (state, _, _) = setup_state();

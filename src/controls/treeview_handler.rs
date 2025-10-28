@@ -69,6 +69,7 @@ impl TreeViewInternalState {
     }
 
     fn clear_items_impl(&mut self, hwnd_treeview: HWND) {
+        // [CDU-TreeView-PopulationV1] Clearing all nodes guarantees PopulateTreeView commands rebuild the hierarchy without leftovers.
         if hwnd_treeview.is_invalid() {
             log::error!("TreeViewInternalState::clear_items_impl called with invalid HWND");
             return;
@@ -153,6 +154,7 @@ impl TreeViewInternalState {
         // Explicitly set the state after insertion. This ensures the built-in
         // state image list for checkboxes is attached before we request a
         // particular check state.
+        // [CDU-TreeView-ItemStateV1] Programmatic checkbox state is applied immediately so UI and model stay in sync.
         let mut tv_item_update = TVITEMEXW {
             mask: TVIF_STATE,
             hItem: h_current_item_native,
@@ -185,6 +187,7 @@ impl TreeViewInternalState {
  * This function uses a read-create-write pattern to minimize lock contention.
  * It first checks for conflicts using a read lock, then creates the native
  * control, and finally uses a write lock to register the new control and its state.
+ * [CDU-Control-TreeViewV1] TreeView creation ties the logical `ControlId` to the native HWND and seeds the checkbox/selection tracking maps.
  */
 pub(crate) fn handle_create_treeview_command(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -709,6 +712,7 @@ pub(crate) fn expand_all_tree_items(
  * Ensures the operating system highlights the TreeView row for a provided item.
  * This centralizes the conversion from logical `TreeItemId` to native `HTREEITEM`
  * and issues the `TVM_SELECTITEM` message so layout code can simply enqueue a command.
+ * [CDU-TreeView-ItemSelectionV1] Selection commands keep the highlighted row aligned with the app-provided `TreeItemId`.
  */
 pub(crate) fn set_treeview_selection(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -806,6 +810,7 @@ fn is_item_new_for_display(
  * Applies a bold/italic font to "New" items via NM_CUSTOMDRAW, replacing the former
  * hand-drawn blue circle indicator. The old drawing logic is preserved in comments
  * for potential future reference.
+ * [CDU-Styling-CustomDrawV1] Custom draw hooks allow TreeView rows to render with per-item fonts and colors supplied by the styling system.
  */
 pub(crate) fn handle_nm_customdraw(
     internal_state: &Arc<Win32ApiInternalState>,

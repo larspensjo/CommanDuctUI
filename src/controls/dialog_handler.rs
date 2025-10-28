@@ -78,6 +78,7 @@ pub(crate) fn get_hwnd_owner(
  * and `handle_show_save_file_dialog_command`. It handles the common setup
  * for `OPENFILENAMEW` and processes the dialog result, then sends an
  * appropriate `AppEvent` constructed by `event_constructor`.
+ * [CDU-Dialogs-FileV1] Both Open and Save dialog commands flow through this helper so `AppEvent`s always contain a normalized `PathBuf`.
  */
 #[allow(clippy::too_many_arguments)]
 fn show_common_file_dialog<FDialog, FEvent>(
@@ -1054,10 +1055,19 @@ pub(crate) fn handle_show_exclude_patterns_dialog_command(
     Ok(())
 }
 
+fn message_box_icon_flag(severity: MessageSeverity) -> MESSAGEBOX_STYLE {
+    match severity {
+        MessageSeverity::Error => MB_ICONERROR,
+        MessageSeverity::Warning => MB_ICONWARNING,
+        _ => MB_ICONINFORMATION,
+    }
+}
+
 /*
  * Handles the `ShowMessageBox` platform command by displaying a modal Win32 message box.
  * It maps the provided `MessageSeverity` to an icon style, keeping the UX consistent
  * with other status surfaces while ensuring the message appears prominently.
+ * [CDU-Dialogs-MessageBoxV1] Message box commands convert severity into the matching Win32 icon flags before showing the modal dialog.
  */
 pub(crate) fn handle_show_message_box_command(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -1068,11 +1078,7 @@ pub(crate) fn handle_show_message_box_command(
 ) -> PlatformResult<()> {
     let hwnd_owner = get_hwnd_owner(internal_state, window_id)?;
 
-    let icon_flag = match severity {
-        MessageSeverity::Error => MB_ICONERROR,
-        MessageSeverity::Warning => MB_ICONWARNING,
-        _ => MB_ICONINFORMATION,
-    };
+    let icon_flag = message_box_icon_flag(severity);
 
     let title_hstring = HSTRING::from(title);
     let message_hstring = HSTRING::from(message);
@@ -1094,6 +1100,8 @@ pub(crate) fn handle_show_message_box_command(
 
 /*
  * Handles the `ShowFolderPickerDialog` platform command.
+ * [CDU-Dialogs-FolderV1] The folder picker command wraps the Win32 IFileOpenDialog with `FOS_PICKFOLDERS`,
+ * returning the chosen directory path via AppEvent.
  */
 pub(crate) fn handle_show_folder_picker_dialog_command(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -1154,4 +1162,18 @@ pub(crate) fn handle_show_folder_picker_dialog_command(
     };
     internal_state.send_event(event);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING};
+
+    #[test]
+    // [CDU-Dialogs-MessageBoxV1] Severity levels map to the expected Win32 icon flags.
+    fn icon_flag_tracks_severity() {
+        assert_eq!(message_box_icon_flag(MessageSeverity::Information), MB_ICONINFORMATION);
+        assert_eq!(message_box_icon_flag(MessageSeverity::Warning), MB_ICONWARNING);
+        assert_eq!(message_box_icon_flag(MessageSeverity::Error), MB_ICONERROR);
+    }
 }

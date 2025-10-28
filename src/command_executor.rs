@@ -62,6 +62,7 @@ pub(crate) fn execute_define_layout(
  * Executes the `QuitApplication` command.
  * Posts a `WM_QUIT` message to the application's message queue, which will
  * eventually cause the main event loop in `PlatformInterface::run` to terminate.
+ * [CDU-AppQuitV1] Converting `PlatformCommand::QuitApplication` into WM_QUIT gives app logic a declarative shutdown hook.
  */
 pub(crate) fn execute_quit_application() -> PlatformResult<()> {
     log::debug!(
@@ -126,6 +127,7 @@ pub(crate) fn execute_signal_main_window_ui_setup_complete(
 /*
  * Executes the `SetControlEnabled` command.
  * Enables or disables a specific control within a window.
+ * [CDU-ControlEnableDisableV1] Logical `ControlId`s translate into EnableWindow toggles without exposing HWNDs to the caller.
  */
 pub(crate) fn execute_set_control_enabled(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -167,6 +169,7 @@ pub(crate) fn execute_set_control_enabled(
  * Delegates to treeview_handler::populate_treeview.
  * This function remains in command_executor as it's directly executing a command,
  * but the core logic is in the treeview_handler.
+ * [CDU-TreeView-PopulationV1] PopulateTreeView commands rebuild the entire hierarchy through the dedicated handler.
  */
 pub(crate) fn execute_populate_treeview(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -255,12 +258,14 @@ pub(crate) fn execute_set_treeview_selection(
     control_id: ControlId,
     item_id: TreeItemId,
 ) -> PlatformResult<()> {
+    // [CDU-TreeView-ItemSelectionV1] Programmatic selection routes through the handler so UI + AppEvent stay in sync.
     treeview_handler::set_treeview_selection(internal_state, window_id, control_id, item_id)
 }
 
 /*
  * Executes the `CreateInput` command.
  * Creates a Win32 EDIT control to be used as a text input field.
+ * [CDU-Control-InputV1][CDU-IdempotentCommandsV1] Input creation validates parent/child IDs and fails cleanly when IDs collide.
  */
 pub(crate) fn execute_create_input(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -361,6 +366,7 @@ pub(crate) fn execute_create_input(
 /*
  * Updates the displayed text for any HWND-backed control identified by a logical ID.
  * This is the shared implementation behind SetInputText, SetViewerContent, and button text updates.
+ * [CDU-ControlTextUpdateV1] Shared text updates enforce that every text-capable control can be refreshed through a single command.
  */
 pub(crate) fn execute_set_control_text(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -449,7 +455,7 @@ mod tests {
     use crate::{
         WindowId,
         app::Win32ApiInternalState,
-        types::{ControlId, MenuAction, MenuItemConfig},
+        types::ControlId,
         window_common::NativeWindowData,
     };
     use std::sync::Arc;
@@ -466,6 +472,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-Tech-ErrorHandlingV1][CDU-TreeView-PopulationV1] TreeView commands surface errors when the logical control is missing instead of panicking.
     fn test_expand_visible_tree_items_returns_error() {
         let (internal_state, window_id, native_window_data) = setup_test_env();
         {
@@ -482,6 +489,7 @@ mod tests {
     }
 
     #[test]
+    // [CDU-Tech-ErrorHandlingV1][CDU-TreeView-PopulationV1] Expansion commands also honor the error-first contract for invalid controls.
     fn test_expand_all_tree_items_returns_error() {
         let (internal_state, window_id, native_window_data) = setup_test_env();
         {
@@ -493,6 +501,66 @@ mod tests {
             &internal_state,
             window_id,
             ControlId::new(999), // A non-existent control ID
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    // [CDU-ControlEnableDisableV1][CDU-Tech-ErrorHandlingV1] Enabling a non-existent control reports an error so callers can react.
+    fn test_set_control_enabled_missing_control_returns_error() {
+        let (internal_state, window_id, native_window_data) = setup_test_env();
+        {
+            let mut guard = internal_state.active_windows().write().unwrap();
+            guard.insert(window_id, native_window_data);
+        }
+
+        let result = execute_set_control_enabled(
+            &internal_state,
+            window_id,
+            ControlId::new(321),
+            true,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    // [CDU-ControlTextUpdateV1][CDU-Tech-ErrorHandlingV1] Text updates fail fast when the logical control cannot be resolved.
+    fn test_set_control_text_missing_control_returns_error() {
+        let (internal_state, window_id, native_window_data) = setup_test_env();
+        {
+            let mut guard = internal_state.active_windows().write().unwrap();
+            guard.insert(window_id, native_window_data);
+        }
+
+        let result = execute_set_control_text(
+            &internal_state,
+            window_id,
+            ControlId::new(1234),
+            "hello".into(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    // [CDU-Control-InputV1][CDU-IdempotentCommandsV1] Input creation rejects invalid parent IDs instead of calling into Win32.
+    fn test_create_input_missing_parent_errors() {
+        let (internal_state, window_id, native_window_data) = setup_test_env();
+        {
+            let mut guard = internal_state.active_windows().write().unwrap();
+            guard.insert(window_id, native_window_data);
+        }
+
+        let result = execute_create_input(
+            &internal_state,
+            window_id,
+            Some(ControlId::new(77)),
+            ControlId::new(88),
+            InputCreationOptions {
+                initial_text: "ignored".into(),
+                read_only: false,
+                multiline: false,
+                vertical_scroll: false,
+            },
         );
         assert!(result.is_err());
     }
