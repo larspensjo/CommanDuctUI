@@ -70,9 +70,9 @@ impl From<ControlId> for i32 {
     }
 }
 
-// --- Semantic Menu Action Identifiers ---
-
 /*
+ * Semantic Menu Action Identifiers
+ *
  * Represents logical menu actions in a platform-agnostic way.
  * This enum is used in `MenuItemConfig` and `AppEvent` to identify menu
  * actions semantically, rather than relying on raw `i32` control IDs.
@@ -88,6 +88,10 @@ pub enum MenuAction {
     EditExcludePatterns,
     RefreshFileList,
     GenerateArchive,
+    /// Opens the "left" comparison file per [CSV-File-LoadV1].
+    OpenLeftLogFile,
+    /// Opens the "right" comparison file per [CSV-File-LoadV1].
+    OpenRightLogFile,
 }
 
 // --- Data Structures for UI Description (Platform-Agnostic) ---
