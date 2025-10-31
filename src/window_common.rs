@@ -14,7 +14,7 @@ use super::{
     controls::{button_handler, input_handler, label_handler, treeview_handler},
     error::{PlatformError, Result as PlatformResult},
     styling::StyleId,
-    types::{AppEvent, ControlId, DockStyle, LayoutRule, MenuAction, MessageSeverity, WindowId},
+    types::{AppEvent, ControlId, DockStyle, LayoutRule, MenuActionId, MessageSeverity, WindowId},
 };
 
 use windows::{
@@ -86,8 +86,8 @@ pub(crate) struct NativeWindowData {
     treeview_state: Option<treeview_handler::TreeViewInternalState>,
     // HWNDs for various controls (buttons, status bar, treeview, etc.)
     control_hwnd_map: HashMap<ControlId, HWND>,
-    // Maps dynamically generated `i32` menu item IDs to their semantic `MenuAction`.
-    menu_action_map: HashMap<i32, MenuAction>,
+    // Maps dynamically generated `i32` menu item IDs to their semantic `MenuActionId`.
+    menu_action_map: HashMap<i32, MenuActionId>,
     // Maps a control's ID to the semantic StyleId applied to it.
     applied_styles: HashMap<ControlId, StyleId>,
     // Counter to generate unique `i32` IDs for menu items that have an action.
@@ -177,12 +177,12 @@ impl NativeWindowData {
         id
     }
 
-    pub(crate) fn register_menu_action(&mut self, action: MenuAction) -> i32 {
+    pub(crate) fn register_menu_action(&mut self, action_id: MenuActionId) -> i32 {
         let id = self.generate_menu_item_id();
-        self.menu_action_map.insert(id, action);
+        self.menu_action_map.insert(id, action_id);
         log::debug!(
-            "CommandExecutor: Mapping menu action {:?} to ID {} for window {:?}",
-            action,
+            "CommandExecutor: Mapping menu action ID {:?} to command {} for window {:?}",
+            action_id,
             id,
             self.logical_window_id
         );
@@ -378,12 +378,12 @@ impl NativeWindowData {
         }
     }
 
-    pub(crate) fn get_menu_action(&self, menu_id: i32) -> Option<MenuAction> {
+    pub(crate) fn get_menu_action(&self, menu_id: i32) -> Option<MenuActionId> {
         self.menu_action_map.get(&menu_id).copied()
     }
 
     #[cfg(test)]
-    pub(crate) fn iter_menu_actions(&self) -> impl Iterator<Item = (&i32, &MenuAction)> {
+    pub(crate) fn iter_menu_actions(&self) -> impl Iterator<Item = (&i32, &MenuActionId)> {
         self.menu_action_map.iter()
     }
 
@@ -1286,14 +1286,14 @@ mod tests {
         let mut data = NativeWindowData::new(WindowId(2));
         let start = data.get_next_menu_item_id_counter();
         // Act
-        let id1 = data.register_menu_action(MenuAction::RefreshFileList);
-        let id2 = data.register_menu_action(MenuAction::RefreshFileList);
+        let id1 = data.register_menu_action(MenuActionId(42));
+        let id2 = data.register_menu_action(MenuActionId(42));
         // Assert
         assert_eq!(data.menu_action_count(), 2);
         assert_eq!(id1, start);
         assert_eq!(id2, start + 1);
         assert_eq!(data.get_next_menu_item_id_counter(), start + 2);
-        assert_eq!(data.get_menu_action(id1), Some(MenuAction::RefreshFileList));
+        assert_eq!(data.get_menu_action(id1), Some(MenuActionId(42)));
     }
 
     #[test]

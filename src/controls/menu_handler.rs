@@ -32,7 +32,7 @@ use windows::{
  *
  * The menu items are registered with `NativeWindowData` so that
  * subsequent `WM_COMMAND` messages can be translated into
- * `MenuAction` values.
+ * `MenuActionId` values.
  */
 pub(crate) fn handle_create_main_menu_command(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -89,8 +89,8 @@ pub(crate) unsafe fn add_menu_item_recursive_impl(
     window_data: &mut NativeWindowData,
 ) -> PlatformResult<()> {
     if item_config.children.is_empty() {
-        if let Some(action) = item_config.action {
-            let generated_id = window_data.register_menu_action(action);
+        if let Some(action_id) = item_config.action {
+            let generated_id = window_data.register_menu_action(action_id);
             unsafe {
                 AppendMenuW(
                     parent_menu_handle,
@@ -139,9 +139,14 @@ pub(crate) fn handle_wm_command_for_menu(
         internal_state.with_window_data_read(window_id, |wd| Ok(wd.get_menu_action(command_id)));
 
     match menu_action_result {
-        Ok(Some(action)) => {
-            log::debug!("Menu action {action:?} (ID {command_id}) for WinID {window_id:?}.");
-            Some(AppEvent::MenuActionClicked { action })
+        Ok(Some(action_id)) => {
+            log::debug!(
+                "Menu action id {:?} (command {}) for WinID {:?}.",
+                action_id,
+                command_id,
+                window_id
+            );
+            Some(AppEvent::MenuActionClicked { action_id })
         }
         Ok(None) => {
             log::warn!(
@@ -164,7 +169,7 @@ mod tests {
     use crate::{
         AppEvent, WindowId,
         app::Win32ApiInternalState,
-        types::{MenuAction, MenuItemConfig},
+        types::{MenuActionId, MenuItemConfig},
         window_common::NativeWindowData,
     };
     use std::sync::Arc;
@@ -172,6 +177,10 @@ mod tests {
         Foundation::HWND,
         UI::WindowsAndMessaging::{CreateMenu, DestroyMenu},
     };
+
+    const LOAD_PROFILE_ID: MenuActionId = MenuActionId(1);
+    const SAVE_PROFILE_AS_ID: MenuActionId = MenuActionId(2);
+    const REFRESH_FILE_LIST_ID: MenuActionId = MenuActionId(3);
 
     // Arrange common environment for menu tests
     fn setup_test_env() -> (Arc<Win32ApiInternalState>, WindowId, NativeWindowData) {
@@ -187,7 +196,7 @@ mod tests {
         let (_state, _window_id, mut native_data) = setup_test_env();
         let menu_items = vec![
             MenuItemConfig {
-                action: Some(MenuAction::LoadProfile),
+                action: Some(LOAD_PROFILE_ID),
                 text: "Load".into(),
                 children: vec![],
             },
@@ -195,13 +204,13 @@ mod tests {
                 action: None,
                 text: "File".into(),
                 children: vec![MenuItemConfig {
-                    action: Some(MenuAction::SaveProfileAs),
+                    action: Some(SAVE_PROFILE_AS_ID),
                     text: "Save As".into(),
                     children: vec![],
                 }],
             },
             MenuItemConfig {
-                action: Some(MenuAction::RefreshFileList),
+                action: Some(REFRESH_FILE_LIST_ID),
                 text: "Refresh".into(),
                 children: vec![],
             },
@@ -219,17 +228,18 @@ mod tests {
         // Assert
         assert_eq!(native_data.menu_action_count(), 3);
         assert_eq!(native_data.get_next_menu_item_id_counter(), 30003);
-        let actions: Vec<MenuAction> = native_data.iter_menu_actions().map(|(_, a)| *a).collect();
-        assert!(actions.contains(&MenuAction::LoadProfile));
-        assert!(actions.contains(&MenuAction::SaveProfileAs));
-        assert!(actions.contains(&MenuAction::RefreshFileList));
+        let actions: Vec<MenuActionId> =
+            native_data.iter_menu_actions().map(|(_, a)| *a).collect();
+        assert!(actions.contains(&LOAD_PROFILE_ID));
+        assert!(actions.contains(&SAVE_PROFILE_AS_ID));
+        assert!(actions.contains(&REFRESH_FILE_LIST_ID));
     }
 
     #[test]
     // [CDU-CmdEventPatternV1] Menu WM_COMMAND notifications are converted back into semantic `AppEvent::MenuActionClicked` values.
     fn test_handle_wm_command_for_menu_returns_event() {
         let (internal_state, window_id, mut native_data) = setup_test_env();
-        let action_id = native_data.register_menu_action(MenuAction::RefreshFileList);
+        let command_id = native_data.register_menu_action(REFRESH_FILE_LIST_ID);
         {
             let mut guard = internal_state.active_windows().write().unwrap();
             guard.insert(window_id, native_data);
@@ -237,15 +247,15 @@ mod tests {
 
         let event = handle_wm_command_for_menu(
             window_id,
-            action_id,
+            command_id,
             HWND::default(),
             &internal_state,
         )
         .expect("event should be produced");
 
         match event {
-            AppEvent::MenuActionClicked { action } => {
-                assert_eq!(action, MenuAction::RefreshFileList);
+            AppEvent::MenuActionClicked { action_id } => {
+                assert_eq!(action_id, REFRESH_FILE_LIST_ID);
             }
             other => panic!("Unexpected event: {other:?}"),
         }

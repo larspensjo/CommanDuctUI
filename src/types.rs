@@ -4,7 +4,7 @@
  * and tree items, configurations for UI elements (windows, menus),
  * platform-agnostic event types (`AppEvent`), commands for the platform layer
  * (`PlatformCommand`), severity levels for messages (`MessageSeverity`),
- * and semantic identifiers for menu actions (`MenuAction`). It also defines the
+ * and semantic identifiers for menu actions (`MenuActionId`). It also defines the
  * `PlatformEventHandler` trait that the application logic must implement.
  */
 
@@ -71,28 +71,15 @@ impl From<ControlId> for i32 {
 }
 
 /*
- * Semantic Menu Action Identifiers
+ * Strongly typed identifier for application-defined menu actions.
  *
- * Represents logical menu actions in a platform-agnostic way.
- * This enum is used in `MenuItemConfig` and `AppEvent` to identify menu
- * actions semantically, rather than relying on raw `i32` control IDs.
- * The platform layer will manage the mapping from these actions to
- * dynamically assigned native menu item IDs.
+ * Wrapping the raw `u32` in a dedicated newtype keeps the public API generic
+ * while still allowing consumers to use compile-time constants for their menu
+ * semantics. [CDU-MenuActionIdV1] The platform layer only needs to track these
+ * opaque IDs and map them to Win32 menu command identifiers.
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MenuAction {
-    LoadProfile,
-    NewProfile,
-    SaveProfileAs,
-    SetArchivePath,
-    EditExcludePatterns,
-    RefreshFileList,
-    GenerateArchive,
-    /// Opens the "left" comparison file per [CSV-File-LoadV1].
-    OpenLeftLogFile,
-    /// Opens the "right" comparison file per [CSV-File-LoadV1].
-    OpenRightLogFile,
-}
+pub struct MenuActionId(pub u32);
 
 // --- Data Structures for UI Description (Platform-Agnostic) ---
 
@@ -130,13 +117,12 @@ pub struct TreeItemDescriptor {
 /*
  * Configuration for a single menu item, used by `PlatformCommand::CreateMainMenu`.
  *
- * Describes the properties of a menu item, including an optional semantic `MenuAction`
- * for event handling, its display text, and any sub-menu items. Menu items that
- * are themselves popups (e.g., a "File" menu that opens a submenu) will have `action: None`.
+ * Each item can opt into semantic routing by providing a `MenuActionId`; popups
+ * omit the action and supply child `MenuItemConfig` entries instead.
  */
 #[derive(Debug, Clone)]
 pub struct MenuItemConfig {
-    pub action: Option<MenuAction>,
+    pub action: Option<MenuActionId>,
     pub text: String,
     pub children: Vec<MenuItemConfig>, // For submenus
 }
@@ -218,9 +204,9 @@ pub enum AppEvent {
         window_id: WindowId,
         control_id: ControlId,
     },
-    // Signals that a menu item was clicked, identified by its semantic `MenuAction`.
+    // Signals that a menu item was clicked, identified by its semantic `MenuActionId`.
     MenuActionClicked {
-        action: MenuAction,
+        action_id: MenuActionId,
     },
     // Signals the result of a "Save File" dialog.
     FileSaveDialogCompleted {
