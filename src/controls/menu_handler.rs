@@ -228,8 +228,7 @@ mod tests {
         // Assert
         assert_eq!(native_data.menu_action_count(), 3);
         assert_eq!(native_data.get_next_menu_item_id_counter(), 30003);
-        let actions: Vec<MenuActionId> =
-            native_data.iter_menu_actions().map(|(_, a)| *a).collect();
+        let actions: Vec<MenuActionId> = native_data.iter_menu_actions().map(|(_, a)| *a).collect();
         assert!(actions.contains(&LOAD_PROFILE_ID));
         assert!(actions.contains(&SAVE_PROFILE_AS_ID));
         assert!(actions.contains(&REFRESH_FILE_LIST_ID));
@@ -245,13 +244,9 @@ mod tests {
             guard.insert(window_id, native_data);
         }
 
-        let event = handle_wm_command_for_menu(
-            window_id,
-            command_id,
-            HWND::default(),
-            &internal_state,
-        )
-        .expect("event should be produced");
+        let event =
+            handle_wm_command_for_menu(window_id, command_id, HWND::default(), &internal_state)
+                .expect("event should be produced");
 
         match event {
             AppEvent::MenuActionClicked { action_id } => {

@@ -13,12 +13,17 @@ use super::app::Win32ApiInternalState;
 use super::controls::treeview_handler; // Ensure treeview_handler is used for its functions
 use super::error::{PlatformError, Result as PlatformResult};
 use super::types::{CheckState, ControlId, LayoutRule, TreeItemId, WindowId};
+use super::window_common::ProgrammaticScrollGuard;
 
 use std::sync::Arc;
 use windows::{
     Win32::{
-        Foundation::{GetLastError, LPARAM, WPARAM},
-        UI::{Controls::WC_EDITW, Input::KeyboardAndMouse::EnableWindow, WindowsAndMessaging::*},
+        Foundation::{GetLastError, HWND, LPARAM, WPARAM},
+        UI::{
+            Controls::{SetScrollInfo, WC_EDITW},
+            Input::KeyboardAndMouse::EnableWindow,
+            WindowsAndMessaging::*,
+        },
     },
     core::HSTRING,
 };
@@ -425,6 +430,55 @@ pub(crate) fn execute_set_viewer_content(
     execute_set_control_text(internal_state, window_id, control_id, text)
 }
 
+/*
+ * Applies a 0-100 scroll percentage to the requested control, shielding the app logic from Win32 math.
+ * A scoped guard suppresses the echoing of the resulting WM_VSCROLL messages back into the presenter.
+ */
+pub(crate) fn execute_set_scroll_position(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    control_id: ControlId,
+    vertical_pos: u32,
+    horizontal_pos: u32,
+) -> PlatformResult<()> {
+    log::trace!(
+        "CommandExecutor: execute_set_scroll_position for WinID {:?}, Control {}, vertical={}, horizontal={}",
+        window_id,
+        control_id.raw(),
+        vertical_pos,
+        horizontal_pos
+    );
+
+    let hwnd_control = internal_state.with_window_data_read(window_id, |window_data| {
+        window_data.get_control_hwnd(control_id).ok_or_else(|| {
+            log::warn!(
+                "CommandExecutor: Control ID {} not found for SetScrollPosition in WinID {:?}",
+                control_id.raw(),
+                window_id
+            );
+            PlatformError::InvalidHandle(format!(
+                "Control ID {} not found for SetScrollPosition in WinID {:?}",
+                control_id.raw(),
+                window_id
+            ))
+        })
+    })?;
+
+    let _guard = ProgrammaticScrollGuard::new(window_id, control_id);
+    let vertical_updated = set_scroll_bar_percentage(hwnd_control, SB_VERT, vertical_pos)?;
+    let horizontal_updated = set_scroll_bar_percentage(hwnd_control, SB_HORZ, horizontal_pos)?;
+
+    if !vertical_updated && !horizontal_updated {
+        log::trace!(
+            "CommandExecutor: SetScrollPosition made no changes for control {} in {:?}",
+            control_id.raw(),
+            window_id
+        );
+    }
+
+    Ok(())
+}
+
 // Commands that call simple window_common functions (or could be moved to window_common if preferred)
 pub(crate) fn execute_set_window_title(
     internal_state: &Arc<Win32ApiInternalState>,
@@ -449,14 +503,78 @@ pub(crate) fn execute_close_window(
     super::window_common::send_close_message(internal_state, window_id)
 }
 
+/*
+ * Converts a desired percentage into scroll bar coordinates and nudges the control to that position.
+ * Returns `Ok(false)` when the target lacks scroll metadata so callers can decide whether to log.
+ */
+fn set_scroll_bar_percentage(
+    hwnd: HWND,
+    bar: SCROLLBAR_CONSTANTS,
+    percent: u32,
+) -> PlatformResult<bool> {
+    let mut scroll_info = SCROLLINFO {
+        cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_RANGE | SIF_PAGE | SIF_POS | SIF_TRACKPOS,
+        ..Default::default()
+    };
+
+    if let Err(err) = unsafe { GetScrollInfo(hwnd, bar, &mut scroll_info) } {
+        log::trace!(
+            "CommandExecutor: GetScrollInfo unavailable for bar {:?} on control {:?}: {err:?}",
+            bar,
+            hwnd
+        );
+        return Ok(false);
+    }
+
+    let min = scroll_info.nMin as i64;
+    let max = scroll_info.nMax as i64;
+    let mut range = max - min;
+    if scroll_info.nPage > 0 && range > 0 {
+        range -= (scroll_info.nPage as i64 - 1).max(0);
+    }
+
+    if range <= 0 {
+        return Ok(false);
+    }
+
+    let clamped_percent = percent.min(100) as i64;
+    let new_pos = (min + (range * clamped_percent) / 100).max(min).min(max) as i32;
+
+    if new_pos == scroll_info.nPos {
+        return Ok(true);
+    }
+
+    scroll_info.fMask = SIF_POS | SIF_TRACKPOS;
+    scroll_info.nPos = new_pos;
+    scroll_info.nTrackPos = new_pos;
+
+    unsafe {
+        SetScrollInfo(hwnd, bar, &scroll_info, true);
+        let message = if bar == SB_VERT {
+            WM_VSCROLL
+        } else {
+            WM_HSCROLL
+        };
+        let wparam_value =
+            ((SB_THUMBPOSITION.0 as usize) & 0xFFFF) | (((new_pos as usize) & 0xFFFF) << 16);
+        let _ = SendMessageW(hwnd, message, Some(WPARAM(wparam_value)), Some(LPARAM(0)));
+        let _ = SendMessageW(
+            hwnd,
+            message,
+            Some(WPARAM(SB_ENDSCROLL.0 as usize)),
+            Some(LPARAM(0)),
+        );
+    }
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*; // Import functions from command_executor like execute_expand_all_tree_items
     use crate::{
-        WindowId,
-        app::Win32ApiInternalState,
-        types::ControlId,
-        window_common::NativeWindowData,
+        WindowId, app::Win32ApiInternalState, types::ControlId, window_common::NativeWindowData,
     };
     use std::sync::Arc;
 
@@ -514,12 +632,8 @@ mod tests {
             guard.insert(window_id, native_window_data);
         }
 
-        let result = execute_set_control_enabled(
-            &internal_state,
-            window_id,
-            ControlId::new(321),
-            true,
-        );
+        let result =
+            execute_set_control_enabled(&internal_state, window_id, ControlId::new(321), true);
         assert!(result.is_err());
     }
 

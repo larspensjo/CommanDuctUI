@@ -36,7 +36,8 @@ use windows::{
     core::{HSTRING, PCWSTR},
 };
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -69,6 +70,49 @@ pub const INPUT_DEBOUNCE_MS: u32 = 300;
 pub(crate) const HWND_INVALID: HWND = HWND(std::ptr::null_mut());
 
 const SUCCESS_CODE: LRESULT = LRESULT(0);
+
+/*
+ * Tracks control/window pairs whose next scroll notifications originate from our own commands.
+ * The thread-local set prevents feedback loops when the platform mirrors app logic initiated scrolls.
+ */
+thread_local! {
+    static PROGRAMMATIC_SCROLL_SUPPRESSIONS: RefCell<HashSet<(WindowId, ControlId)>> =
+        RefCell::new(HashSet::new());
+}
+
+/*
+ * RAII helper that marks a control's scroll updates as programmatic until dropped.
+ * Keeps suppression lifetimes scoped so handlers outside the guard can forward genuine user events.
+ */
+#[derive(Debug)]
+pub(crate) struct ProgrammaticScrollGuard {
+    window_id: WindowId,
+    control_id: ControlId,
+}
+
+impl ProgrammaticScrollGuard {
+    pub(crate) fn new(window_id: WindowId, control_id: ControlId) -> Self {
+        PROGRAMMATIC_SCROLL_SUPPRESSIONS.with(|set| {
+            set.borrow_mut().insert((window_id, control_id));
+        });
+        Self {
+            window_id,
+            control_id,
+        }
+    }
+}
+
+impl Drop for ProgrammaticScrollGuard {
+    fn drop(&mut self) {
+        PROGRAMMATIC_SCROLL_SUPPRESSIONS.with(|set| {
+            set.borrow_mut().remove(&(self.window_id, self.control_id));
+        });
+    }
+}
+
+fn is_scroll_event_suppressed(window_id: WindowId, control_id: ControlId) -> bool {
+    PROGRAMMATIC_SCROLL_SUPPRESSIONS.with(|set| set.borrow().contains(&(window_id, control_id)))
+}
 /*
  * Holds native data associated with a specific window managed by the platform layer.
  * This includes the native window handle (`HWND`), a map of control IDs to their
@@ -1067,6 +1111,8 @@ impl Win32ApiInternalState {
                         None,
                     );
                 }
+            } else if notification_code == EN_VSCROLL as i32 {
+                return self.handle_edit_control_scroll(window_id, control_id, hwnd_control);
             } else {
                 log::trace!(
                     "Unhandled WM_COMMAND from control: ID {}, NotifyCode {notification_code}, HWND {hwnd_control:?}, WinID {window_id:?}",
@@ -1075,6 +1121,39 @@ impl Win32ApiInternalState {
             }
         }
         None
+    }
+
+    /*
+     * Handles scrollbar notifications for EDIT controls and forwards real user scrolls to app logic.
+     * Suppressed controls skip event generation so linked scrolling commands don't echo back.
+     */
+    fn handle_edit_control_scroll(
+        self: &Arc<Self>,
+        window_id: WindowId,
+        control_id: ControlId,
+        hwnd_control: HWND,
+    ) -> Option<AppEvent> {
+        if is_scroll_event_suppressed(window_id, control_id) {
+            log::trace!(
+                "Ignoring programmatic scroll command for control {} in window {:?}",
+                control_id.raw(),
+                window_id
+            );
+            return None;
+        }
+
+        let vertical = match query_scroll_percentage(hwnd_control, SB_VERT) {
+            Some(value) => value,
+            None => return None,
+        };
+        let horizontal = query_scroll_percentage(hwnd_control, SB_HORZ).unwrap_or(0);
+
+        Some(AppEvent::ControlScrolled {
+            window_id,
+            control_id,
+            vertical_pos: vertical,
+            horizontal_pos: horizontal,
+        })
     }
 
     fn handle_wm_timer(
@@ -1151,6 +1230,42 @@ impl Win32ApiInternalState {
         }
         SUCCESS_CODE
     }
+}
+
+/*
+ * Reads the requested scrollbar and converts its position into a 0-100 percentage.
+ * Falls back to `None` when the underlying control does not expose scroll metadata.
+ */
+fn query_scroll_percentage(hwnd: HWND, bar: SCROLLBAR_CONSTANTS) -> Option<u32> {
+    let mut scroll_info = SCROLLINFO {
+        cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+        ..Default::default()
+    };
+
+    if let Err(err) = unsafe { GetScrollInfo(hwnd, bar, &mut scroll_info) } {
+        log::trace!(
+            "query_scroll_percentage: GetScrollInfo failed for bar {:?} on {:?}: {err:?}",
+            bar,
+            hwnd
+        );
+        return None;
+    }
+
+    let min = scroll_info.nMin as i64;
+    let max = scroll_info.nMax as i64;
+    let mut range = max - min;
+    if scroll_info.nPage > 0 && range > 0 {
+        range -= (scroll_info.nPage as i64 - 1).max(0);
+    }
+
+    if range <= 0 {
+        return Some(0);
+    }
+
+    let pos = (scroll_info.nPos as i64 - min).max(0).min(range);
+    let percent = ((pos * 100) / range).max(0).min(100) as u32;
+    Some(percent)
 }
 
 pub(crate) fn set_window_title(

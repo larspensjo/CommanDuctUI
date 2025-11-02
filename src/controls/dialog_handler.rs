@@ -1167,13 +1167,21 @@ pub(crate) fn handle_show_folder_picker_dialog_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING,
+    };
 
     #[test]
     // [CDU-Dialogs-MessageBoxV1] Severity levels map to the expected Win32 icon flags.
     fn icon_flag_tracks_severity() {
-        assert_eq!(message_box_icon_flag(MessageSeverity::Information), MB_ICONINFORMATION);
-        assert_eq!(message_box_icon_flag(MessageSeverity::Warning), MB_ICONWARNING);
+        assert_eq!(
+            message_box_icon_flag(MessageSeverity::Information),
+            MB_ICONINFORMATION
+        );
+        assert_eq!(
+            message_box_icon_flag(MessageSeverity::Warning),
+            MB_ICONWARNING
+        );
         assert_eq!(message_box_icon_flag(MessageSeverity::Error), MB_ICONERROR);
     }
 }

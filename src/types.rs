@@ -241,6 +241,12 @@ pub enum AppEvent {
     MainWindowUISetupComplete {
         window_id: WindowId,
     },
+    ControlScrolled {
+        window_id: WindowId,
+        control_id: ControlId,
+        vertical_pos: u32,
+        horizontal_pos: u32,
+    },
     // Signals that text was entered in an input control after debouncing.
     InputTextChanged {
         window_id: WindowId,
@@ -420,6 +426,12 @@ pub enum PlatformCommand {
         window_id: WindowId,
         control_id: ControlId,
         text: String,
+    },
+    SetScrollPosition {
+        window_id: WindowId,
+        control_id: ControlId,
+        vertical_pos: u32,
+        horizontal_pos: u32,
     },
     SetTreeViewSelection {
         window_id: WindowId,
