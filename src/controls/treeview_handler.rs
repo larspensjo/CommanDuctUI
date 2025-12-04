@@ -11,9 +11,7 @@
  */
 use crate::app::Win32ApiInternalState;
 use crate::error::{PlatformError, Result as PlatformResult};
-use crate::types::{
-    AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, WindowId,
-};
+use crate::types::{AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, WindowId};
 
 use windows::{
     Win32::{

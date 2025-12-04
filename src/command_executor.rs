@@ -453,10 +453,7 @@ pub(crate) fn execute_close_window(
 mod tests {
     use super::*; // Import functions from command_executor like execute_expand_all_tree_items
     use crate::{
-        WindowId,
-        app::Win32ApiInternalState,
-        types::ControlId,
-        window_common::NativeWindowData,
+        WindowId, app::Win32ApiInternalState, types::ControlId, window_common::NativeWindowData,
     };
     use std::sync::Arc;
 
@@ -514,12 +511,8 @@ mod tests {
             guard.insert(window_id, native_window_data);
         }
 
-        let result = execute_set_control_enabled(
-            &internal_state,
-            window_id,
-            ControlId::new(321),
-            true,
-        );
+        let result =
+            execute_set_control_enabled(&internal_state, window_id, ControlId::new(321), true);
         assert!(result.is_err());
     }
 
