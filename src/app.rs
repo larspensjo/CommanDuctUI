@@ -611,6 +611,18 @@ impl Win32ApiInternalState {
                 control_id,
                 text,
             } => command_executor::execute_set_viewer_content(self, window_id, control_id, text),
+            PlatformCommand::SetScrollPosition {
+                window_id,
+                control_id,
+                vertical_pos,
+                horizontal_pos,
+            } => command_executor::execute_set_scroll_position(
+                self,
+                window_id,
+                control_id,
+                vertical_pos,
+                horizontal_pos,
+            ),
             PlatformCommand::SetTreeViewSelection {
                 window_id,
                 control_id,
