@@ -72,4 +72,5 @@ pub enum StyleId {
     StatusLabelError,
     ViewerMonospace,
     SummaryFolderText,
+    SummaryFolderMissingFile,
 }
