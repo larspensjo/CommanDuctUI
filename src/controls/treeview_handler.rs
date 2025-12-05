@@ -10,7 +10,9 @@
  * to specific TreeView details.
  */
 use crate::app::Win32ApiInternalState;
+use crate::controls::styling_handler;
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::styling::StyleId;
 use crate::types::{AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, WindowId};
 
 use windows::{
@@ -56,6 +58,7 @@ use std::sync::Arc;
 pub(crate) struct TreeViewInternalState {
     pub(crate) item_id_to_htreeitem: HashMap<TreeItemId, HTREEITEM>,
     pub(crate) htreeitem_to_item_id: HashMap<isize, TreeItemId>,
+    pub(crate) style_overrides: HashMap<TreeItemId, StyleId>,
 }
 
 impl TreeViewInternalState {
@@ -63,6 +66,7 @@ impl TreeViewInternalState {
         Self {
             item_id_to_htreeitem: HashMap::new(),
             htreeitem_to_item_id: HashMap::new(),
+            style_overrides: HashMap::new(),
         }
     }
 
@@ -82,6 +86,7 @@ impl TreeViewInternalState {
         }
         self.item_id_to_htreeitem.clear();
         self.htreeitem_to_item_id.clear();
+        self.style_overrides.clear();
         log::debug!("TreeViewInternalState::clear_items_impl completed for HWND {hwnd_treeview:?}");
     }
 
@@ -148,6 +153,9 @@ impl TreeViewInternalState {
             .insert(item_desc.id, h_current_item_native);
         self.htreeitem_to_item_id
             .insert(h_current_item_native.0, item_desc.id);
+        if let Some(style_id) = item_desc.style_override {
+            self.style_overrides.insert(item_desc.id, style_id);
+        }
 
         // Explicitly set the state after insertion. This ensures the built-in
         // state image list for checkboxes is attached before we request a
@@ -177,6 +185,10 @@ impl TreeViewInternalState {
             }
         }
         Ok(())
+    }
+
+    fn style_override_for(&self, item_id: &TreeItemId) -> Option<StyleId> {
+        self.style_overrides.get(item_id).copied()
     }
 }
 
@@ -816,7 +828,7 @@ pub(crate) fn handle_nm_customdraw(
     lparam_nmcustomdraw: LPARAM, // This is NMTVCUSTOMDRAW*
     control_id_of_treeview: ControlId,
 ) -> LRESULT {
-    let nmtvcd = unsafe { &*(lparam_nmcustomdraw.0 as *const NMTVCUSTOMDRAW) };
+    let nmtvcd = unsafe { &mut *(lparam_nmcustomdraw.0 as *mut NMTVCUSTOMDRAW) };
 
     match nmtvcd.nmcd.dwDrawStage {
         CDDS_PREPAINT => {
@@ -828,41 +840,85 @@ pub(crate) fn handle_nm_customdraw(
         }
         CDDS_ITEMPREPAINT => {
             let tree_item_id = TreeItemId(nmtvcd.nmcd.lItemlParam.0 as u64);
-            if !is_item_new_for_display(internal_state, window_id, tree_item_id) {
-                return LRESULT(CDRF_DODEFAULT as isize);
-            }
+            let item_is_new = is_item_new_for_display(internal_state, window_id, tree_item_id);
 
-            let mut indicator_font: Option<HFONT> = internal_state
+            let style_override = internal_state
                 .with_window_data_read(window_id, |window_data| {
-                    Ok(window_data.get_treeview_new_item_font())
+                    Ok(window_data
+                        .get_treeview_state()
+                        .and_then(|state| state.style_override_for(&tree_item_id)))
                 })
                 .unwrap_or(None);
 
-            if indicator_font.is_none() {
-                if let Ok(font_opt) =
-                    internal_state.with_window_data_write(window_id, |window_data| {
-                        window_data.ensure_treeview_new_item_font();
-                        Ok(window_data.get_treeview_new_item_font())
-                    })
-                {
-                    indicator_font = font_opt;
+            let mut selected_font: Option<HFONT> = None;
+            if let Some(style_id) = style_override {
+                if let Some(style) = internal_state.get_parsed_style(style_id) {
+                    if let Some(color) = style.text_color.as_ref() {
+                        nmtvcd.clrText = styling_handler::color_to_colorref(color);
+                    }
+                    if let Some(bg) = style.background_color.as_ref() {
+                        nmtvcd.clrTextBk = styling_handler::color_to_colorref(bg);
+                    }
+                    if let Some(font) = style.font_handle {
+                        selected_font = Some(font);
+                    }
                 }
             }
 
-            if let Some(font_handle) = indicator_font {
+            if selected_font.is_none() && item_is_new {
+                let mut indicator_font: Option<HFONT> = internal_state
+                    .with_window_data_read(window_id, |window_data| {
+                        Ok(window_data.get_treeview_new_item_font())
+                    })
+                    .unwrap_or(None);
+
+                if indicator_font.is_none() {
+                    if let Ok(font_opt) =
+                        internal_state.with_window_data_write(window_id, |window_data| {
+                            window_data.ensure_treeview_new_item_font();
+                            Ok(window_data.get_treeview_new_item_font())
+                        })
+                    {
+                        indicator_font = font_opt;
+                    }
+                }
+                selected_font = indicator_font;
+            }
+
+            let mut result: isize = CDRF_DODEFAULT as isize;
+            if let Some(font_handle) = selected_font {
                 unsafe {
                     SelectObject(nmtvcd.nmcd.hdc, HGDIOBJ(font_handle.0));
                 }
+                result |= CDRF_NEWFONT as isize;
+                result |= CDRF_NOTIFYPOSTPAINT as isize;
             }
 
-            return LRESULT((CDRF_NOTIFYPOSTPAINT | CDRF_NEWFONT) as isize);
+            return LRESULT(result);
         }
         CDDS_ITEMPOSTPAINT => {
             let hdc = nmtvcd.nmcd.hdc;
             let hwnd_treeview = nmtvcd.nmcd.hdr.hwndFrom;
             let tree_item_id = TreeItemId(nmtvcd.nmcd.lItemlParam.0 as u64);
 
-            if is_item_new_for_display(internal_state, window_id, tree_item_id) {
+            let style_override = internal_state
+                .with_window_data_read(window_id, |window_data| {
+                    Ok(window_data
+                        .get_treeview_state()
+                        .and_then(|state| state.style_override_for(&tree_item_id)))
+                })
+                .unwrap_or(None);
+
+            let needs_font_reset = style_override
+                .and_then(|style_id| {
+                    internal_state
+                        .get_parsed_style(style_id)
+                        .and_then(|style| style.font_handle)
+                })
+                .is_some()
+                || is_item_new_for_display(internal_state, window_id, tree_item_id);
+
+            if needs_font_reset {
                 /*
                  * --- DEACTIVATED ---
                  * Historical manual drawing code retained for reference:

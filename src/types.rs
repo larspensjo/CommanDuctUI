@@ -112,6 +112,7 @@ pub struct TreeItemDescriptor {
     pub is_folder: bool,
     pub state: CheckState,
     pub children: Vec<TreeItemDescriptor>,
+    pub style_override: Option<StyleId>,
 }
 
 /*

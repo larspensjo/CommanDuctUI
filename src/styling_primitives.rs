@@ -71,4 +71,5 @@ pub enum StyleId {
     StatusLabelWarning,
     StatusLabelError,
     ViewerMonospace,
+    SummaryFolderText,
 }
