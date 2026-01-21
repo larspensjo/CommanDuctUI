@@ -101,12 +101,12 @@ where
 
     // Prepare buffer for the file path.
     let mut file_buffer: Vec<u16> = vec![0; 2048]; // Buffer for the path.
-    if let Some(fname) = default_filename {
-        if !fname.is_empty() {
-            let default_name_utf16: Vec<u16> = fname.encode_utf16().collect();
-            let len_to_copy = std::cmp::min(default_name_utf16.len(), file_buffer.len() - 1);
-            file_buffer[..len_to_copy].copy_from_slice(&default_name_utf16[..len_to_copy]);
-        }
+    if let Some(fname) = default_filename
+        && !fname.is_empty()
+    {
+        let default_name_utf16: Vec<u16> = fname.encode_utf16().collect();
+        let len_to_copy = std::cmp::min(default_name_utf16.len(), file_buffer.len() - 1);
+        file_buffer[..len_to_copy].copy_from_slice(&default_name_utf16[..len_to_copy]);
     }
 
     // Prepare strings for the OPENFILENAMEW struct.
@@ -681,21 +681,20 @@ unsafe extern "system" fn exclude_patterns_dialog_proc(
                 x if x == IDOK.0 as u16 => {
                     let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
                         as *mut ExcludePatternsDialogData;
-                    if !dialog_data_ptr.is_null() {
-                        if let Ok(edit_hwnd) = unsafe {
+                    if !dialog_data_ptr.is_null()
+                        && let Ok(edit_hwnd) = unsafe {
                             GetDlgItem(Some(hdlg), window_common::ID_DIALOG_EXCLUDE_PATTERNS_EDIT)
-                        } {
-                            let text_len = unsafe { GetWindowTextLengthW(edit_hwnd) } as usize;
-                            let mut buffer: Vec<u16> = vec![0; text_len + 1];
-                            let written =
-                                unsafe { GetWindowTextW(edit_hwnd, buffer.as_mut_slice()) };
-                            buffer.truncate(written as usize);
-                            let mut result = String::from_utf16_lossy(&buffer);
-                            result = result.replace("\r\n", "\n");
-                            unsafe {
-                                (*dialog_data_ptr).result_text = result;
-                                (*dialog_data_ptr).saved = true;
-                            }
+                        }
+                    {
+                        let text_len = unsafe { GetWindowTextLengthW(edit_hwnd) } as usize;
+                        let mut buffer: Vec<u16> = vec![0; text_len + 1];
+                        let written = unsafe { GetWindowTextW(edit_hwnd, buffer.as_mut_slice()) };
+                        buffer.truncate(written as usize);
+                        let mut result = String::from_utf16_lossy(&buffer);
+                        result = result.replace("\r\n", "\n");
+                        unsafe {
+                            (*dialog_data_ptr).result_text = result;
+                            (*dialog_data_ptr).saved = true;
                         }
                     }
                     unsafe { EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default() };
@@ -736,7 +735,7 @@ fn push_str_utf16(vec: &mut Vec<u8>, s: &str) {
 
 // Helper to align a byte vector to a DWORD (4-byte) boundary.
 fn align_to_dword(vec: &mut Vec<u8>) {
-    while vec.len() % align_of::<u32>() != 0 {
+    while !vec.len().is_multiple_of(align_of::<u32>()) {
         vec.push(0);
     }
 }
@@ -1126,27 +1125,23 @@ pub(crate) fn handle_show_folder_picker_dialog_command(
             if let Err(e) = file_dialog.SetTitle(&HSTRING::from(title.as_str())) {
                 log::error!("DialogHandler: IFileOpenDialog::SetTitle failed: {e:?}");
             }
-            if let Some(dir_path) = &initial_dir {
-                if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(
+            if let Some(dir_path) = &initial_dir
+                && let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(
                     &HSTRING::from(dir_path.as_os_str()),
                     None,
-                ) {
-                    if let Err(e) = file_dialog.SetDefaultFolder(&item) {
-                        log::error!(
-                            "DialogHandler: IFileOpenDialog::SetDefaultFolder failed: {e:?}"
-                        );
-                    }
-                }
+                )
+                && let Err(e) = file_dialog.SetDefaultFolder(&item)
+            {
+                log::error!("DialogHandler: IFileOpenDialog::SetDefaultFolder failed: {e:?}");
             }
-            if file_dialog.Show(Some(hwnd_owner)).is_ok() {
-                if let Ok(shell_item) = file_dialog.GetResult() {
-                    if let Ok(pwstr_path) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
-                        let path_string = pwstr_path.to_string().unwrap_or_default();
-                        CoTaskMemFree(Some(pwstr_path.as_ptr() as *const c_void));
-                        if !path_string.is_empty() {
-                            path_result = Some(PathBuf::from(path_string));
-                        }
-                    }
+            if file_dialog.Show(Some(hwnd_owner)).is_ok()
+                && let Ok(shell_item) = file_dialog.GetResult()
+                && let Ok(pwstr_path) = shell_item.GetDisplayName(SIGDN_FILESYSPATH)
+            {
+                let path_string = pwstr_path.to_string().unwrap_or_default();
+                CoTaskMemFree(Some(pwstr_path.as_ptr() as *const c_void));
+                if !path_string.is_empty() {
+                    path_result = Some(PathBuf::from(path_string));
                 }
             }
         }

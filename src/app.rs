@@ -40,6 +40,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+// Type alias for the complex UI state provider type to reduce type complexity.
+type UiStateProviderHolder = Mutex<Option<Weak<Mutex<dyn UiStateProvider>>>>;
+
 /*
  * Internal state for the Win32 platform layer.
  *
@@ -55,7 +58,7 @@ pub(crate) struct Win32ApiInternalState {
     // Central registry for all active windows, mapping WindowId to its native state.
     active_windows: RwLock<HashMap<WindowId, window_common::NativeWindowData>>,
     application_event_handler: Mutex<Option<Weak<Mutex<dyn PlatformEventHandler>>>>,
-    ui_state_provider: Mutex<Option<Weak<Mutex<dyn UiStateProvider>>>>,
+    ui_state_provider: UiStateProviderHolder,
     // Stores processed, native-ready style definitions, keyed by a semantic ID.
     defined_styles: RwLock<HashMap<StyleId, Arc<ParsedControlStyle>>>,
     // The application name, used for window class registration.
@@ -121,7 +124,7 @@ impl Win32ApiInternalState {
         &self.active_windows
     }
 
-    pub(crate) fn ui_state_provider(&self) -> &Mutex<Option<Weak<Mutex<dyn UiStateProvider>>>> {
+    pub(crate) fn ui_state_provider(&self) -> &UiStateProviderHolder {
         &self.ui_state_provider
     }
 
@@ -788,17 +791,17 @@ impl Win32ApiInternalState {
 
         if let Some(parsed_style) = self.get_parsed_style(style_id) {
             // Apply the font if one is defined in the style.
-            if let Some(hfont) = parsed_style.font_handle {
-                if !hfont.is_invalid() {
-                    unsafe {
-                        // SendMessageW is synchronous. The LPARAM(1) tells the control to redraw immediately.
-                        SendMessageW(
-                            control_hwnd,
-                            WM_SETFONT,
-                            Some(WPARAM(hfont.0 as usize)),
-                            Some(LPARAM(1)),
-                        );
-                    }
+            if let Some(hfont) = parsed_style.font_handle
+                && !hfont.is_invalid()
+            {
+                unsafe {
+                    // SendMessageW is synchronous. The LPARAM(1) tells the control to redraw immediately.
+                    SendMessageW(
+                        control_hwnd,
+                        WM_SETFONT,
+                        Some(WPARAM(hfont.0 as usize)),
+                        Some(LPARAM(1)),
+                    );
                 }
             }
 

@@ -806,10 +806,10 @@ fn is_item_new_for_display(
         .as_ref()
         .and_then(|weak_handler| weak_handler.upgrade());
 
-    if let Some(handler_arc) = provider_opt {
-        if let Ok(handler_guard) = handler_arc.lock() {
-            return handler_guard.is_tree_item_new(window_id, tree_item_id);
-        }
+    if let Some(handler_arc) = provider_opt
+        && let Ok(handler_guard) = handler_arc.lock()
+    {
+        return handler_guard.is_tree_item_new(window_id, tree_item_id);
     }
 
     false
@@ -851,17 +851,17 @@ pub(crate) fn handle_nm_customdraw(
                 .unwrap_or(None);
 
             let mut selected_font: Option<HFONT> = None;
-            if let Some(style_id) = style_override {
-                if let Some(style) = internal_state.get_parsed_style(style_id) {
-                    if let Some(color) = style.text_color.as_ref() {
-                        nmtvcd.clrText = styling_handler::color_to_colorref(color);
-                    }
-                    if let Some(bg) = style.background_color.as_ref() {
-                        nmtvcd.clrTextBk = styling_handler::color_to_colorref(bg);
-                    }
-                    if let Some(font) = style.font_handle {
-                        selected_font = Some(font);
-                    }
+            if let Some(style_id) = style_override
+                && let Some(style) = internal_state.get_parsed_style(style_id)
+            {
+                if let Some(color) = style.text_color.as_ref() {
+                    nmtvcd.clrText = styling_handler::color_to_colorref(color);
+                }
+                if let Some(bg) = style.background_color.as_ref() {
+                    nmtvcd.clrTextBk = styling_handler::color_to_colorref(bg);
+                }
+                if let Some(font) = style.font_handle {
+                    selected_font = Some(font);
                 }
             }
 
@@ -872,15 +872,14 @@ pub(crate) fn handle_nm_customdraw(
                     })
                     .unwrap_or(None);
 
-                if indicator_font.is_none() {
-                    if let Ok(font_opt) =
+                if indicator_font.is_none()
+                    && let Ok(font_opt) =
                         internal_state.with_window_data_write(window_id, |window_data| {
                             window_data.ensure_treeview_new_item_font();
                             Ok(window_data.get_treeview_new_item_font())
                         })
-                    {
-                        indicator_font = font_opt;
-                    }
+                {
+                    indicator_font = font_opt;
                 }
                 selected_font = indicator_font;
             }

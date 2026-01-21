@@ -37,20 +37,20 @@ impl Drop for ParsedControlStyle {
      * resource leaks.
      */
     fn drop(&mut self) {
-        if let Some(hfont) = self.font_handle.take() {
-            if !hfont.is_invalid() {
-                // It's safe to call DeleteObject on a font handle.
-                unsafe {
-                    _ = DeleteObject(HGDIOBJ(hfont.0));
-                }
+        if let Some(hfont) = self.font_handle.take()
+            && !hfont.is_invalid()
+        {
+            // It's safe to call DeleteObject on a font handle.
+            unsafe {
+                _ = DeleteObject(HGDIOBJ(hfont.0));
             }
         }
-        if let Some(hbrush) = self.background_brush.take() {
-            if !hbrush.is_invalid() {
-                // It's also safe to call DeleteObject on a brush handle.
-                unsafe {
-                    _ = DeleteObject(HGDIOBJ(hbrush.0));
-                }
+        if let Some(hbrush) = self.background_brush.take()
+            && !hbrush.is_invalid()
+        {
+            // It's also safe to call DeleteObject on a brush handle.
+            unsafe {
+                _ = DeleteObject(HGDIOBJ(hbrush.0));
             }
         }
     }

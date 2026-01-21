@@ -32,16 +32,14 @@ unsafe extern "system" fn forwarding_panel_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     unsafe {
-        if msg == WM_COMMAND
+        if (msg == WM_COMMAND
             || msg == WM_CTLCOLOREDIT
             || msg == WM_CTLCOLORSTATIC
-            || msg == WM_NOTIFY
+            || msg == WM_NOTIFY)
+            && let Ok(parent) = GetParent(hwnd)
+            && !parent.is_invalid()
         {
-            if let Ok(parent) = GetParent(hwnd) {
-                if !parent.is_invalid() {
-                    return SendMessageW(parent, msg, Some(wparam), Some(lparam));
-                }
-            }
+            return SendMessageW(parent, msg, Some(wparam), Some(lparam));
         }
 
         let prev = GetWindowLongPtrW(hwnd, GWLP_USERDATA);

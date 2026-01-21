@@ -553,16 +553,16 @@ impl NativeWindowData {
     }
 
     fn cleanup_status_bar_font(&mut self) {
-        if let Some(h_font) = self.status_bar_font.take() {
-            if !h_font.is_invalid() {
-                log::debug!(
-                    "Deleting status bar font {:?} for WinID {:?}",
-                    h_font,
-                    self.logical_window_id
-                );
-                unsafe {
-                    let _ = DeleteObject(HGDIOBJ(h_font.0));
-                }
+        if let Some(h_font) = self.status_bar_font.take()
+            && !h_font.is_invalid()
+        {
+            log::debug!(
+                "Deleting status bar font {:?} for WinID {:?}",
+                h_font,
+                self.logical_window_id
+            );
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(h_font.0));
             }
         }
     }
@@ -630,16 +630,16 @@ impl NativeWindowData {
     }
 
     fn cleanup_treeview_new_item_font(&mut self) {
-        if let Some(h_font) = self.treeview_new_item_font.take() {
-            if !h_font.is_invalid() {
-                log::debug!(
-                    "Deleting TreeView 'new item' font {:?} for WinID {:?}.",
-                    h_font,
-                    self.logical_window_id
-                );
-                unsafe {
-                    let _ = DeleteObject(HGDIOBJ(h_font.0));
-                }
+        if let Some(h_font) = self.treeview_new_item_font.take()
+            && !h_font.is_invalid()
+        {
+            log::debug!(
+                "Deleting TreeView 'new item' font {:?} for WinID {:?}.",
+                h_font,
+                self.logical_window_id
+            );
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(h_font.0));
             }
         }
     }
@@ -997,11 +997,11 @@ impl Win32ApiInternalState {
                     );
                 }
             }
-        } else if is_treeview_notification.is_err() {
+        } else if let Err(e) = is_treeview_notification {
             log::error!(
                 "Failed to access window data for WM_NOTIFY in WinID {:?}: {:?}",
                 window_id,
-                is_treeview_notification.unwrap_err()
+                e
             );
         }
         (None, None)
@@ -1142,10 +1142,7 @@ impl Win32ApiInternalState {
             return None;
         }
 
-        let vertical = match query_scroll_percentage(hwnd_control, SB_VERT) {
-            Some(value) => value,
-            None => return None,
-        };
+        let vertical = query_scroll_percentage(hwnd_control, SB_VERT)?;
         let horizontal = query_scroll_percentage(hwnd_control, SB_HORZ).unwrap_or(0);
 
         Some(AppEvent::ControlScrolled {
@@ -1264,7 +1261,7 @@ fn query_scroll_percentage(hwnd: HWND, bar: SCROLLBAR_CONSTANTS) -> Option<u32> 
     }
 
     let pos = (scroll_info.nPos as i64 - min).max(0).min(range);
-    let percent = ((pos * 100) / range).max(0).min(100) as u32;
+    let percent = ((pos * 100) / range).clamp(0, 100) as u32;
     Some(percent)
 }
 
@@ -1554,7 +1551,8 @@ mod tests {
             bottom: 50,
         };
         // Act
-        let outer_map = NativeWindowData::calculate_layout(parent_rect, &[outer_rule.clone()]);
+        let outer_map =
+            NativeWindowData::calculate_layout(parent_rect, std::slice::from_ref(&outer_rule));
         let outer_rect = outer_map.get(&ControlId::new(1)).unwrap();
         let inner_map = NativeWindowData::calculate_layout(
             RECT {

@@ -44,6 +44,31 @@ fn color_to_colorref(color: &Color) -> COLORREF {
 }
 
 /*
+ * Helper function to get the parent control's background brush.
+ * Returns None if no parent brush is found.
+ */
+fn get_parent_background_brush(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_data: &crate::window_common::NativeWindowData,
+    hwnd_static_ctrl: HWND,
+) -> Option<HBRUSH> {
+    let parent_hwnd = unsafe { GetParent(hwnd_static_ctrl) }.ok()?;
+    if parent_hwnd.is_invalid() {
+        return None;
+    }
+
+    let parent_id_raw = unsafe { GetDlgCtrlID(parent_hwnd) };
+    if parent_id_raw == 0 {
+        return None;
+    }
+
+    let parent_id = ControlId::new(parent_id_raw);
+    let parent_style_id = window_data.get_style_for_control(parent_id)?;
+    let parent_style = internal_state.get_parsed_style(parent_style_id)?;
+    parent_style.background_brush
+}
+
+/*
  * Handles the creation of a native label (STATIC) control.
  * This function takes the necessary parameters to create a label, including its parent,
  * logical ID, initial text, and class. It registers the new label's HWND with the
@@ -110,23 +135,22 @@ pub(crate) fn handle_create_label_command(
         };
 
         // Apply custom font if this is a status bar label and font exists
-        if class == LabelClass::StatusBar {
-            if let Some(h_font) = window_data.get_status_bar_font() {
-                if !h_font.is_invalid() {
-                    unsafe {
-                        SendMessageW(
-                            hwnd_label,
-                            WM_SETFONT,
-                            Some(WPARAM(h_font.0 as usize)),
-                            Some(LPARAM(1)),
-                        )
-                    }; // LPARAM(1) to redraw
-                    log::debug!(
-                        "LabelHandler: Applied status bar font to label ID {}",
-                        label_id.raw()
-                    );
-                }
-            }
+        if class == LabelClass::StatusBar
+            && let Some(h_font) = window_data.get_status_bar_font()
+            && !h_font.is_invalid()
+        {
+            unsafe {
+                SendMessageW(
+                    hwnd_label,
+                    WM_SETFONT,
+                    Some(WPARAM(h_font.0 as usize)),
+                    Some(LPARAM(1)),
+                )
+            }; // LPARAM(1) to redraw
+            log::debug!(
+                "LabelHandler: Applied status bar font to label ID {}",
+                label_id.raw()
+            );
         }
 
         window_data.register_control_hwnd(label_id, hwnd_label);
@@ -222,50 +246,36 @@ pub(crate) fn handle_wm_ctlcolorstatic(
     let style_result: PlatformResult<Option<LRESULT>> =
         internal_state.with_window_data_read(window_id, |window_data| {
             // --- New Styling System Logic ---
-            if let Some(style_id) = window_data.get_style_for_control(control_id) {
-                if let Some(style) = internal_state.get_parsed_style(style_id) {
-                    // A style is defined for this control. Handle it completely and then return.
-                    // Do not fall through to the legacy logic.
+            if let Some(style_id) = window_data.get_style_for_control(control_id)
+                && let Some(style) = internal_state.get_parsed_style(style_id)
+            {
+                // A style is defined for this control. Handle it completely and then return.
+                // Do not fall through to the legacy logic.
 
-                    // Apply text color from the style, if defined.
-                    if let Some(color) = &style.text_color {
-                        unsafe { SetTextColor(hdc_static_ctrl, color_to_colorref(color)) };
-                    }
-                    // The background should be transparent to show the parent's color.
-                    unsafe { SetBkMode(hdc_static_ctrl, TRANSPARENT) };
+                // Apply text color from the style, if defined.
+                if let Some(color) = &style.text_color {
+                    unsafe { SetTextColor(hdc_static_ctrl, color_to_colorref(color)) };
+                }
+                // The background should be transparent to show the parent's color.
+                unsafe { SetBkMode(hdc_static_ctrl, TRANSPARENT) };
 
-                    // If the style itself has a background brush, use it.
-                    if let Some(brush) = style.background_brush {
-                        return Ok(Some(LRESULT(brush.0 as isize)));
-                    }
-
-                    // If the style does not have a background brush, it's a transparent label.
-                    // We must return the parent's background brush.
-                    if let Ok(parent_hwnd) = unsafe { GetParent(hwnd_static_ctrl) } {
-                        if !parent_hwnd.is_invalid() {
-                            let parent_id_raw = unsafe { GetDlgCtrlID(parent_hwnd) };
-                            if parent_id_raw != 0 {
-                                let parent_id = ControlId::new(parent_id_raw);
-                                if let Some(parent_style_id) =
-                                    window_data.get_style_for_control(parent_id)
-                                {
-                                    if let Some(parent_style) =
-                                        internal_state.get_parsed_style(parent_style_id)
-                                    {
-                                        if let Some(parent_brush) = parent_style.background_brush {
-                                            return Ok(Some(LRESULT(parent_brush.0 as isize)));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Fallback for transparent label if parent brush isn't found: use system window brush.
-                    // This is better than falling through to legacy logic which would override the text color.
-                    let brush: HBRUSH = unsafe { GetSysColorBrush(COLOR_WINDOW) };
+                // If the style itself has a background brush, use it.
+                if let Some(brush) = style.background_brush {
                     return Ok(Some(LRESULT(brush.0 as isize)));
                 }
+
+                // If the style does not have a background brush, it's a transparent label.
+                // We must return the parent's background brush.
+                if let Some(parent_brush) =
+                    get_parent_background_brush(internal_state, window_data, hwnd_static_ctrl)
+                {
+                    return Ok(Some(LRESULT(parent_brush.0 as isize)));
+                }
+
+                // Fallback for transparent label if parent brush isn't found: use system window brush.
+                // This is better than falling through to legacy logic which would override the text color.
+                let brush: HBRUSH = unsafe { GetSysColorBrush(COLOR_WINDOW) };
+                return Ok(Some(LRESULT(brush.0 as isize)));
             }
 
             // --- Fallback to Legacy Severity Logic (for status bar) ---

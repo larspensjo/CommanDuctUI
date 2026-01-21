@@ -46,20 +46,20 @@ pub(crate) fn handle_wm_ctlcoloredit(
 
     let result: PlatformResult<Option<LRESULT>> =
         internal_state.with_window_data_read(window_id, |window_data| {
-            if let Some(style_id) = window_data.get_style_for_control(control_id) {
-                if let Some(style) = internal_state.get_parsed_style(style_id) {
-                    // Apply text color from the style, if defined.
-                    if let Some(color) = &style.text_color {
-                        unsafe { SetTextColor(hdc_edit, color_to_colorref(color)) };
-                    }
-                    // Apply background color from the style, if defined.
-                    if let Some(color) = &style.background_color {
-                        unsafe { SetBkColor(hdc_edit, color_to_colorref(color)) };
-                    }
-                    // Return the brush handle for the system to use.
-                    if let Some(brush) = style.background_brush {
-                        return Ok(Some(LRESULT(brush.0 as isize)));
-                    }
+            if let Some(style_id) = window_data.get_style_for_control(control_id)
+                && let Some(style) = internal_state.get_parsed_style(style_id)
+            {
+                // Apply text color from the style, if defined.
+                if let Some(color) = &style.text_color {
+                    unsafe { SetTextColor(hdc_edit, color_to_colorref(color)) };
+                }
+                // Apply background color from the style, if defined.
+                if let Some(color) = &style.background_color {
+                    unsafe { SetBkColor(hdc_edit, color_to_colorref(color)) };
+                }
+                // Return the brush handle for the system to use.
+                if let Some(brush) = style.background_brush {
+                    return Ok(Some(LRESULT(brush.0 as isize)));
                 }
             }
             // No style found or style had no brush, default processing.
