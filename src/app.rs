@@ -513,9 +513,10 @@ impl Win32ApiInternalState {
             } => menu_handler::handle_create_main_menu_command(self, window_id, menu_items),
             PlatformCommand::CreateButton {
                 window_id,
+                parent_control_id,
                 control_id,
                 text,
-            } => button_handler::handle_create_button_command(self, window_id, control_id, text),
+            } => button_handler::handle_create_button_command(self, window_id, parent_control_id, control_id, text),
             PlatformCommand::CreateTreeView {
                 window_id,
                 parent_control_id,
@@ -544,14 +545,14 @@ impl Win32ApiInternalState {
             ),
             PlatformCommand::CreateLabel {
                 window_id,
-                parent_panel_id,
+                parent_control_id,
                 control_id: label_id,
                 initial_text,
                 class,
             } => label_handler::handle_create_label_command(
                 self,
                 window_id,
-                parent_panel_id,
+                parent_control_id,
                 label_id,
                 initial_text,
                 class,

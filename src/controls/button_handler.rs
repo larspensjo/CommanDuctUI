@@ -35,11 +35,13 @@ const WC_BUTTON: PCWSTR = windows::core::w!("BUTTON");
 pub(crate) fn handle_create_button_command(
     internal_state: &Arc<Win32ApiInternalState>,
     window_id: WindowId,
+    parent_control_id: Option<ControlId>,
     control_id: ControlId,
     text: String,
 ) -> PlatformResult<()> {
     log::debug!(
-        "ButtonHandler: handle_create_button_command for WinID {window_id:?}, ControlID {}, Text: '{text}'",
+        "ButtonHandler: handle_create_button_command for WinID {window_id:?}, ParentID {:?}, ControlID {}, Text: '{text}'",
+        parent_control_id.as_ref().map(|id| id.raw()),
         control_id.raw()
     );
 
@@ -58,13 +60,28 @@ pub(crate) fn handle_create_button_command(
                 )));
             }
 
-            let hwnd_parent = window_data.get_hwnd();
+            let hwnd_parent = match parent_control_id {
+                Some(id) => window_data.get_control_hwnd(id).ok_or_else(|| {
+                    log::warn!(
+                        "ButtonHandler: Parent control with ID {} not found for CreateButton in WinID {window_id:?}",
+                        id.raw()
+                    );
+                    PlatformError::InvalidHandle(format!(
+                        "Parent control with ID {} not found for CreateButton in WinID {window_id:?}",
+                        id.raw()
+                    ))
+                })?,
+                None => window_data.get_hwnd(),
+            };
+
             if hwnd_parent.is_invalid() {
                 log::error!(
-                    "ButtonHandler: Parent HWND invalid for CreateButton (WinID: {window_id:?})"
+                    "ButtonHandler: Parent HWND for CreateButton is invalid (WinID: {window_id:?}, ParentControlID: {:?})",
+                    parent_control_id.as_ref().map(|id| id.raw())
                 );
                 return Err(PlatformError::InvalidHandle(format!(
-                    "Parent HWND invalid for CreateButton (WinID: {window_id:?})"
+                    "ButtonHandler: Parent HWND for CreateButton is invalid (WinID: {window_id:?}, ParentControlID: {:?})",
+                    parent_control_id.as_ref().map(|id| id.raw())
                 )));
             }
             Ok(hwnd_parent)

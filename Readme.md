@@ -108,6 +108,7 @@ fn main() {
     let initial_commands = vec![
         PlatformCommand::CreateButton {
             window_id: main_window_id,
+            parent_control_id: None,
             control_id: BTN_CLICK_ME,
             text: "Click Me".to_string(),
         },

@@ -372,6 +372,7 @@ pub enum PlatformCommand {
     },
     CreateButton {
         window_id: WindowId,
+        parent_control_id: Option<ControlId>, // None means child of main window's client area
         control_id: ControlId, // The existing logical ID (e.g., ID_BUTTON_GENERATE_ARCHIVE)
         text: String,
         // Position/size will be managed by DefineLayout command.
@@ -398,7 +399,7 @@ pub enum PlatformCommand {
     },
     CreateLabel {
         window_id: WindowId,
-        parent_panel_id: ControlId,
+        parent_control_id: Option<ControlId>, // None means child of main window's client area
         control_id: ControlId,
         initial_text: String,
         class: LabelClass, // Classify labels for potential specific styling

@@ -78,15 +78,15 @@ fn get_parent_background_brush(
 pub(crate) fn handle_create_label_command(
     internal_state: &Arc<Win32ApiInternalState>,
     window_id: WindowId,
-    parent_panel_id: ControlId,
+    parent_control_id: Option<ControlId>,
     label_id: ControlId,
     initial_text: String,
     class: LabelClass,
 ) -> PlatformResult<()> {
     log::debug!(
-        "LabelHandler: handle_create_label_command for WinID {window_id:?}, LabelID: {}, ParentPanelID: {}, Text: '{initial_text}', Class: {class:?}",
+        "LabelHandler: handle_create_label_command for WinID {window_id:?}, LabelID: {}, ParentControlID: {:?}, Text: '{initial_text}', Class: {class:?}",
         label_id.raw(),
-        parent_panel_id.raw()
+        parent_control_id.as_ref().map(|id| id.raw())
     );
 
     internal_state.with_window_data_write(window_id, |window_data| {
@@ -101,18 +101,30 @@ pub(crate) fn handle_create_label_command(
             )));
         }
 
-        let hwnd_parent_panel = window_data
-            .get_control_hwnd(parent_panel_id)
-            .ok_or_else(|| {
+        let hwnd_parent = match parent_control_id {
+            Some(id) => window_data.get_control_hwnd(id).ok_or_else(|| {
                 log::warn!(
-                    "LabelHandler: Parent panel with logical ID {} not found for CreateLabel in WinID {window_id:?}.",
-                    parent_panel_id.raw()
+                    "LabelHandler: Parent control with logical ID {} not found for CreateLabel in WinID {window_id:?}",
+                    id.raw()
                 );
                 PlatformError::InvalidHandle(format!(
-                    "Parent panel with logical ID {} not found for CreateLabel in WinID {window_id:?}",
-                    parent_panel_id.raw()
+                    "Parent control with logical ID {} not found for CreateLabel in WinID {window_id:?}",
+                    id.raw()
                 ))
-            })?;
+            })?,
+            None => window_data.get_hwnd(),
+        };
+
+        if hwnd_parent.is_invalid() {
+            log::error!(
+                "LabelHandler: Parent HWND for CreateLabel is invalid (WinID: {window_id:?}, ParentControlID: {:?})",
+                parent_control_id.as_ref().map(|id| id.raw())
+            );
+            return Err(PlatformError::InvalidHandle(format!(
+                "LabelHandler: Parent HWND for CreateLabel is invalid (WinID: {window_id:?}, ParentControlID: {:?})",
+                parent_control_id.as_ref().map(|id| id.raw())
+            )));
+        }
 
         let h_instance = internal_state.h_instance();
         let hwnd_label = unsafe {
@@ -125,7 +137,7 @@ pub(crate) fn handle_create_label_command(
                 0,
                 10,
                 10, // Dummy position/size, layout rules will adjust
-                Some(hwnd_parent_panel),
+                Some(hwnd_parent),
                 Some(windows::Win32::UI::WindowsAndMessaging::HMENU(
                     label_id.raw() as *mut _,
                 )), // Use logical ID for the HMENU
