@@ -599,13 +599,15 @@ unsafe extern "system" fn input_dialog_proc(
                         if let Ok(hwnd_edit_ok) =
                             unsafe { GetDlgItem(Some(hdlg), window_common::ID_DIALOG_INPUT_EDIT) }
                         {
-                            let mut buffer: [u16; 256] = [0; 256];
-                            let len = unsafe { GetWindowTextW(hwnd_edit_ok, &mut buffer) };
-                            dialog_data.input_text = if len > 0 {
-                                String::from_utf16_lossy(&buffer[0..len as usize])
-                            } else {
-                                String::new()
-                            };
+                            match window_common::read_edit_control_text(hwnd_edit_ok) {
+                                Ok(text) => dialog_data.input_text = text,
+                                Err(err) => {
+                                    log::error!(
+                                        "DialogHandler: Failed to read input dialog text: {err}"
+                                    );
+                                    dialog_data.input_text.clear();
+                                }
+                            }
                         }
                         dialog_data.success = true;
                     }

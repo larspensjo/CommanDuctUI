@@ -1173,14 +1173,22 @@ impl Win32ApiInternalState {
         });
 
         if let Ok(hwnd_edit) = hwnd_edit_result {
-            let mut buf: [u16; 256] = [0; 256];
-            let len = unsafe { GetWindowTextW(hwnd_edit, &mut buf) } as usize;
-            let text = String::from_utf16_lossy(&buf[..len]);
-            return Some(AppEvent::InputTextChanged {
-                window_id,
-                control_id,
-                text,
-            });
+            match read_edit_control_text(hwnd_edit) {
+                Ok(text) => {
+                    return Some(AppEvent::InputTextChanged {
+                        window_id,
+                        control_id,
+                        text,
+                    });
+                }
+                Err(err) => {
+                    log::error!(
+                        "Failed to read text for control {} in window {:?}: {err}",
+                        control_id.raw(),
+                        window_id
+                    );
+                }
+            }
         }
         None
     }
@@ -1263,6 +1271,40 @@ fn query_scroll_percentage(hwnd: HWND, bar: SCROLLBAR_CONSTANTS) -> Option<u32> 
     let pos = (scroll_info.nPos as i64 - min).max(0).min(range);
     let percent = ((pos * 100) / range).clamp(0, 100) as u32;
     Some(percent)
+}
+
+// Reads the full contents of an EDIT control without truncation.
+pub(crate) fn read_edit_control_text(hwnd_edit: HWND) -> PlatformResult<String> {
+    read_edit_control_text_with(
+        || unsafe { GetWindowTextLengthW(hwnd_edit) },
+        |buf| unsafe { GetWindowTextW(hwnd_edit, buf) },
+    )
+}
+
+// Internal helper that can be unit tested with injected getters.
+fn read_edit_control_text_with<FLen, FGet>(get_len: FLen, get_text: FGet) -> PlatformResult<String>
+where
+    FLen: Fn() -> i32,
+    FGet: Fn(&mut [u16]) -> i32,
+{
+    let len = get_len();
+    if len < 0 {
+        return Err(PlatformError::OperationFailed(
+            "GetWindowTextLengthW returned negative length".into(),
+        ));
+    }
+
+    let mut buffer = vec![0u16; len as usize + 1];
+    let copied = get_text(&mut buffer);
+    if copied < 0 {
+        return Err(PlatformError::OperationFailed(
+            "GetWindowTextW returned negative length".into(),
+        ));
+    }
+
+    let copied = copied as usize;
+    buffer.truncate(copied);
+    Ok(String::from_utf16_lossy(&buffer))
 }
 
 pub(crate) fn set_window_title(
@@ -1433,6 +1475,24 @@ mod tests {
             data.get_style_for_control(control_id),
             Some(StyleId::DefaultText)
         );
+    }
+
+    #[test]
+    fn read_edit_control_text_with_handles_strings_longer_than_default_buffer() {
+        let long_text = "https://example.com/".repeat(20); // 380 chars
+        let utf16: Vec<u16> = long_text.encode_utf16().collect();
+        let expected_len = utf16.len() as i32;
+
+        let result = read_edit_control_text_with(
+            || expected_len,
+            |buf| {
+                buf[..utf16.len()].copy_from_slice(&utf16);
+                utf16.len() as i32
+            },
+        )
+        .expect("should read text without truncation");
+
+        assert_eq!(result, long_text);
     }
 
     /*

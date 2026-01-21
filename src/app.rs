@@ -516,7 +516,13 @@ impl Win32ApiInternalState {
                 parent_control_id,
                 control_id,
                 text,
-            } => button_handler::handle_create_button_command(self, window_id, parent_control_id, control_id, text),
+            } => button_handler::handle_create_button_command(
+                self,
+                window_id,
+                parent_control_id,
+                control_id,
+                text,
+            ),
             PlatformCommand::CreateTreeView {
                 window_id,
                 parent_control_id,
