@@ -5,5 +5,6 @@ pub(crate) mod input_handler;
 pub(crate) mod label_handler;
 pub(crate) mod menu_handler;
 pub(crate) mod panel_handler;
+pub(crate) mod progress_handler;
 pub(crate) mod styling_handler;
 pub(crate) mod treeview_handler;

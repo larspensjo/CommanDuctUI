@@ -2,7 +2,7 @@ use crate::{
     command_executor,
     controls::{
         button_handler, dialog_handler, label_handler, menu_handler, panel_handler,
-        styling_handler, treeview_handler,
+        progress_handler, styling_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
@@ -26,8 +26,8 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         System::WindowsProgramming::MulDiv,
         UI::Controls::{
-            ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, TVM_SETBKCOLOR,
-            TVM_SETTEXTCOLOR,
+            ICC_PROGRESS_CLASS, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx,
+            TVM_SETBKCOLOR, TVM_SETTEXTCOLOR,
         },
         UI::WindowsAndMessaging::*,
     },
@@ -150,7 +150,7 @@ impl Win32ApiInternalState {
 
             let icex = INITCOMMONCONTROLSEX {
                 dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-                dwICC: ICC_TREEVIEW_CLASSES,
+                dwICC: ICC_TREEVIEW_CLASSES | ICC_PROGRESS_CLASS,
             };
             if !InitCommonControlsEx(&icex).as_bool() {
                 log::error!(
@@ -605,6 +605,31 @@ impl Win32ApiInternalState {
                     multiline,
                     vertical_scroll,
                 },
+            ),
+            PlatformCommand::CreateProgressBar {
+                window_id,
+                parent_control_id,
+                control_id,
+            } => progress_handler::handle_create_progress_bar_command(
+                self,
+                window_id,
+                parent_control_id,
+                control_id,
+            ),
+            PlatformCommand::SetProgressBarRange {
+                window_id,
+                control_id,
+                min,
+                max,
+            } => progress_handler::handle_set_progress_bar_range(
+                self, window_id, control_id, min, max,
+            ),
+            PlatformCommand::SetProgressBarPosition {
+                window_id,
+                control_id,
+                position,
+            } => progress_handler::handle_set_progress_bar_position(
+                self, window_id, control_id, position,
             ),
             PlatformCommand::SetControlText {
                 window_id,

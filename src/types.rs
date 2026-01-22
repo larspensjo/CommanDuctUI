@@ -414,6 +414,22 @@ pub enum PlatformCommand {
         multiline: bool,
         vertical_scroll: bool,
     },
+    CreateProgressBar {
+        window_id: WindowId,
+        parent_control_id: Option<ControlId>,
+        control_id: ControlId,
+    },
+    SetProgressBarRange {
+        window_id: WindowId,
+        control_id: ControlId,
+        min: u32,
+        max: u32,
+    },
+    SetProgressBarPosition {
+        window_id: WindowId,
+        control_id: ControlId,
+        position: u32,
+    },
     SetControlText {
         window_id: WindowId,
         control_id: ControlId,
