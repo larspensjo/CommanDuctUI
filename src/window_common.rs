@@ -573,16 +573,16 @@ impl NativeWindowData {
     }
 
     fn cleanup_status_bar_font(&mut self) {
-        if let Some(h_font) = self.status_bar_font.take()
-            && !h_font.is_invalid()
-        {
-            log::debug!(
-                "Deleting status bar font {:?} for WinID {:?}",
-                h_font,
-                self.logical_window_id
-            );
-            unsafe {
-                let _ = DeleteObject(HGDIOBJ(h_font.0));
+        if let Some(h_font) = self.status_bar_font.take() {
+            if !h_font.is_invalid() {
+                log::debug!(
+                    "Deleting status bar font {:?} for WinID {:?}",
+                    h_font,
+                    self.logical_window_id
+                );
+                unsafe {
+                    let _ = DeleteObject(HGDIOBJ(h_font.0));
+                }
             }
         }
     }
@@ -650,16 +650,16 @@ impl NativeWindowData {
     }
 
     fn cleanup_treeview_new_item_font(&mut self) {
-        if let Some(h_font) = self.treeview_new_item_font.take()
-            && !h_font.is_invalid()
-        {
-            log::debug!(
-                "Deleting TreeView 'new item' font {:?} for WinID {:?}.",
-                h_font,
-                self.logical_window_id
-            );
-            unsafe {
-                let _ = DeleteObject(HGDIOBJ(h_font.0));
+        if let Some(h_font) = self.treeview_new_item_font.take() {
+            if !h_font.is_invalid() {
+                log::debug!(
+                    "Deleting TreeView 'new item' font {:?} for WinID {:?}.",
+                    h_font,
+                    self.logical_window_id
+                );
+                unsafe {
+                    let _ = DeleteObject(HGDIOBJ(h_font.0));
+                }
             }
         }
     }
@@ -868,6 +868,9 @@ impl Win32ApiInternalState {
             }
             WM_TIMER => {
                 event_to_send = self.handle_wm_timer(hwnd, wparam, lparam, window_id);
+            }
+            WM_ERASEBKGND => {
+                lresult_override = Some(self.handle_wm_erasebkgnd(hwnd, wparam, lparam, window_id));
             }
             WM_CLOSE => {
                 log::debug!(
@@ -1213,6 +1216,28 @@ impl Win32ApiInternalState {
         None
     }
 
+    fn handle_wm_erasebkgnd(
+        self: &Arc<Self>,
+        hwnd: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _window_id: WindowId,
+    ) -> LRESULT {
+        unsafe {
+            if let Some(style) = self.get_parsed_style(StyleId::MainWindowBackground) {
+                if let Some(bg_brush) = style.background_brush {
+                    let hdc = HDC(wparam.0 as *mut c_void);
+                    let mut client_rect = RECT::default();
+                    if GetClientRect(hwnd, &mut client_rect).is_ok() {
+                        FillRect(hdc, &client_rect, bg_brush);
+                        return LRESULT(1);
+                    }
+                }
+            }
+            DefWindowProcW(hwnd, WM_ERASEBKGND, wparam, lparam)
+        }
+    }
+
     /*
      * Handles WM_PAINT: Fills background. Control custom drawing is separate.
      */
@@ -1227,11 +1252,12 @@ impl Win32ApiInternalState {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if !hdc.is_invalid() {
-                FillRect(
-                    hdc,
-                    &ps.rcPaint,
-                    HBRUSH((COLOR_WINDOW.0 + 1) as *mut c_void),
-                );
+                let background_brush = self
+                    .get_parsed_style(StyleId::MainWindowBackground)
+                    .and_then(|style| style.background_brush)
+                    .unwrap_or_else(|| HBRUSH((COLOR_WINDOW.0 + 1) as *mut c_void));
+
+                FillRect(hdc, &ps.rcPaint, background_brush);
                 _ = EndPaint(hwnd, &ps);
             }
         }
