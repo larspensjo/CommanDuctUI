@@ -16,9 +16,26 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{
         CallWindowProcW, CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GWLP_WNDPROC, GetParent,
         GetWindowLongPtrW, HMENU, SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_COMMAND,
-        WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_NOTIFY, WNDPROC, WS_CHILD, WS_VISIBLE,
+        WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_NOTIFY, WNDPROC, WS_CHILD,
+        WS_CLIPCHILDREN, WS_VISIBLE, WINDOW_STYLE,
     },
 };
+
+/// Strongly-typed window style for panels to enforce required flags (correctness-by-construction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PanelWindowStyle(WINDOW_STYLE);
+
+impl PanelWindowStyle {
+    /// Base style: must clip children and be a visible child.
+    fn base() -> Self {
+        Self(WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN)
+    }
+
+    /// Extracts the underlying WINDOW_STYLE for CreateWindowExW.
+    const fn as_raw(self) -> WINDOW_STYLE {
+        self.0
+    }
+}
 
 /*
  * Custom window procedure for panels. It forwards selected messages to the
@@ -35,7 +52,8 @@ unsafe extern "system" fn forwarding_panel_proc(
         if (msg == WM_COMMAND
             || msg == WM_CTLCOLOREDIT
             || msg == WM_CTLCOLORSTATIC
-            || msg == WM_NOTIFY)
+            || msg == WM_NOTIFY
+            || msg == WM_ERASEBKGND)
             && let Ok(parent) = GetParent(hwnd)
             && !parent.is_invalid()
         {
@@ -111,7 +129,7 @@ pub(crate) fn handle_create_panel_command(
                 WINDOW_EX_STYLE(0),
                 WC_STATIC,
                 None,
-                WS_CHILD | WS_VISIBLE,
+                PanelWindowStyle::base().as_raw(),
                 0,
                 0,
                 10,
@@ -136,4 +154,17 @@ pub(crate) fn handle_create_panel_command(
         );
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panel_style_clips_children() {
+        let style = PanelWindowStyle::base().as_raw();
+        assert_ne!(style.0 & WS_CLIPCHILDREN.0, 0);
+        assert_ne!(style.0 & WS_CHILD.0, 0);
+        assert_ne!(style.0 & WS_VISIBLE.0, 0);
+    }
 }
