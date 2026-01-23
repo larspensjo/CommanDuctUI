@@ -7,6 +7,7 @@
 use crate::app::Win32ApiInternalState;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::types::{AppEvent, ControlId, WindowId};
+use crate::window_common::ControlKind;
 
 use std::sync::Arc;
 use windows::Win32::{
@@ -126,6 +127,7 @@ pub(crate) fn handle_create_button_command(
         }
 
         window_data.register_control_hwnd(control_id, hwnd_button);
+        window_data.register_control_kind(control_id, ControlKind::Button);
         log::debug!(
             "ButtonHandler: Created button '{text}' (ID {}) for window {window_id:?} with HWND {hwnd_button:?}",
             control_id.raw()

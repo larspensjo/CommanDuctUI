@@ -15,7 +15,7 @@ use crate::{
     error::{PlatformError, Result as PlatformResult},
     styling::Color,
     types::{ControlId, LabelClass, MessageSeverity, WindowId},
-    window_common::{SS_LEFT, WC_STATIC},
+    window_common::{ControlKind, SS_LEFT, WC_STATIC},
 };
 
 use std::sync::Arc;
@@ -166,6 +166,7 @@ pub(crate) fn handle_create_label_command(
         }
 
         window_data.register_control_hwnd(label_id, hwnd_label);
+        window_data.register_control_kind(label_id, ControlKind::Static);
         window_data.set_label_severity(label_id, MessageSeverity::Information); // Default to Information
         log::debug!(
             "LabelHandler: Created label '{initial_text}' (LogicalID {}) for WinID {window_id:?} with HWND {hwnd_label:?}",

@@ -13,7 +13,7 @@ use super::app::Win32ApiInternalState;
 use super::controls::treeview_handler; // Ensure treeview_handler is used for its functions
 use super::error::{PlatformError, Result as PlatformResult};
 use super::types::{CheckState, ControlId, LayoutRule, TreeItemId, WindowId};
-use super::window_common::ProgrammaticScrollGuard;
+use super::window_common::{ControlKind, ProgrammaticScrollGuard};
 
 use std::sync::Arc;
 use windows::{
@@ -360,6 +360,7 @@ pub(crate) fn execute_create_input(
         };
 
         window_data.register_control_hwnd(control_id, hwnd_edit);
+        window_data.register_control_kind(control_id, ControlKind::Edit);
         log::debug!(
             "CommandExecutor: Created input field (ID {}) for WinID {window_id:?} with HWND {hwnd_edit:?}",
             control_id.raw()

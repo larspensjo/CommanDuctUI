@@ -14,6 +14,7 @@ use crate::controls::styling_handler;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::StyleId;
 use crate::types::{AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, WindowId};
+use crate::window_common::ControlKind;
 
 use windows::{
     Win32::{
@@ -278,6 +279,7 @@ pub(crate) fn handle_create_treeview_command(
         }
 
         window_data.register_control_hwnd(control_id, hwnd_tv);
+        window_data.register_control_kind(control_id, ControlKind::TreeView);
         window_data.init_treeview_state();
         log::debug!(
             "TreeViewHandler: Created TreeView (ID {}) for window {window_id:?} with HWND {hwnd_tv:?}",

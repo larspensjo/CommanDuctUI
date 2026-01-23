@@ -71,6 +71,16 @@ pub(crate) const HWND_INVALID: HWND = HWND(std::ptr::null_mut());
 
 const SUCCESS_CODE: LRESULT = LRESULT(0);
 
+/// Identifies the kind of a control so styles can be dispatched without Win32 class queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControlKind {
+    Button,
+    ProgressBar,
+    TreeView,
+    Static,
+    Edit,
+}
+
 /*
  * Tracks control/window pairs whose next scroll notifications originate from our own commands.
  * The thread-local set prevents feedback loops when the platform mirrors app logic initiated scrolls.
@@ -134,6 +144,7 @@ pub(crate) struct NativeWindowData {
     menu_action_map: HashMap<i32, MenuActionId>,
     // Maps a control's ID to the semantic StyleId applied to it.
     applied_styles: HashMap<ControlId, StyleId>,
+    control_kinds: HashMap<ControlId, ControlKind>,
     // Counter to generate unique `i32` IDs for menu items that have an action.
     next_menu_item_id_counter: i32,
     // Layout rules for controls within this window.
@@ -153,6 +164,7 @@ impl NativeWindowData {
             control_hwnd_map: HashMap::new(),
             menu_action_map: HashMap::new(),
             applied_styles: HashMap::new(),
+            control_kinds: HashMap::new(),
             next_menu_item_id_counter: 30000,
             layout_rules: None,
             label_severities: HashMap::new(),
@@ -213,6 +225,14 @@ impl NativeWindowData {
 
     pub(crate) fn get_style_for_control(&self, control_id: ControlId) -> Option<StyleId> {
         self.applied_styles.get(&control_id).copied()
+    }
+
+    pub(crate) fn register_control_kind(&mut self, control_id: ControlId, kind: ControlKind) {
+        self.control_kinds.insert(control_id, kind);
+    }
+
+    pub(crate) fn get_control_kind(&self, control_id: ControlId) -> Option<ControlKind> {
+        self.control_kinds.get(&control_id).copied()
     }
 
     fn generate_menu_item_id(&mut self) -> i32 {

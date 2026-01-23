@@ -73,4 +73,6 @@ pub enum StyleId {
     ViewerMonospace,
     SummaryFolderText,
     SummaryFolderMissingFile,
+    HeaderLabel,
+    ProgressBar,
 }

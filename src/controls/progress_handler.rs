@@ -1,6 +1,7 @@
 use crate::app::Win32ApiInternalState;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::types::{ControlId, WindowId};
+use crate::window_common::ControlKind;
 
 use std::sync::Arc;
 use windows::Win32::{
@@ -71,6 +72,7 @@ pub(crate) fn handle_create_progress_bar_command(
         }
 
         window_data.register_control_hwnd(control_id, hwnd_progress);
+        window_data.register_control_kind(control_id, ControlKind::ProgressBar);
         Ok(())
     })
 }
