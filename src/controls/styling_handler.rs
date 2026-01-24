@@ -16,3 +16,15 @@ use windows::Win32::Foundation::COLORREF;
 pub(crate) fn color_to_colorref(color: &Color) -> COLORREF {
     COLORREF((color.r as u32) | ((color.g as u32) << 8) | ((color.b as u32) << 16))
 }
+
+/*
+ * Converts a Win32 COLORREF (BGR) back to platform-agnostic Color (RGB).
+ * Used for retrieving system colors and converting them to our Color type.
+ */
+pub(crate) fn colorref_to_color(cr: COLORREF) -> Color {
+    Color {
+        r: (cr.0 & 0xFF) as u8,
+        g: ((cr.0 >> 8) & 0xFF) as u8,
+        b: ((cr.0 >> 16) & 0xFF) as u8,
+    }
+}

@@ -16,8 +16,8 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{
         CallWindowProcW, CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GWLP_WNDPROC, GetParent,
         GetWindowLongPtrW, HMENU, SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_COMMAND,
-        WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_NOTIFY, WNDPROC, WS_CHILD,
-        WS_CLIPCHILDREN, WS_VISIBLE, WINDOW_STYLE,
+        WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ERASEBKGND, WM_NOTIFY, WNDPROC,
+        WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE, WINDOW_STYLE,
     },
 };
 
@@ -52,6 +52,7 @@ unsafe extern "system" fn forwarding_panel_proc(
         if (msg == WM_COMMAND
             || msg == WM_CTLCOLOREDIT
             || msg == WM_CTLCOLORSTATIC
+            || msg == WM_DRAWITEM
             || msg == WM_NOTIFY
             || msg == WM_ERASEBKGND)
             && let Ok(parent) = GetParent(hwnd)

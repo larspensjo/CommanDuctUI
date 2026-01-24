@@ -5,16 +5,24 @@
  */
 
 use crate::app::Win32ApiInternalState;
+use crate::controls::styling_handler::{color_to_colorref, colorref_to_color};
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::styling::Color;
 use crate::types::{AppEvent, ControlId, WindowId};
 use crate::window_common::ControlKind;
 
 use std::sync::Arc;
 use windows::Win32::{
-    Foundation::HWND,
+    Foundation::{COLORREF, HWND, LRESULT},
+    Graphics::Gdi::{
+        CreateSolidBrush, DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor,
+        InflateRect, SelectObject, SetBkMode, SetTextColor, COLOR_BTNFACE, COLOR_BTNTEXT,
+        COLOR_GRAYTEXT, DT_CENTER, DT_SINGLELINE, DT_VCENTER, HGDIOBJ, TRANSPARENT,
+    },
+    UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED},
     UI::WindowsAndMessaging::{
-        BS_PUSHBUTTON, CreateWindowExW, DestroyWindow, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WS_CHILD, WS_VISIBLE,
+        BS_PUSHBUTTON, CreateWindowExW, DestroyWindow, GetWindowTextLengthW, GetWindowTextW,
+        HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE,
     },
 };
 use windows::core::{HSTRING, PCWSTR};
@@ -152,6 +160,108 @@ pub(crate) fn handle_bn_clicked(
     AppEvent::ButtonClicked {
         window_id,
         control_id,
+    }
+}
+
+/*
+ * Handles WM_DRAWITEM for owner-drawn buttons.
+ * Renders buttons with custom background and text colors from applied styles.
+ * Supports disabled state, pressed state, and focus rectangle.
+ */
+pub(crate) fn handle_wm_drawitem(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    draw_item_struct: *const DRAWITEMSTRUCT,
+) -> Option<LRESULT> {
+    unsafe {
+        if draw_item_struct.is_null() {
+            return None;
+        }
+        let dis = &*draw_item_struct;
+        let control_id = ControlId::new(dis.CtlID as i32);
+
+        // Get applied style with fallback to system colors
+        let style_id = internal_state
+            .with_window_data_read(window_id, |window_data| {
+                Ok(window_data.get_style_for_control(control_id))
+            })
+            .ok()
+            .flatten();
+        let style = style_id.and_then(|sid| internal_state.get_parsed_style(sid));
+
+        // Resolve colors: style values or system defaults as fallback
+        let base_bg = style
+            .as_ref()
+            .and_then(|s| s.background_color.clone())
+            .unwrap_or_else(|| colorref_to_color(COLORREF(GetSysColor(COLOR_BTNFACE))));
+        let base_fg = style
+            .as_ref()
+            .and_then(|s| s.text_color.clone())
+            .unwrap_or_else(|| colorref_to_color(COLORREF(GetSysColor(COLOR_BTNTEXT))));
+
+        // Determine final colors based on button state
+        let is_disabled = (dis.itemState.0 & ODS_DISABLED.0) != 0;
+        let is_pressed = (dis.itemState.0 & ODS_SELECTED.0) != 0;
+
+        let (bg_color, text_color) = if is_disabled {
+            // Disabled: use system gray text, keep background
+            (
+                base_bg,
+                colorref_to_color(COLORREF(GetSysColor(COLOR_GRAYTEXT))),
+            )
+        } else if is_pressed {
+            // Pressed: darken background by 20%
+            let pressed_bg = Color {
+                r: (base_bg.r as u32 * 80 / 100) as u8,
+                g: (base_bg.g as u32 * 80 / 100) as u8,
+                b: (base_bg.b as u32 * 80 / 100) as u8,
+            };
+            (pressed_bg, base_fg)
+        } else {
+            (base_bg, base_fg)
+        };
+
+        // Fill background
+        let brush = CreateSolidBrush(color_to_colorref(&bg_color));
+        FillRect(dis.hDC, &dis.rcItem, brush);
+        let _ = DeleteObject(brush.into());
+
+        // Get button text (dynamic length, no hardcoded buffer)
+        let text_len = GetWindowTextLengthW(dis.hwndItem);
+        let mut text_buf = vec![0u16; (text_len + 1) as usize];
+        GetWindowTextW(dis.hwndItem, &mut text_buf);
+
+        // Draw text
+        SetTextColor(dis.hDC, color_to_colorref(&text_color));
+        SetBkMode(dis.hDC, TRANSPARENT);
+
+        // Apply font if available, saving old font for restoration
+        let old_font = style
+            .as_ref()
+            .and_then(|s| s.font_handle)
+            .map(|font| SelectObject(dis.hDC, HGDIOBJ(font.0)));
+
+        let mut rect = dis.rcItem;
+        DrawTextW(
+            dis.hDC,
+            &mut text_buf[..text_len as usize],
+            &mut rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+
+        // Restore original font to avoid leaking GDI selection state
+        if let Some(prev_font) = old_font {
+            SelectObject(dis.hDC, prev_font);
+        }
+
+        // Draw focus rectangle (inset by 3px; scale by DPI in future)
+        if (dis.itemState.0 & ODS_FOCUS.0) != 0 {
+            let mut focus_rect = dis.rcItem;
+            let _ = InflateRect(&mut focus_rect, -3, -3);
+            let _ = DrawFocusRect(dis.hDC, &focus_rect);
+        }
+
+        Some(LRESULT(1)) // TRUE - we handled it
     }
 }
 

@@ -30,7 +30,7 @@ use windows::{
             PAINTSTRUCT, ReleaseDC,
         },
         System::WindowsProgramming::MulDiv,
-        UI::Controls::{NM_CLICK, NM_CUSTOMDRAW, NMHDR, TVN_ITEMCHANGEDW},
+        UI::Controls::{DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, TVN_ITEMCHANGEDW},
         UI::WindowsAndMessaging::*, // This list is massive, just import all of them.
     },
     core::{HSTRING, PCWSTR},
@@ -865,6 +865,14 @@ impl Win32ApiInternalState {
             }
             WM_COMMAND => {
                 event_to_send = self.handle_wm_command(hwnd, wparam, lparam, window_id);
+            }
+            WM_DRAWITEM => {
+                let draw_item_struct = lparam.0 as *const DRAWITEMSTRUCT;
+                lresult_override = button_handler::handle_wm_drawitem(
+                    self,
+                    window_id,
+                    draw_item_struct,
+                );
             }
             WM_TIMER => {
                 event_to_send = self.handle_wm_timer(hwnd, wparam, lparam, window_id);
