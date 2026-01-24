@@ -844,6 +844,29 @@ pub(crate) fn handle_nm_customdraw(
             let tree_item_id = TreeItemId(nmtvcd.nmcd.lItemlParam.0 as u64);
             let item_is_new = is_item_new_for_display(internal_state, window_id, tree_item_id);
 
+            // First, apply base TreeView style if defined for the control
+            let base_style_id = internal_state
+                .with_window_data_read(window_id, |window_data| {
+                    Ok(window_data.get_style_for_control(control_id_of_treeview))
+                })
+                .unwrap_or(None);
+
+            let mut selected_font: Option<HFONT> = None;
+            if let Some(style_id) = base_style_id
+                && let Some(style) = internal_state.get_parsed_style(style_id)
+            {
+                if let Some(color) = style.text_color.as_ref() {
+                    nmtvcd.clrText = styling_handler::color_to_colorref(color);
+                }
+                if let Some(bg) = style.background_color.as_ref() {
+                    nmtvcd.clrTextBk = styling_handler::color_to_colorref(bg);
+                }
+                if let Some(font) = style.font_handle {
+                    selected_font = Some(font);
+                }
+            }
+
+            // Then, check for per-item style override (which can override the base style)
             let style_override = internal_state
                 .with_window_data_read(window_id, |window_data| {
                     Ok(window_data
@@ -852,7 +875,6 @@ pub(crate) fn handle_nm_customdraw(
                 })
                 .unwrap_or(None);
 
-            let mut selected_font: Option<HFONT> = None;
             if let Some(style_id) = style_override
                 && let Some(style) = internal_state.get_parsed_style(style_id)
             {
