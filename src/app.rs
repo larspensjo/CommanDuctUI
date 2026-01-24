@@ -27,7 +27,7 @@ use windows::{
         System::WindowsProgramming::MulDiv,
         UI::Controls::{
             ICC_PROGRESS_CLASS, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx,
-            TVM_SETBKCOLOR, TVM_SETTEXTCOLOR,
+            PBM_SETBKCOLOR, PBM_SETBARCOLOR, SetWindowTheme, TVM_SETBKCOLOR, TVM_SETTEXTCOLOR,
         },
         UI::WindowsAndMessaging::*,
     },
@@ -847,6 +847,39 @@ impl Win32ApiInternalState {
                             );
                             _ = InvalidateRect(Some(control_hwnd), None, true);
                         }
+                    }
+                }
+            }
+            // Check if this is a progress bar
+            else if control_kind == window_common::ControlKind::ProgressBar {
+                unsafe {
+                    // Disable visual styles to enable custom colors
+                    // Use empty strings, not null pointers
+                    let empty = HSTRING::new();
+                    _ = SetWindowTheme(control_hwnd, &empty, &empty);
+
+                    // Apply colors
+                    if let Some(ref style) = parsed_style {
+                        if let Some(bg_color) = &style.background_color {
+                            let colorref = styling_handler::color_to_colorref(bg_color);
+                            SendMessageW(
+                                control_hwnd,
+                                PBM_SETBKCOLOR,
+                                None,
+                                Some(LPARAM(colorref.0 as isize)),
+                            );
+                        }
+                        if let Some(bar_color) = &style.text_color {
+                            // Repurpose text_color as bar fill color
+                            let colorref = styling_handler::color_to_colorref(bar_color);
+                            SendMessageW(
+                                control_hwnd,
+                                PBM_SETBARCOLOR,
+                                None,
+                                Some(LPARAM(colorref.0 as isize)),
+                            );
+                        }
+                        _ = InvalidateRect(Some(control_hwnd), None, true);
                     }
                 }
             }
