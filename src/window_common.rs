@@ -29,12 +29,14 @@ use windows::{
             GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY, OUT_DEFAULT_PRECIS,
             PAINTSTRUCT, ReleaseDC,
         },
+        Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
         System::WindowsProgramming::MulDiv,
-        UI::Controls::{DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, TVN_ITEMCHANGEDW},
+        UI::Controls::{SetWindowTheme, DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, TVN_ITEMCHANGEDW},
         UI::WindowsAndMessaging::*, // This list is massive, just import all of them.
     },
     core::{HSTRING, PCWSTR},
 };
+use windows::core::w;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -837,6 +839,30 @@ pub(crate) fn hiword_from_lparam(lparam: LPARAM) -> i32 {
     ((lparam.0 >> 16) & 0xFFFF) as i32
 }
 
+/// Best-effort enablement of dark mode for non-client areas (notably scrollbars) on supported OS builds.
+pub(crate) fn try_enable_dark_mode(hwnd: HWND) {
+    unsafe {
+        let enable_dark: i32 = 1;
+        const DWMWA_USE_IMMERSIVE_DARK_MODE: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(20);
+        // Try primary attribute ID
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &enable_dark as *const _ as *const _,
+            std::mem::size_of_val(&enable_dark) as u32,
+        );
+        // Some builds expect 19; attempt as secondary.
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWINDOWATTRIBUTE(19),
+            &enable_dark as *const _ as *const _,
+            std::mem::size_of_val(&enable_dark) as u32,
+        );
+        // Explorer dark theme often yields dark scrollbars on common controls.
+        let _ = SetWindowTheme(hwnd, w!("DarkMode_Explorer"), None);
+    }
+}
+
 impl Win32ApiInternalState {
     /*
      * Handles window messages for a specific window instance.
@@ -868,11 +894,8 @@ impl Win32ApiInternalState {
             }
             WM_DRAWITEM => {
                 let draw_item_struct = lparam.0 as *const DRAWITEMSTRUCT;
-                lresult_override = button_handler::handle_wm_drawitem(
-                    self,
-                    window_id,
-                    draw_item_struct,
-                );
+                lresult_override =
+                    button_handler::handle_wm_drawitem(self, window_id, draw_item_struct);
             }
             WM_TIMER => {
                 event_to_send = self.handle_wm_timer(hwnd, wparam, lparam, window_id);
@@ -1058,6 +1081,9 @@ impl Win32ApiInternalState {
             log::error!(
                 "Failed to access window data during WM_CREATE for WinID {window_id:?}: {e:?}"
             );
+        }
+        if self.get_parsed_style(StyleId::MainWindowBackground).is_some() {
+            try_enable_dark_mode(hwnd);
         }
     }
 

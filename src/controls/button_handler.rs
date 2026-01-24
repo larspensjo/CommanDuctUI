@@ -15,14 +15,14 @@ use std::sync::Arc;
 use windows::Win32::{
     Foundation::{COLORREF, HWND, LRESULT},
     Graphics::Gdi::{
-        CreateSolidBrush, DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor,
-        InflateRect, SelectObject, SetBkMode, SetTextColor, COLOR_BTNFACE, COLOR_BTNTEXT,
-        COLOR_GRAYTEXT, DT_CENTER, DT_SINGLELINE, DT_VCENTER, HGDIOBJ, TRANSPARENT,
+        COLOR_BTNFACE, COLOR_BTNTEXT, COLOR_GRAYTEXT, CreateSolidBrush, DT_CENTER, DT_SINGLELINE,
+        DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor, HGDIOBJ,
+        InflateRect, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
     },
     UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED},
     UI::WindowsAndMessaging::{
-        BS_PUSHBUTTON, CreateWindowExW, DestroyWindow, GetWindowTextLengthW, GetWindowTextW,
-        HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE,
+        BS_PUSHBUTTON, CreateWindowExW, DestroyWindow, GetWindowTextLengthW, GetWindowTextW, HMENU,
+        WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE,
     },
 };
 use windows::core::{HSTRING, PCWSTR};

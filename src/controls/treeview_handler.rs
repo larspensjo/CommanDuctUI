@@ -14,7 +14,7 @@ use crate::controls::styling_handler;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::StyleId;
 use crate::types::{AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, WindowId};
-use crate::window_common::ControlKind;
+use crate::window_common::{try_enable_dark_mode, ControlKind};
 
 use windows::{
     Win32::{
@@ -262,6 +262,12 @@ pub(crate) fn handle_create_treeview_command(
             None, // No extra creation parameters
         )?
     };
+    if internal_state
+        .get_parsed_style(StyleId::MainWindowBackground)
+        .is_some()
+    {
+        try_enable_dark_mode(hwnd_tv);
+    }
 
     // Phase 3: Acquire write lock to update NativeWindowData.
     internal_state.with_window_data_write(window_id, |window_data| {

@@ -27,7 +27,7 @@ use windows::{
         System::WindowsProgramming::MulDiv,
         UI::Controls::{
             ICC_PROGRESS_CLASS, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx,
-            PBM_SETBKCOLOR, PBM_SETBARCOLOR, SetWindowTheme, TVM_SETBKCOLOR, TVM_SETTEXTCOLOR,
+            PBM_SETBARCOLOR, PBM_SETBKCOLOR, SetWindowTheme, TVM_SETBKCOLOR, TVM_SETTEXTCOLOR,
         },
         UI::WindowsAndMessaging::*,
     },
@@ -788,6 +788,18 @@ impl Win32ApiInternalState {
                 ));
             }
         }
+        if style_id == StyleId::MainWindowBackground {
+            if let Ok(windows_map) = self.active_windows.read() {
+                for window_data in windows_map.values() {
+                    let hwnd = window_data.get_hwnd();
+                    if !hwnd.is_invalid() {
+                        window_common::try_enable_dark_mode(hwnd);
+                    }
+                }
+            } else {
+                log::warn!("Failed to acquire read lock to enable dark mode on active windows.");
+            }
+        }
         Ok(())
     }
 
@@ -831,7 +843,8 @@ impl Win32ApiInternalState {
                 if let Some(ref style) = parsed_style {
                     if style.background_color.is_some() && style.text_color.is_some() {
                         unsafe {
-                            let current_style = WINDOW_STYLE(GetWindowLongW(control_hwnd, GWL_STYLE) as u32);
+                            let current_style =
+                                WINDOW_STYLE(GetWindowLongW(control_hwnd, GWL_STYLE) as u32);
                             let new_style = (current_style & !WINDOW_STYLE(BS_TYPEMASK as u32))
                                 | WINDOW_STYLE(BS_OWNERDRAW as u32);
                             SetWindowLongW(control_hwnd, GWL_STYLE, new_style.0 as i32);

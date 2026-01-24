@@ -13,7 +13,8 @@ use super::app::Win32ApiInternalState;
 use super::controls::treeview_handler; // Ensure treeview_handler is used for its functions
 use super::error::{PlatformError, Result as PlatformResult};
 use super::types::{CheckState, ControlId, LayoutRule, TreeItemId, WindowId};
-use super::window_common::{ControlKind, ProgrammaticScrollGuard};
+use super::window_common::{try_enable_dark_mode, ControlKind, ProgrammaticScrollGuard};
+use super::styling::StyleId;
 
 use std::sync::Arc;
 use windows::{
@@ -358,6 +359,12 @@ pub(crate) fn execute_create_input(
                 None,
             )?
         };
+        if internal_state
+            .get_parsed_style(StyleId::MainWindowBackground)
+            .is_some()
+        {
+            try_enable_dark_mode(hwnd_edit);
+        }
 
         window_data.register_control_hwnd(control_id, hwnd_edit);
         window_data.register_control_kind(control_id, ControlKind::Edit);
