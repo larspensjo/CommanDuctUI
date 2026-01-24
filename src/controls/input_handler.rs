@@ -12,7 +12,7 @@ use crate::types::{ControlId, WindowId};
 use std::sync::Arc;
 use windows::Win32::{
     Foundation::{COLORREF, HWND, LRESULT},
-    Graphics::Gdi::{SetBkColor, SetTextColor},
+    Graphics::Gdi::{SetBkColor, SetBkMode, SetTextColor, OPAQUE},
     UI::WindowsAndMessaging::GetDlgCtrlID,
 };
 
@@ -56,6 +56,9 @@ pub(crate) fn handle_wm_ctlcoloredit(
                 // Apply background color from the style, if defined.
                 if let Some(color) = &style.background_color {
                     unsafe { SetBkColor(hdc_edit, color_to_colorref(color)) };
+                }
+                unsafe {
+                    SetBkMode(hdc_edit, OPAQUE);
                 }
                 // Return the brush handle for the system to use.
                 if let Some(brush) = style.background_brush {

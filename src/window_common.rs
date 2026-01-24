@@ -1191,16 +1191,34 @@ impl Win32ApiInternalState {
         hwnd_control: HWND,
     ) -> Option<AppEvent> {
         if is_scroll_event_suppressed(window_id, control_id) {
-            log::trace!(
-                "Ignoring programmatic scroll command for control {} in window {:?}",
+            log::info!(
+                "[Scroll] Suppressed programmatic scroll for ControlID {} in WinID {:?}",
                 control_id.raw(),
                 window_id
             );
             return None;
         }
 
-        let vertical = query_scroll_percentage(hwnd_control, SB_VERT)?;
+        let vertical = match query_scroll_percentage(hwnd_control, SB_VERT) {
+            Some(value) => value,
+            None => {
+                log::info!(
+                    "[Scroll] No vertical scroll info for ControlID {} in WinID {:?} (HWND {:?})",
+                    control_id.raw(),
+                    window_id,
+                    hwnd_control
+                );
+                return None;
+            }
+        };
         let horizontal = query_scroll_percentage(hwnd_control, SB_HORZ).unwrap_or(0);
+        log::info!(
+            "[Scroll] Edit control scrolled ControlID {} in WinID {:?}: vertical={} horizontal={}",
+            control_id.raw(),
+            window_id,
+            vertical,
+            horizontal
+        );
 
         Some(AppEvent::ControlScrolled {
             window_id,

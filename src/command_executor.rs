@@ -20,6 +20,7 @@ use std::sync::Arc;
 use windows::{
     Win32::{
         Foundation::{GetLastError, HWND, LPARAM, WPARAM},
+        Graphics::Gdi::InvalidateRect,
         UI::{
             Controls::{SetScrollInfo, WC_EDITW},
             Input::KeyboardAndMouse::EnableWindow,
@@ -435,7 +436,28 @@ pub(crate) fn execute_set_viewer_content(
         control_id.raw(),
         text.len()
     );
-    execute_set_control_text(internal_state, window_id, control_id, text)
+    execute_set_control_text(internal_state, window_id, control_id, text)?;
+
+    let hwnd_viewer = internal_state.with_window_data_read(window_id, |window_data| {
+        window_data.get_control_hwnd(control_id).ok_or_else(|| {
+            PlatformError::InvalidHandle(format!(
+                "Control ID {} not found for SetViewerContent invalidation",
+                control_id.raw()
+            ))
+        })
+    })?;
+
+    unsafe {
+        let _ = SendMessageW(hwnd_viewer, WM_SETREDRAW, Some(WPARAM(0)), None);
+        let _ = SendMessageW(
+            hwnd_viewer,
+            WM_SETREDRAW,
+            Some(WPARAM(1)),
+            None,
+        );
+        let _ = InvalidateRect(Some(hwnd_viewer), None, true);
+    }
+    Ok(())
 }
 
 /*

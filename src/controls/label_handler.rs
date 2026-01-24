@@ -12,6 +12,7 @@
 
 use crate::{
     app::Win32ApiInternalState,
+    controls::input_handler,
     error::{PlatformError, Result as PlatformResult},
     styling::Color,
     types::{ControlId, LabelClass, MessageSeverity, WindowId},
@@ -258,6 +259,19 @@ pub(crate) fn handle_wm_ctlcolorstatic(
 
     let style_result: PlatformResult<Option<LRESULT>> =
         internal_state.with_window_data_read(window_id, |window_data| {
+            if should_treat_static_as_edit(window_data, control_id) {
+                log::info!(
+                    "[Paint] WM_CTLCOLORSTATIC routed to edit styling for ControlID {} in WinID {:?}",
+                    control_id.raw(),
+                    window_id
+                );
+                return Ok(input_handler::handle_wm_ctlcoloredit(
+                    internal_state,
+                    window_id,
+                    hdc_static_ctrl,
+                    hwnd_static_ctrl,
+                ));
+            }
             // --- New Styling System Logic ---
             if let Some(style_id) = window_data.get_style_for_control(control_id)
                 && let Some(style) = internal_state.get_parsed_style(style_id)
@@ -311,9 +325,17 @@ pub(crate) fn handle_wm_ctlcolorstatic(
     style_result.ok().flatten()
 }
 
+fn should_treat_static_as_edit(
+    window_data: &crate::window_common::NativeWindowData,
+    control_id: ControlId,
+) -> bool {
+    matches!(window_data.get_control_kind(control_id), Some(ControlKind::Edit))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::window_common::NativeWindowData;
 
     #[test]
     // [CDU-Styling-CustomDrawV1] Converting colors to COLORREF preserves RGB ordering for custom draw paths.
@@ -325,5 +347,17 @@ mod tests {
         };
         let converted = color_to_colorref(&color);
         assert_eq!(converted.0, 0x0033_2211);
+    }
+
+    #[test]
+    fn read_only_edit_controls_use_edit_styling_path() {
+        let mut data = NativeWindowData::new(WindowId(1));
+        let edit_id = ControlId::new(10);
+        let static_id = ControlId::new(11);
+        data.register_control_kind(edit_id, ControlKind::Edit);
+        data.register_control_kind(static_id, ControlKind::Static);
+
+        assert!(should_treat_static_as_edit(&data, edit_id));
+        assert!(!should_treat_static_as_edit(&data, static_id));
     }
 }
