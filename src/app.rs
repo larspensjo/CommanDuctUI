@@ -840,26 +840,27 @@ impl Win32ApiInternalState {
             Ok(window_data.get_control_kind(control_id))
         }) {
             if control_kind == window_common::ControlKind::Button {
-                if let Some(ref style) = parsed_style {
-                    if style.background_color.is_some() && style.text_color.is_some() {
-                        unsafe {
-                            let current_style =
-                                WINDOW_STYLE(GetWindowLongW(control_hwnd, GWL_STYLE) as u32);
-                            let new_style = (current_style & !WINDOW_STYLE(BS_TYPEMASK as u32))
-                                | WINDOW_STYLE(BS_OWNERDRAW as u32);
-                            SetWindowLongW(control_hwnd, GWL_STYLE, new_style.0 as i32);
-                            // SWP_FRAMECHANGED forces the window to recalculate its frame
-                            _ = SetWindowPos(
-                                control_hwnd,
-                                None,
-                                0,
-                                0,
-                                0,
-                                0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
-                            );
-                            _ = InvalidateRect(Some(control_hwnd), None, true);
-                        }
+                if let Some(ref style) = parsed_style
+                    && style.background_color.is_some()
+                    && style.text_color.is_some()
+                {
+                    unsafe {
+                        let current_style =
+                            WINDOW_STYLE(GetWindowLongW(control_hwnd, GWL_STYLE) as u32);
+                        let new_style = (current_style & !WINDOW_STYLE(BS_TYPEMASK as u32))
+                            | WINDOW_STYLE(BS_OWNERDRAW as u32);
+                        SetWindowLongW(control_hwnd, GWL_STYLE, new_style.0 as i32);
+                        // SWP_FRAMECHANGED forces the window to recalculate its frame
+                        _ = SetWindowPos(
+                            control_hwnd,
+                            None,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                        );
+                        _ = InvalidateRect(Some(control_hwnd), None, true);
                     }
                 }
             }

@@ -14,7 +14,7 @@ use crate::controls::styling_handler;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::StyleId;
 use crate::types::{AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, WindowId};
-use crate::window_common::{try_enable_dark_mode, ControlKind};
+use crate::window_common::{ControlKind, try_enable_dark_mode};
 
 use windows::{
     Win32::{

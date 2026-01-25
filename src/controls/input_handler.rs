@@ -12,7 +12,7 @@ use crate::types::{ControlId, WindowId};
 use std::sync::Arc;
 use windows::Win32::{
     Foundation::{COLORREF, HWND, LRESULT},
-    Graphics::Gdi::{SetBkColor, SetBkMode, SetTextColor, OPAQUE},
+    Graphics::Gdi::{OPAQUE, SetBkColor, SetBkMode, SetTextColor},
     UI::WindowsAndMessaging::GetDlgCtrlID,
 };
 

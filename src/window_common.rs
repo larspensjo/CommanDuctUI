@@ -17,11 +17,13 @@ use super::{
     types::{AppEvent, ControlId, DockStyle, LayoutRule, MenuActionId, MessageSeverity, WindowId},
 };
 
+use windows::core::w;
 use windows::{
     Win32::{
         Foundation::{
             ERROR_INVALID_WINDOW_HANDLE, GetLastError, HWND, LPARAM, LRESULT, RECT, WPARAM,
         },
+        Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute},
         Graphics::Gdi::{
             BeginPaint, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, CreateFontIndirectW, CreateFontW,
             DEFAULT_CHARSET, DEFAULT_GUI_FONT, DEFAULT_QUALITY, DeleteObject, EndPaint,
@@ -29,14 +31,14 @@ use windows::{
             GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY, OUT_DEFAULT_PRECIS,
             PAINTSTRUCT, ReleaseDC,
         },
-        Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
         System::WindowsProgramming::MulDiv,
-        UI::Controls::{SetWindowTheme, DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, TVN_ITEMCHANGEDW},
+        UI::Controls::{
+            DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, SetWindowTheme, TVN_ITEMCHANGEDW,
+        },
         UI::WindowsAndMessaging::*, // This list is massive, just import all of them.
     },
     core::{HSTRING, PCWSTR},
 };
-use windows::core::w;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -575,16 +577,16 @@ impl NativeWindowData {
     }
 
     fn cleanup_status_bar_font(&mut self) {
-        if let Some(h_font) = self.status_bar_font.take() {
-            if !h_font.is_invalid() {
-                log::debug!(
-                    "Deleting status bar font {:?} for WinID {:?}",
-                    h_font,
-                    self.logical_window_id
-                );
-                unsafe {
-                    let _ = DeleteObject(HGDIOBJ(h_font.0));
-                }
+        if let Some(h_font) = self.status_bar_font.take()
+            && !h_font.is_invalid()
+        {
+            log::debug!(
+                "Deleting status bar font {:?} for WinID {:?}",
+                h_font,
+                self.logical_window_id
+            );
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(h_font.0));
             }
         }
     }
@@ -652,16 +654,16 @@ impl NativeWindowData {
     }
 
     fn cleanup_treeview_new_item_font(&mut self) {
-        if let Some(h_font) = self.treeview_new_item_font.take() {
-            if !h_font.is_invalid() {
-                log::debug!(
-                    "Deleting TreeView 'new item' font {:?} for WinID {:?}.",
-                    h_font,
-                    self.logical_window_id
-                );
-                unsafe {
-                    let _ = DeleteObject(HGDIOBJ(h_font.0));
-                }
+        if let Some(h_font) = self.treeview_new_item_font.take()
+            && !h_font.is_invalid()
+        {
+            log::debug!(
+                "Deleting TreeView 'new item' font {:?} for WinID {:?}.",
+                h_font,
+                self.logical_window_id
+            );
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(h_font.0));
             }
         }
     }
@@ -1082,7 +1084,10 @@ impl Win32ApiInternalState {
                 "Failed to access window data during WM_CREATE for WinID {window_id:?}: {e:?}"
             );
         }
-        if self.get_parsed_style(StyleId::MainWindowBackground).is_some() {
+        if self
+            .get_parsed_style(StyleId::MainWindowBackground)
+            .is_some()
+        {
             try_enable_dark_mode(hwnd);
         }
     }
@@ -1276,14 +1281,14 @@ impl Win32ApiInternalState {
         _window_id: WindowId,
     ) -> LRESULT {
         unsafe {
-            if let Some(style) = self.get_parsed_style(StyleId::MainWindowBackground) {
-                if let Some(bg_brush) = style.background_brush {
-                    let hdc = HDC(wparam.0 as *mut c_void);
-                    let mut client_rect = RECT::default();
-                    if GetClientRect(hwnd, &mut client_rect).is_ok() {
-                        FillRect(hdc, &client_rect, bg_brush);
-                        return LRESULT(1);
-                    }
+            if let Some(style) = self.get_parsed_style(StyleId::MainWindowBackground)
+                && let Some(bg_brush) = style.background_brush
+            {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let mut client_rect = RECT::default();
+                if GetClientRect(hwnd, &mut client_rect).is_ok() {
+                    FillRect(hdc, &client_rect, bg_brush);
+                    return LRESULT(1);
                 }
             }
             DefWindowProcW(hwnd, WM_ERASEBKGND, wparam, lparam)
@@ -1307,7 +1312,7 @@ impl Win32ApiInternalState {
                 let background_brush = self
                     .get_parsed_style(StyleId::MainWindowBackground)
                     .and_then(|style| style.background_brush)
-                    .unwrap_or_else(|| HBRUSH((COLOR_WINDOW.0 + 1) as *mut c_void));
+                    .unwrap_or(HBRUSH((COLOR_WINDOW.0 + 1) as *mut c_void));
 
                 FillRect(hdc, &ps.rcPaint, background_brush);
                 _ = EndPaint(hwnd, &ps);

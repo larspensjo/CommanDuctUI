@@ -260,11 +260,6 @@ pub(crate) fn handle_wm_ctlcolorstatic(
     let style_result: PlatformResult<Option<LRESULT>> =
         internal_state.with_window_data_read(window_id, |window_data| {
             if should_treat_static_as_edit(window_data, control_id) {
-                log::info!(
-                    "[Paint] WM_CTLCOLORSTATIC routed to edit styling for ControlID {} in WinID {:?}",
-                    control_id.raw(),
-                    window_id
-                );
                 return Ok(input_handler::handle_wm_ctlcoloredit(
                     internal_state,
                     window_id,
@@ -329,7 +324,10 @@ fn should_treat_static_as_edit(
     window_data: &crate::window_common::NativeWindowData,
     control_id: ControlId,
 ) -> bool {
-    matches!(window_data.get_control_kind(control_id), Some(ControlKind::Edit))
+    matches!(
+        window_data.get_control_kind(control_id),
+        Some(ControlKind::Edit)
+    )
 }
 
 #[cfg(test)]

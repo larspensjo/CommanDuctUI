@@ -12,9 +12,9 @@
 use super::app::Win32ApiInternalState;
 use super::controls::treeview_handler; // Ensure treeview_handler is used for its functions
 use super::error::{PlatformError, Result as PlatformResult};
-use super::types::{CheckState, ControlId, LayoutRule, TreeItemId, WindowId};
-use super::window_common::{try_enable_dark_mode, ControlKind, ProgrammaticScrollGuard};
 use super::styling::StyleId;
+use super::types::{CheckState, ControlId, LayoutRule, TreeItemId, WindowId};
+use super::window_common::{ControlKind, ProgrammaticScrollGuard, try_enable_dark_mode};
 
 use std::sync::Arc;
 use windows::{
@@ -449,12 +449,7 @@ pub(crate) fn execute_set_viewer_content(
 
     unsafe {
         let _ = SendMessageW(hwnd_viewer, WM_SETREDRAW, Some(WPARAM(0)), None);
-        let _ = SendMessageW(
-            hwnd_viewer,
-            WM_SETREDRAW,
-            Some(WPARAM(1)),
-            None,
-        );
+        let _ = SendMessageW(hwnd_viewer, WM_SETREDRAW, Some(WPARAM(1)), None);
         let _ = InvalidateRect(Some(hwnd_viewer), None, true);
     }
     Ok(())
