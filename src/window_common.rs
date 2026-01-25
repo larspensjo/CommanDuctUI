@@ -1217,14 +1217,6 @@ impl Win32ApiInternalState {
             }
         };
         let horizontal = query_scroll_percentage(hwnd_control, SB_HORZ).unwrap_or(0);
-        log::info!(
-            "[Scroll] Edit control scrolled ControlID {} in WinID {:?}: vertical={} horizontal={}",
-            control_id.raw(),
-            window_id,
-            vertical,
-            horizontal
-        );
-
         Some(AppEvent::ControlScrolled {
             window_id,
             control_id,
