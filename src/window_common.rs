@@ -963,12 +963,7 @@ impl Win32ApiInternalState {
                         input_handler::handle_wm_ctlcoloredit(self, window_id, hdc, hwnd_control)
                     }
                     paint_router::PaintRoute::LabelStatic => {
-                        label_handler::handle_wm_ctlcolorstatic(
-                            self,
-                            window_id,
-                            hdc,
-                            hwnd_control,
-                        )
+                        label_handler::handle_wm_ctlcolorstatic(self, window_id, hdc, hwnd_control)
                     }
                     _ => None,
                 };
@@ -1290,8 +1285,9 @@ impl Win32ApiInternalState {
         }
 
         let control_id = ControlId::new(control_id_raw);
-        let kind_result =
-            self.with_window_data_read(window_id, |window_data| Ok(window_data.get_control_kind(control_id)));
+        let kind_result = self.with_window_data_read(window_id, |window_data| {
+            Ok(window_data.get_control_kind(control_id))
+        });
 
         match kind_result {
             Ok(Some(kind)) => paint_router::resolve_paint_route(kind, msg),

@@ -539,11 +539,7 @@ pub trait UiStateProvider: Send + Sync + 'static {
     fn is_tree_item_new(&self, window_id: WindowId, item_id: TreeItemId) -> bool;
 
     /// Asks the provider for the marker that should be drawn beside the tree item.
-    fn tree_item_marker(
-        &self,
-        _window_id: WindowId,
-        _item_id: TreeItemId,
-    ) -> TreeItemMarkerKind {
+    fn tree_item_marker(&self, _window_id: WindowId, _item_id: TreeItemId) -> TreeItemMarkerKind {
         TreeItemMarkerKind::None
     }
 }
@@ -576,7 +572,11 @@ mod tests {
             false
         }
 
-        fn tree_item_marker(&self, _window_id: WindowId, item_id: TreeItemId) -> TreeItemMarkerKind {
+        fn tree_item_marker(
+            &self,
+            _window_id: WindowId,
+            item_id: TreeItemId,
+        ) -> TreeItemMarkerKind {
             if item_id.0 == 13 {
                 TreeItemMarkerKind::Green
             } else {

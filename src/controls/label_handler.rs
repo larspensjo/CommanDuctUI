@@ -331,5 +331,4 @@ mod tests {
         let converted = color_to_colorref(&color);
         assert_eq!(converted.0, 0x0033_2211);
     }
-
 }

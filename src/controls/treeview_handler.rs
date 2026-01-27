@@ -23,8 +23,8 @@ use windows::{
     Win32::{
         Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
-            CreateSolidBrush, DeleteObject, Ellipse, HDC, HFONT, HGDIOBJ, InvalidateRect, ScreenToClient,
-            SelectObject,
+            CreateSolidBrush, DeleteObject, Ellipse, HDC, HFONT, HGDIOBJ, InvalidateRect,
+            ScreenToClient, SelectObject,
         },
         UI::Controls::{
             CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDRF_DODEFAULT, CDRF_NEWFONT,
@@ -919,12 +919,7 @@ fn tree_item_marker_color(marker: TreeItemMarkerKind) -> Option<Color> {
     }
 }
 
-fn draw_tree_item_marker(
-    hdc: HDC,
-    hwnd_treeview: HWND,
-    h_item_native: HTREEITEM,
-    color: Color,
-) {
+fn draw_tree_item_marker(hdc: HDC, hwnd_treeview: HWND, h_item_native: HTREEITEM, color: Color) {
     let mut item_rect = RECT::default();
     unsafe {
         *(((&mut item_rect) as *mut RECT) as *mut HTREEITEM) = h_item_native;
@@ -1085,8 +1080,7 @@ pub(crate) fn handle_nm_customdraw(
             let hdc = nmtvcd.nmcd.hdc;
             let hwnd_treeview = nmtvcd.nmcd.hdr.hwndFrom;
             let tree_item_id = TreeItemId(nmtvcd.nmcd.lItemlParam.0 as u64);
-            let marker_kind =
-                tree_item_marker_for_display(internal_state, window_id, tree_item_id);
+            let marker_kind = tree_item_marker_for_display(internal_state, window_id, tree_item_id);
 
             let style_override = internal_state
                 .with_window_data_read(window_id, |window_data| {
