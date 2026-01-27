@@ -13,13 +13,18 @@ use crate::app::Win32ApiInternalState;
 use crate::controls::styling_handler;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::StyleId;
-use crate::types::{AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, WindowId};
+use crate::types::{
+    AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, TreeItemMarkerKind, WindowId,
+};
 use crate::window_common::{ControlKind, try_enable_dark_mode};
 
 use windows::{
     Win32::{
-        Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::{HFONT, HGDIOBJ, InvalidateRect, ScreenToClient, SelectObject},
+        Foundation::{COLORREF, GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Graphics::Gdi::{
+            CreateSolidBrush, DeleteObject, Ellipse, HDC, HFONT, HGDIOBJ, InvalidateRect, ScreenToClient,
+            SelectObject,
+        },
         UI::Controls::{
             CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDRF_DODEFAULT, CDRF_NEWFONT,
             CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYPOSTPAINT, HTREEITEM, NMHDR, NMTVCUSTOMDRAW,
@@ -49,6 +54,9 @@ use std::sync::Arc;
  * const CIRCLE_COLOR_BLUE: windows::Win32::Foundation::COLORREF =
  *     windows::Win32::Foundation::COLORREF(0x00FF0000); // BGR format for Blue
  */
+
+const MARKER_DIAMETER: i32 = 6;
+const MARKER_LEFT_OFFSET: i32 = 12;
 
 /*
  * Holds internal state specific to a TreeView control instance.
@@ -847,6 +855,81 @@ fn is_item_new_for_display(
     false
 }
 
+fn tree_item_marker_for_display(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    tree_item_id: TreeItemId,
+) -> TreeItemMarkerKind {
+    let provider_opt = internal_state
+        .ui_state_provider()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|weak_handler| weak_handler.upgrade());
+
+    if let Some(handler_arc) = provider_opt
+        && let Ok(handler_guard) = handler_arc.lock()
+    {
+        return handler_guard.tree_item_marker(window_id, tree_item_id);
+    }
+
+    TreeItemMarkerKind::None
+}
+
+fn tree_item_marker_color(marker: TreeItemMarkerKind) -> Option<COLORREF> {
+    match marker {
+        TreeItemMarkerKind::None => None,
+        TreeItemMarkerKind::Blue => Some(COLORREF(0x00FF0000)),   // Blue (BGR)
+        TreeItemMarkerKind::Green => Some(COLORREF(0x0000FF00)),  // Green
+        TreeItemMarkerKind::Yellow => Some(COLORREF(0x0000FFFF)), // Yellow
+        TreeItemMarkerKind::Red => Some(COLORREF(0x000000FF)),    // Red
+        TreeItemMarkerKind::Purple => Some(COLORREF(0x00800080)), // Purple
+        TreeItemMarkerKind::Gray => Some(COLORREF(0x00808080)),   // Gray
+    }
+}
+
+fn draw_tree_item_marker(
+    hdc: HDC,
+    hwnd_treeview: HWND,
+    h_item_native: HTREEITEM,
+    color: COLORREF,
+) {
+    let mut item_rect = RECT::default();
+    unsafe {
+        *(((&mut item_rect) as *mut RECT) as *mut HTREEITEM) = h_item_native;
+    }
+    let rect_success = unsafe {
+        SendMessageW(
+            hwnd_treeview,
+            TVM_GETITEMRECT,
+            Some(WPARAM(1)),
+            Some(LPARAM(&mut item_rect as *mut _ as isize)),
+        )
+    };
+
+    if rect_success.0 == 0 {
+        return;
+    }
+
+    let height = item_rect.bottom - item_rect.top;
+    let top = item_rect.top + (height - MARKER_DIAMETER) / 2;
+    let left = item_rect.left + MARKER_LEFT_OFFSET;
+    let right = left + MARKER_DIAMETER;
+    let bottom = top + MARKER_DIAMETER;
+
+    let brush = unsafe { CreateSolidBrush(color) };
+    if brush.is_invalid() {
+        return;
+    }
+
+    unsafe {
+        let previous_brush = SelectObject(hdc, HGDIOBJ(brush.0));
+        let _ = Ellipse(hdc, left, top, right, bottom);
+        SelectObject(hdc, previous_brush);
+        let _ = DeleteObject(HGDIOBJ(brush.0));
+    }
+}
+
 /*
  * Handles the NM_CUSTOMDRAW notification for a TreeView control.
  * Applies a bold/italic font to "New" items via NM_CUSTOMDRAW, replacing the former
@@ -953,6 +1036,8 @@ pub(crate) fn handle_nm_customdraw(
             let hdc = nmtvcd.nmcd.hdc;
             let hwnd_treeview = nmtvcd.nmcd.hdr.hwndFrom;
             let tree_item_id = TreeItemId(nmtvcd.nmcd.lItemlParam.0 as u64);
+            let marker_kind =
+                tree_item_marker_for_display(internal_state, window_id, tree_item_id);
 
             let style_override = internal_state
                 .with_window_data_read(window_id, |window_data| {
@@ -1002,6 +1087,10 @@ pub(crate) fn handle_nm_customdraw(
                         SelectObject(hdc, HGDIOBJ(default_font.0));
                     }
                 }
+            }
+            if let Some(color) = tree_item_marker_color(marker_kind) {
+                let h_item_native = HTREEITEM(nmtvcd.nmcd.dwItemSpec as isize);
+                draw_tree_item_marker(hdc, hwnd_treeview, h_item_native, color);
             }
             return LRESULT(CDRF_DODEFAULT as isize);
         }
