@@ -43,8 +43,19 @@ pub(crate) fn handle_create_progress_bar_command(
         }
     })?;
 
+    internal_state.with_window_data_write(window_id, |window_data| {
+        if window_data.has_control(control_id) {
+            return Err(PlatformError::OperationFailed(format!(
+                "Progress bar with ID {} already exists for window {window_id:?}",
+                control_id.raw()
+            )));
+        }
+        window_data.register_control_kind(control_id, ControlKind::ProgressBar);
+        Ok(())
+    })?;
+
     let hwnd_progress = unsafe {
-        CreateWindowExW(
+        match CreateWindowExW(
             WINDOW_EX_STYLE(0),
             PROGRESS_CLASSW,
             None,
@@ -57,7 +68,16 @@ pub(crate) fn handle_create_progress_bar_command(
             Some(HMENU(control_id.raw() as *mut _)),
             Some(internal_state.h_instance()),
             None,
-        )?
+        ) {
+            Ok(hwnd) => hwnd,
+            Err(err) => {
+                let _ = internal_state.with_window_data_write(window_id, |window_data| {
+                    window_data.unregister_control_kind(control_id);
+                    Ok(())
+                });
+                return Err(err.into());
+            }
+        }
     };
 
     internal_state.with_window_data_write(window_id, |window_data| {
@@ -72,7 +92,6 @@ pub(crate) fn handle_create_progress_bar_command(
         }
 
         window_data.register_control_hwnd(control_id, hwnd_progress);
-        window_data.register_control_kind(control_id, ControlKind::ProgressBar);
         Ok(())
     })
 }

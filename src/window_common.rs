@@ -11,7 +11,7 @@
  */
 use super::{
     app::Win32ApiInternalState,
-    controls::{button_handler, input_handler, label_handler, treeview_handler},
+    controls::{button_handler, input_handler, label_handler, paint_router, treeview_handler},
     error::{PlatformError, Result as PlatformResult},
     styling::StyleId,
     types::{AppEvent, ControlId, DockStyle, LayoutRule, MenuActionId, MessageSeverity, WindowId},
@@ -44,6 +44,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::Arc;
+
+use log::warn;
 
 // TOOD: Control IDs used by dialog_handler, kept here for visibility if dialog_handler needs them
 // but ideally, they should be private to dialog_handler or within a shared constants scope for dialogs.
@@ -233,6 +235,10 @@ impl NativeWindowData {
 
     pub(crate) fn register_control_kind(&mut self, control_id: ControlId, kind: ControlKind) {
         self.control_kinds.insert(control_id, kind);
+    }
+
+    pub(crate) fn unregister_control_kind(&mut self, control_id: ControlId) {
+        self.control_kinds.remove(&control_id);
     }
 
     pub(crate) fn get_control_kind(&self, control_id: ControlId) -> Option<ControlKind> {
@@ -948,21 +954,24 @@ impl Win32ApiInternalState {
                 lresult_override =
                     Some(self.handle_wm_getminmaxinfo(hwnd, wparam, lparam, window_id));
             }
-            WM_CTLCOLORSTATIC => {
-                let hdc_static_ctrl = HDC(wparam.0 as *mut c_void);
-                let hwnd_static_ctrl = HWND(lparam.0 as *mut c_void);
-                lresult_override = label_handler::handle_wm_ctlcolorstatic(
-                    self,
-                    window_id,
-                    hdc_static_ctrl,
-                    hwnd_static_ctrl,
-                );
-            }
-            WM_CTLCOLOREDIT => {
-                let hdc_edit = HDC(wparam.0 as *mut c_void);
-                let hwnd_edit = HWND(lparam.0 as *mut c_void);
-                lresult_override =
-                    input_handler::handle_wm_ctlcoloredit(self, window_id, hdc_edit, hwnd_edit);
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let hwnd_control = HWND(lparam.0 as *mut c_void);
+                let route = self.resolve_ctlcolor_route(window_id, hwnd_control, msg);
+                lresult_override = match route {
+                    paint_router::PaintRoute::Edit => {
+                        input_handler::handle_wm_ctlcoloredit(self, window_id, hdc, hwnd_control)
+                    }
+                    paint_router::PaintRoute::LabelStatic => {
+                        label_handler::handle_wm_ctlcolorstatic(
+                            self,
+                            window_id,
+                            hdc,
+                            hwnd_control,
+                        )
+                    }
+                    _ => None,
+                };
             }
             _ => {}
         }
@@ -1265,6 +1274,46 @@ impl Win32ApiInternalState {
         None
     }
 
+    fn resolve_ctlcolor_route(
+        self: &Arc<Self>,
+        window_id: WindowId,
+        hwnd_control: HWND,
+        msg: u32,
+    ) -> paint_router::PaintRoute {
+        let control_id_raw = unsafe { GetDlgCtrlID(hwnd_control) };
+        if control_id_raw == 0 {
+            warn!(
+                "[Paint] WM_CTLCOLOR message for HWND {:?} without control ID; using fallback",
+                hwnd_control
+            );
+            return fallback_ctlcolor_route(msg);
+        }
+
+        let control_id = ControlId::new(control_id_raw);
+        let kind_result =
+            self.with_window_data_read(window_id, |window_data| Ok(window_data.get_control_kind(control_id)));
+
+        match kind_result {
+            Ok(Some(kind)) => paint_router::resolve_paint_route(kind, msg),
+            Ok(None) => {
+                warn!(
+                    "[Paint] Missing ControlKind for ControlID {} in WinID {:?}; using fallback",
+                    control_id.raw(),
+                    window_id
+                );
+                fallback_ctlcolor_route(msg)
+            }
+            Err(err) => {
+                warn!(
+                    "[Paint] Failed to resolve ControlKind for ControlID {} in WinID {:?}: {err:?}",
+                    control_id.raw(),
+                    window_id
+                );
+                fallback_ctlcolor_route(msg)
+            }
+        }
+    }
+
     fn handle_wm_erasebkgnd(
         self: &Arc<Self>,
         hwnd: HWND,
@@ -1329,6 +1378,14 @@ impl Win32ApiInternalState {
             mmi.ptMinTrackSize.y = 200;
         }
         SUCCESS_CODE
+    }
+}
+
+fn fallback_ctlcolor_route(msg: u32) -> paint_router::PaintRoute {
+    match msg {
+        WM_CTLCOLOREDIT => paint_router::PaintRoute::Edit,
+        WM_CTLCOLORSTATIC => paint_router::PaintRoute::LabelStatic,
+        _ => paint_router::PaintRoute::Default,
     }
 }
 

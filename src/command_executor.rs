@@ -344,8 +344,9 @@ pub(crate) fn execute_create_input(
             window_style |= WINDOW_STYLE(ES_READONLY as u32);
         }
 
+        window_data.register_control_kind(control_id, ControlKind::Edit);
         let hwnd_edit = unsafe {
-            CreateWindowExW(
+            match CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 WC_EDITW,
                 &HSTRING::from(initial_text.as_str()),
@@ -358,7 +359,13 @@ pub(crate) fn execute_create_input(
                 Some(HMENU(control_id.raw() as usize as *mut std::ffi::c_void)),
                 Some(h_instance),
                 None,
-            )?
+            ) {
+                Ok(hwnd) => hwnd,
+                Err(err) => {
+                    window_data.unregister_control_kind(control_id);
+                    return Err(err.into());
+                }
+            }
         };
         if internal_state
             .get_parsed_style(StyleId::MainWindowBackground)
@@ -368,7 +375,6 @@ pub(crate) fn execute_create_input(
         }
 
         window_data.register_control_hwnd(control_id, hwnd_edit);
-        window_data.register_control_kind(control_id, ControlKind::Edit);
         log::debug!(
             "CommandExecutor: Created input field (ID {}) for WinID {window_id:?} with HWND {hwnd_edit:?}",
             control_id.raw()

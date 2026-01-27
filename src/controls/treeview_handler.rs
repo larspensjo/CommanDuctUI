@@ -240,6 +240,21 @@ pub(crate) fn handle_create_treeview_command(
             Ok(hwnd)
         })?;
 
+    internal_state.with_window_data_write(window_id, |window_data| {
+        if window_data.has_control(control_id) || window_data.has_treeview_state() {
+            log::warn!(
+                "TreeViewHandler: TreeView (ID {}) created concurrently. Destroying new one.",
+                control_id.raw()
+            );
+            return Err(PlatformError::ControlCreationFailed(format!(
+                "TreeView with ID {} or existing treeview state already present for window {window_id:?}",
+                control_id.raw()
+            )));
+        }
+        window_data.register_control_kind(control_id, ControlKind::TreeView);
+        Ok(())
+    })?;
+
     // Phase 2: Create the window without holding a lock.
     let h_instance_for_creation = internal_state.h_instance();
     let tvs_style = WINDOW_STYLE(
@@ -247,7 +262,7 @@ pub(crate) fn handle_create_treeview_command(
     );
     let combined_style = WS_CHILD | WS_VISIBLE | WS_BORDER | tvs_style;
     let hwnd_tv = unsafe {
-        CreateWindowExW(
+        match CreateWindowExW(
             WINDOW_EX_STYLE(0),
             WC_TREEVIEWW, // Standard class name for TreeView
             None,         // No window text/title for a control
@@ -260,7 +275,16 @@ pub(crate) fn handle_create_treeview_command(
             Some(HMENU(control_id.raw() as *mut _)), // Use logical ID for HMENU
             Some(h_instance_for_creation),
             None, // No extra creation parameters
-        )?
+        ) {
+            Ok(hwnd) => hwnd,
+            Err(err) => {
+                let _ = internal_state.with_window_data_write(window_id, |window_data| {
+                    window_data.unregister_control_kind(control_id);
+                    Ok(())
+                });
+                return Err(err.into());
+            }
+        }
     };
     if internal_state
         .get_parsed_style(StyleId::MainWindowBackground)
@@ -278,6 +302,7 @@ pub(crate) fn handle_create_treeview_command(
                 control_id.raw()
             );
             unsafe { DestroyWindow(hwnd_tv).ok() };
+            window_data.unregister_control_kind(control_id);
             return Err(PlatformError::ControlCreationFailed(format!(
                 "TreeView with ID {} was concurrently created for window {window_id:?}",
                 control_id.raw()
@@ -285,7 +310,6 @@ pub(crate) fn handle_create_treeview_command(
         }
 
         window_data.register_control_hwnd(control_id, hwnd_tv);
-        window_data.register_control_kind(control_id, ControlKind::TreeView);
         window_data.init_treeview_state();
         log::debug!(
             "TreeViewHandler: Created TreeView (ID {}) for window {window_id:?} with HWND {hwnd_tv:?}",

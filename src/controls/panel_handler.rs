@@ -7,7 +7,10 @@
 
 use crate::app::Win32ApiInternalState;
 use crate::error::{PlatformError, Result as PlatformResult};
-use crate::types::{ControlId, WindowId};
+use crate::{
+    types::{ControlId, WindowId},
+    window_common::ControlKind,
+};
 use crate::window_common::WC_STATIC;
 
 use std::sync::Arc;
@@ -142,9 +145,11 @@ pub(crate) fn handle_create_panel_command(
             )));
         }
 
+        window_data.register_control_kind(panel_id, ControlKind::Static);
+
         let h_instance = internal_state.h_instance();
         let hwnd_panel = unsafe {
-            CreateWindowExW(
+            match CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 WC_STATIC,
                 None,
@@ -157,7 +162,13 @@ pub(crate) fn handle_create_panel_command(
                 Some(HMENU(panel_id.raw() as *mut _)),
                 Some(h_instance),
                 None,
-            )?
+            ) {
+                Ok(hwnd) => hwnd,
+                Err(err) => {
+                    window_data.unregister_control_kind(panel_id);
+                    return Err(err.into());
+                }
+            }
         };
 
         unsafe {

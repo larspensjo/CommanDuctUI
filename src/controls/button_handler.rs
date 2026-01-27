@@ -96,10 +96,25 @@ pub(crate) fn handle_create_button_command(
             Ok(hwnd_parent)
         })?;
 
+    internal_state.with_window_data_write(window_id, |window_data| {
+        if window_data.has_control(control_id) {
+            log::warn!(
+                "ButtonHandler: Button with ID {} already exists for window {window_id:?}.",
+                control_id.raw()
+            );
+            return Err(PlatformError::OperationFailed(format!(
+                "Button with ID {} already exists for window {window_id:?}",
+                control_id.raw()
+            )));
+        }
+        window_data.register_control_kind(control_id, ControlKind::Button);
+        Ok(())
+    })?;
+
     // Phase 2: Create the native control without holding any locks.
     let h_instance = internal_state.h_instance();
     let hwnd_button = unsafe {
-        CreateWindowExW(
+        match CreateWindowExW(
             WINDOW_EX_STYLE(0),
             WC_BUTTON,
             &HSTRING::from(text.as_str()),
@@ -112,7 +127,16 @@ pub(crate) fn handle_create_button_command(
             Some(HMENU(control_id.raw() as *mut _)),
             Some(h_instance),
             None,
-        )?
+        ) {
+            Ok(hwnd) => hwnd,
+            Err(err) => {
+                let _ = internal_state.with_window_data_write(window_id, |window_data| {
+                    window_data.unregister_control_kind(control_id);
+                    Ok(())
+                });
+                return Err(err.into());
+            }
+        }
     };
 
     // Phase 3: Acquire a write lock only to register the new HWND.
@@ -135,7 +159,6 @@ pub(crate) fn handle_create_button_command(
         }
 
         window_data.register_control_hwnd(control_id, hwnd_button);
-        window_data.register_control_kind(control_id, ControlKind::Button);
         log::debug!(
             "ButtonHandler: Created button '{text}' (ID {}) for window {window_id:?} with HWND {hwnd_button:?}",
             control_id.raw()
