@@ -16,8 +16,10 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{
         CallWindowProcW, CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GWLP_WNDPROC, GetParent,
         GetWindowLongPtrW, HMENU, SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ERASEBKGND, WM_NOTIFY,
-        WNDPROC, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE,
+        WM_COMMAND, WM_COMPAREITEM, WM_CTLCOLOREDIT, WM_CTLCOLORBTN, WM_CTLCOLORDLG,
+        WM_CTLCOLORLISTBOX, WM_CTLCOLORSCROLLBAR, WM_CTLCOLORSTATIC, WM_DELETEITEM, WM_DRAWITEM,
+        WM_HSCROLL, WM_MEASUREITEM, WM_NOTIFY, WM_PARENTNOTIFY, WM_VSCROLL, WNDPROC, WS_CHILD,
+        WS_CLIPCHILDREN, WS_VISIBLE,
     },
 };
 
@@ -42,6 +44,27 @@ impl PanelWindowStyle {
  * parent window so that controls embedded within the panel behave as if they
  * were direct children of the main window.
  */
+fn is_parent_notification(msg: u32) -> bool {
+    matches!(
+        msg,
+        WM_COMMAND
+            | WM_NOTIFY
+            | WM_PARENTNOTIFY
+            | WM_DRAWITEM
+            | WM_MEASUREITEM
+            | WM_DELETEITEM
+            | WM_COMPAREITEM
+            | WM_CTLCOLORBTN
+            | WM_CTLCOLOREDIT
+            | WM_CTLCOLORSTATIC
+            | WM_CTLCOLORLISTBOX
+            | WM_CTLCOLORSCROLLBAR
+            | WM_CTLCOLORDLG
+            | WM_HSCROLL
+            | WM_VSCROLL
+    )
+}
+
 unsafe extern "system" fn forwarding_panel_proc(
     hwnd: HWND,
     msg: u32,
@@ -49,12 +72,7 @@ unsafe extern "system" fn forwarding_panel_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     unsafe {
-        if (msg == WM_COMMAND
-            || msg == WM_CTLCOLOREDIT
-            || msg == WM_CTLCOLORSTATIC
-            || msg == WM_DRAWITEM
-            || msg == WM_NOTIFY
-            || msg == WM_ERASEBKGND)
+        if is_parent_notification(msg)
             && let Ok(parent) = GetParent(hwnd)
             && !parent.is_invalid()
         {
@@ -167,5 +185,24 @@ mod tests {
         assert_ne!(style.0 & WS_CLIPCHILDREN.0, 0);
         assert_ne!(style.0 & WS_CHILD.0, 0);
         assert_ne!(style.0 & WS_VISIBLE.0, 0);
+    }
+
+    #[test]
+    fn parent_notification_set_is_complete_for_panels() {
+        assert!(is_parent_notification(WM_COMMAND));
+        assert!(is_parent_notification(WM_NOTIFY));
+        assert!(is_parent_notification(WM_PARENTNOTIFY));
+        assert!(is_parent_notification(WM_DRAWITEM));
+        assert!(is_parent_notification(WM_MEASUREITEM));
+        assert!(is_parent_notification(WM_DELETEITEM));
+        assert!(is_parent_notification(WM_COMPAREITEM));
+        assert!(is_parent_notification(WM_CTLCOLORBTN));
+        assert!(is_parent_notification(WM_CTLCOLOREDIT));
+        assert!(is_parent_notification(WM_CTLCOLORSTATIC));
+        assert!(is_parent_notification(WM_CTLCOLORLISTBOX));
+        assert!(is_parent_notification(WM_CTLCOLORSCROLLBAR));
+        assert!(is_parent_notification(WM_CTLCOLORDLG));
+        assert!(is_parent_notification(WM_HSCROLL));
+        assert!(is_parent_notification(WM_VSCROLL));
     }
 }
