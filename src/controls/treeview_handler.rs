@@ -13,6 +13,7 @@ use crate::app::Win32ApiInternalState;
 use crate::controls::styling_handler;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::StyleId;
+use crate::styling_primitives::Color;
 use crate::types::{
     AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, TreeItemMarkerKind, WindowId,
 };
@@ -20,7 +21,7 @@ use crate::window_common::{ControlKind, try_enable_dark_mode};
 
 use windows::{
     Win32::{
-        Foundation::{COLORREF, GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
             CreateSolidBrush, DeleteObject, Ellipse, HDC, HFONT, HGDIOBJ, InvalidateRect, ScreenToClient,
             SelectObject,
@@ -57,6 +58,12 @@ use std::sync::Arc;
 
 const MARKER_DIAMETER: i32 = 6;
 const MARKER_LEFT_OFFSET: i32 = 12;
+const MARKER_BORDER: i32 = 1;
+const MARKER_OUTER_COLOR: Color = Color {
+    r: 255,
+    g: 255,
+    b: 255,
+};
 
 /*
  * Holds internal state specific to a TreeView control instance.
@@ -876,15 +883,39 @@ fn tree_item_marker_for_display(
     TreeItemMarkerKind::None
 }
 
-fn tree_item_marker_color(marker: TreeItemMarkerKind) -> Option<COLORREF> {
+fn tree_item_marker_color(marker: TreeItemMarkerKind) -> Option<Color> {
     match marker {
         TreeItemMarkerKind::None => None,
-        TreeItemMarkerKind::Blue => Some(COLORREF(0x00FF0000)),   // Blue (BGR)
-        TreeItemMarkerKind::Green => Some(COLORREF(0x0000FF00)),  // Green
-        TreeItemMarkerKind::Yellow => Some(COLORREF(0x0000FFFF)), // Yellow
-        TreeItemMarkerKind::Red => Some(COLORREF(0x000000FF)),    // Red
-        TreeItemMarkerKind::Purple => Some(COLORREF(0x00800080)), // Purple
-        TreeItemMarkerKind::Gray => Some(COLORREF(0x00808080)),   // Gray
+        TreeItemMarkerKind::Blue => Some(Color {
+            r: 33,
+            g: 150,
+            b: 243,
+        }), // Material Blue 500
+        TreeItemMarkerKind::Green => Some(Color {
+            r: 46,
+            g: 204,
+            b: 113,
+        }), // Material Green 400
+        TreeItemMarkerKind::Yellow => Some(Color {
+            r: 255,
+            g: 193,
+            b: 7,
+        }), // Amber 500
+        TreeItemMarkerKind::Red => Some(Color {
+            r: 244,
+            g: 67,
+            b: 54,
+        }), // Material Red 500
+        TreeItemMarkerKind::Purple => Some(Color {
+            r: 156,
+            g: 39,
+            b: 176,
+        }), // Material Purple 500
+        TreeItemMarkerKind::Gray => Some(Color {
+            r: 117,
+            g: 117,
+            b: 117,
+        }), // Gray 600
     }
 }
 
@@ -892,7 +923,7 @@ fn draw_tree_item_marker(
     hdc: HDC,
     hwnd_treeview: HWND,
     h_item_native: HTREEITEM,
-    color: COLORREF,
+    color: Color,
 ) {
     let mut item_rect = RECT::default();
     unsafe {
@@ -917,16 +948,34 @@ fn draw_tree_item_marker(
     let right = left + MARKER_DIAMETER;
     let bottom = top + MARKER_DIAMETER;
 
-    let brush = unsafe { CreateSolidBrush(color) };
-    if brush.is_invalid() {
+    let outer_color_ref = styling_handler::color_to_colorref(&MARKER_OUTER_COLOR);
+    let outer_brush = unsafe { CreateSolidBrush(outer_color_ref) };
+    if !outer_brush.is_invalid() {
+        unsafe {
+            let previous_brush = SelectObject(hdc, HGDIOBJ(outer_brush.0));
+            let _ = Ellipse(hdc, left, top, right, bottom);
+            SelectObject(hdc, previous_brush);
+            let _ = DeleteObject(HGDIOBJ(outer_brush.0));
+        }
+    }
+
+    let inner_color_ref = styling_handler::color_to_colorref(&color);
+    let inner_brush = unsafe { CreateSolidBrush(inner_color_ref) };
+    if inner_brush.is_invalid() {
         return;
     }
 
     unsafe {
-        let previous_brush = SelectObject(hdc, HGDIOBJ(brush.0));
-        let _ = Ellipse(hdc, left, top, right, bottom);
+        let previous_brush = SelectObject(hdc, HGDIOBJ(inner_brush.0));
+        let inner_left = left + MARKER_BORDER;
+        let inner_top = top + MARKER_BORDER;
+        let inner_right = right - MARKER_BORDER;
+        let inner_bottom = bottom - MARKER_BORDER;
+        if inner_right > inner_left && inner_bottom > inner_top {
+            let _ = Ellipse(hdc, inner_left, inner_top, inner_right, inner_bottom);
+        }
         SelectObject(hdc, previous_brush);
-        let _ = DeleteObject(HGDIOBJ(brush.0));
+        let _ = DeleteObject(HGDIOBJ(inner_brush.0));
     }
 }
 
