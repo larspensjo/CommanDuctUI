@@ -174,6 +174,18 @@ pub struct LayoutRule {
  * The platform layer translates native OS events into these types and
  * sends them to the application logic layer for handling. Menu item clicks
  * are now generalized into `MenuActionClicked`.
+ *
+ * ## Splitter Event Contract
+ *
+ * Splitter controls (when implemented) emit events with `desired_left_width_px` in
+ * **window client coordinates** (not raw mouse x). The platform layer is responsible
+ * for computing the desired width by:
+ * 1. Converting the mouse position to window client coordinates
+ * 2. Accounting for any relevant margins
+ * 3. Accounting for the splitter's own thickness/width
+ *
+ * This ensures the application logic receives a value that directly represents
+ * the intended total width of the left region, ready for clamping and state updates.
  */
 #[derive(Debug)]
 pub enum AppEvent {
