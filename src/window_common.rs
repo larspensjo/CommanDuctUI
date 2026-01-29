@@ -11,7 +11,10 @@
  */
 use super::{
     app::Win32ApiInternalState,
-    controls::{button_handler, input_handler, label_handler, paint_router, treeview_handler},
+    controls::{
+        button_handler, input_handler, label_handler, paint_router, splitter_handler,
+        treeview_handler,
+    },
     error::{PlatformError, Result as PlatformResult},
     styling::StyleId,
     types::{AppEvent, ControlId, DockStyle, LayoutRule, MenuActionId, MessageSeverity, WindowId},
@@ -67,6 +70,9 @@ pub(crate) const WM_APP_TREEVIEW_CHECKBOX_CLICKED: u32 = WM_APP + 0x100;
 // TreeView have completed their creation and are ready for commands such as
 // populating items with checkboxes.
 pub(crate) const WM_APP_MAIN_WINDOW_UI_SETUP_COMPLETE: u32 = WM_APP + 0x101;
+// Custom application messages for splitter drag events.
+pub(crate) const WM_APP_SPLITTER_DRAGGING: u32 = WM_APP + 0x102;
+pub(crate) const WM_APP_SPLITTER_DRAG_ENDED: u32 = WM_APP + 0x103;
 
 // General UI constants
 /// Default debounce delay for edit controls in milliseconds.
@@ -85,6 +91,7 @@ pub(crate) enum ControlKind {
     TreeView,
     Static,
     Edit,
+    Splitter,
 }
 
 /*
@@ -159,6 +166,8 @@ pub(crate) struct NativeWindowData {
     label_severities: HashMap<ControlId, MessageSeverity>,
     status_bar_font: Option<HFONT>,
     treeview_new_item_font: Option<HFONT>,
+    /// Internal state for splitter controls, keyed by control ID.
+    splitter_states: HashMap<ControlId, splitter_handler::SplitterInternalState>,
 }
 
 impl NativeWindowData {
@@ -176,6 +185,7 @@ impl NativeWindowData {
             label_severities: HashMap::new(),
             status_bar_font: None,
             treeview_new_item_font: None,
+            splitter_states: HashMap::new(),
         }
     }
 
@@ -243,6 +253,28 @@ impl NativeWindowData {
 
     pub(crate) fn get_control_kind(&self, control_id: ControlId) -> Option<ControlKind> {
         self.control_kinds.get(&control_id).copied()
+    }
+
+    pub(crate) fn register_splitter_state(
+        &mut self,
+        control_id: ControlId,
+        state: splitter_handler::SplitterInternalState,
+    ) {
+        self.splitter_states.insert(control_id, state);
+    }
+
+    pub(crate) fn get_splitter_state(
+        &self,
+        control_id: ControlId,
+    ) -> Option<&splitter_handler::SplitterInternalState> {
+        self.splitter_states.get(&control_id)
+    }
+
+    pub(crate) fn get_splitter_state_mut(
+        &mut self,
+        control_id: ControlId,
+    ) -> Option<&mut splitter_handler::SplitterInternalState> {
+        self.splitter_states.get_mut(&control_id)
     }
 
     fn generate_menu_item_id(&mut self) -> i32 {
@@ -950,6 +982,9 @@ impl Win32ApiInternalState {
                 );
                 event_to_send = Some(AppEvent::MainWindowUISetupComplete { window_id });
             }
+            WM_APP_SPLITTER_DRAGGING | WM_APP_SPLITTER_DRAG_ENDED => {
+                event_to_send = self.handle_wm_app_splitter(hwnd, wparam, lparam, window_id, msg);
+            }
             WM_GETMINMAXINFO => {
                 lresult_override =
                     Some(self.handle_wm_getminmaxinfo(hwnd, wparam, lparam, window_id));
@@ -963,12 +998,7 @@ impl Win32ApiInternalState {
                         input_handler::handle_wm_ctlcoloredit(self, window_id, hdc, hwnd_control)
                     }
                     paint_router::PaintRoute::LabelStatic => {
-                        label_handler::handle_wm_ctlcolorstatic(
-                            self,
-                            window_id,
-                            hdc,
-                            hwnd_control,
-                        )
+                        label_handler::handle_wm_ctlcolorstatic(self, window_id, hdc, hwnd_control)
                     }
                     _ => None,
                 };
@@ -1274,6 +1304,64 @@ impl Win32ApiInternalState {
         None
     }
 
+    /*
+     * Handles WM_APP_SPLITTER_DRAGGING and WM_APP_SPLITTER_DRAG_ENDED messages.
+     * These are sent by the splitter control's window procedure during drag operations.
+     */
+    fn handle_wm_app_splitter(
+        self: &Arc<Self>,
+        _hwnd_parent: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        window_id: WindowId,
+        msg: u32,
+    ) -> Option<AppEvent> {
+        // WPARAM contains the splitter's HWND
+        let hwnd_splitter = HWND(wparam.0 as *mut std::ffi::c_void);
+        // LPARAM contains the desired_left_width_px
+        let desired_left_width_px = lparam.0 as i32;
+
+        // Get the control ID from the splitter's HWND
+        let control_id_raw = unsafe { GetDlgCtrlID(hwnd_splitter) };
+        if control_id_raw == 0 {
+            log::warn!(
+                "Splitter message for HWND {:?} without control ID",
+                hwnd_splitter
+            );
+            return None;
+        }
+
+        let control_id = ControlId::new(control_id_raw);
+
+        match msg {
+            WM_APP_SPLITTER_DRAGGING => {
+                log::trace!(
+                    "SplitterHandler: Dragging splitter ID {} - desired_left_width_px: {}",
+                    control_id.raw(),
+                    desired_left_width_px
+                );
+                Some(AppEvent::SplitterDragging {
+                    window_id,
+                    control_id,
+                    desired_left_width_px,
+                })
+            }
+            WM_APP_SPLITTER_DRAG_ENDED => {
+                log::debug!(
+                    "SplitterHandler: Drag ended for splitter ID {} - final desired_left_width_px: {}",
+                    control_id.raw(),
+                    desired_left_width_px
+                );
+                Some(AppEvent::SplitterDragEnded {
+                    window_id,
+                    control_id,
+                    desired_left_width_px,
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn resolve_ctlcolor_route(
         self: &Arc<Self>,
         window_id: WindowId,
@@ -1290,8 +1378,9 @@ impl Win32ApiInternalState {
         }
 
         let control_id = ControlId::new(control_id_raw);
-        let kind_result =
-            self.with_window_data_read(window_id, |window_data| Ok(window_data.get_control_kind(control_id)));
+        let kind_result = self.with_window_data_read(window_id, |window_data| {
+            Ok(window_data.get_control_kind(control_id))
+        });
 
         match kind_result {
             Ok(Some(kind)) => paint_router::resolve_paint_route(kind, msg),

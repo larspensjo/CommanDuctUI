@@ -2,7 +2,7 @@ use crate::{
     command_executor,
     controls::{
         button_handler, dialog_handler, label_handler, menu_handler, panel_handler,
-        progress_handler, styling_handler, treeview_handler,
+        progress_handler, splitter_handler, styling_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
@@ -615,6 +615,18 @@ impl Win32ApiInternalState {
                 window_id,
                 parent_control_id,
                 control_id,
+            ),
+            PlatformCommand::CreateSplitter {
+                window_id,
+                parent_control_id,
+                control_id,
+                orientation,
+            } => splitter_handler::handle_create_splitter_command(
+                self,
+                window_id,
+                parent_control_id,
+                control_id,
+                orientation,
             ),
             PlatformCommand::SetProgressBarRange {
                 window_id,

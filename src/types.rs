@@ -266,6 +266,22 @@ pub enum AppEvent {
         control_id: ControlId,
         text: String,
     },
+    // Signals that a splitter is being dragged by the user.
+    // Emitted continuously during the drag operation.
+    // The `desired_left_width_px` is in window client coordinates and represents
+    // the total width the left region should have (see Splitter Event Contract above).
+    SplitterDragging {
+        window_id: WindowId,
+        control_id: ControlId,
+        desired_left_width_px: i32,
+    },
+    // Signals that the user has finished dragging the splitter (mouse button released).
+    // The `desired_left_width_px` is the final position in window client coordinates.
+    SplitterDragEnded {
+        window_id: WindowId,
+        control_id: ControlId,
+        desired_left_width_px: i32,
+    },
 }
 
 // Defines the severity of a message to be displayed, e.g., in the status bar.
@@ -287,6 +303,21 @@ pub enum MessageSeverity {
 pub enum LabelClass {
     Default,
     StatusBar,
+}
+
+// --- Splitter Orientation ---
+
+/// Defines the orientation of a splitter control.
+///
+/// - `Vertical`: Creates a vertical splitter bar that divides left/right regions.
+///   The user drags the splitter horizontally to resize the left and right panels.
+/// - `Horizontal`: Creates a horizontal splitter bar that divides top/bottom regions.
+///   The user drags the splitter vertically to resize the top and bottom panels.
+///   (Reserved for future implementation)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitterOrientation {
+    Vertical,   // Divides left/right (user drags horizontally)
+    Horizontal, // Divides top/bottom (future extension)
 }
 
 // Represents platform-agnostic commands sent from the application logic to the platform layer.
@@ -430,6 +461,12 @@ pub enum PlatformCommand {
         window_id: WindowId,
         parent_control_id: Option<ControlId>,
         control_id: ControlId,
+    },
+    CreateSplitter {
+        window_id: WindowId,
+        parent_control_id: Option<ControlId>,
+        control_id: ControlId,
+        orientation: SplitterOrientation,
     },
     SetProgressBarRange {
         window_id: WindowId,
