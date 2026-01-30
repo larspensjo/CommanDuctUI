@@ -442,6 +442,11 @@ pub(crate) fn execute_set_viewer_content(
         control_id.raw(),
         text.len()
     );
+    log::debug!(
+        "[Viewer] SetViewerContent window_id={window_id:?} control_id={} bytes={}",
+        control_id.raw(),
+        text.len()
+    );
     execute_set_control_text(internal_state, window_id, control_id, text)?;
 
     let hwnd_viewer = internal_state.with_window_data_read(window_id, |window_data| {

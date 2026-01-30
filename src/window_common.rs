@@ -31,8 +31,8 @@ use windows::{
             BeginPaint, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, CreateFontIndirectW, CreateFontW,
             DEFAULT_CHARSET, DEFAULT_GUI_FONT, DEFAULT_QUALITY, DeleteObject, EndPaint,
             FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetObjectW,
-            GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY, OUT_DEFAULT_PRECIS,
-            PAINTSTRUCT, ReleaseDC,
+            GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGFONTW, LOGPIXELSY,
+            OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC, UpdateWindow,
         },
         System::WindowsProgramming::MulDiv,
         UI::Controls::{
@@ -168,6 +168,8 @@ pub(crate) struct NativeWindowData {
     treeview_new_item_font: Option<HFONT>,
     /// Internal state for splitter controls, keyed by control ID.
     splitter_states: HashMap<ControlId, splitter_handler::SplitterInternalState>,
+    suppress_erasebkgnd: bool,
+    last_layout_rects: RefCell<HashMap<ControlId, RECT>>,
 }
 
 impl NativeWindowData {
@@ -186,6 +188,8 @@ impl NativeWindowData {
             status_bar_font: None,
             treeview_new_item_font: None,
             splitter_states: HashMap::new(),
+            suppress_erasebkgnd: false,
+            last_layout_rects: RefCell::new(HashMap::new()),
         }
     }
 
@@ -275,6 +279,14 @@ impl NativeWindowData {
         control_id: ControlId,
     ) -> Option<&mut splitter_handler::SplitterInternalState> {
         self.splitter_states.get_mut(&control_id)
+    }
+
+    pub(crate) fn set_suppress_erasebkgnd(&mut self, suppress: bool) {
+        self.suppress_erasebkgnd = suppress;
+    }
+
+    pub(crate) fn suppresses_erasebkgnd(&self) -> bool {
+        self.suppress_erasebkgnd
     }
 
     fn generate_menu_item_id(&mut self) -> i32 {
@@ -448,31 +460,227 @@ impl NativeWindowData {
             );
         }
 
-        let layout_map = NativeWindowData::calculate_layout(parent_rect, &child_rules);
+        log::debug!(
+            "[Layout] Applying layout: parent_id={parent_id_for_layout:?}, rules={}, rect={parent_rect:?}",
+            child_rules.len()
+        );
 
-        for rule in &child_rules {
-            let rect = match layout_map.get(&rule.control_id) {
-                Some(r) => r,
-                None => continue,
+        let layout_map = NativeWindowData::calculate_layout(parent_rect, &child_rules);
+        let parent_hwnd = if let Some(parent_id) = parent_id_for_layout {
+            self.control_hwnd_map.get(&parent_id).copied()
+        } else {
+            Some(self.this_window_hwnd)
+        };
+
+        // Clear old rectangles for moved controls on the parent to avoid stale artifacts.
+        if let Some(hwnd_parent) = parent_hwnd {
+            let last_rects = self.last_layout_rects.borrow();
+            for rule in &child_rules {
+                let new_rect = match layout_map.get(&rule.control_id) {
+                    Some(r) => r,
+                    None => continue,
+                };
+                if let Some(old_rect) = last_rects.get(&rule.control_id)
+                    && old_rect != new_rect
+                {
+                    unsafe {
+                        _ = InvalidateRect(Some(hwnd_parent), Some(old_rect), true);
+                    }
+                }
+            }
+        }
+
+        // Use deferred window positioning for flicker-free atomic updates
+        unsafe {
+            let hdwp_result = BeginDeferWindowPos(child_rules.len() as i32);
+            let mut current_hdwp = match hdwp_result {
+                Ok(hdwp) if !hdwp.is_invalid() => hdwp,
+                _ => {
+                    log::warn!("Layout: BeginDeferWindowPos failed, falling back to MoveWindow");
+                    log::warn!(
+                        "[Layout] BeginDeferWindowPos failed; fallback to MoveWindow (rules={})",
+                        child_rules.len()
+                    );
+                    // Fallback to individual MoveWindow calls
+                    for rule in &child_rules {
+                        let rect = match layout_map.get(&rule.control_id) {
+                            Some(r) => r,
+                            None => continue,
+                        };
+                        let control_hwnd_opt = self.control_hwnd_map.get(&rule.control_id).copied();
+                        if control_hwnd_opt.is_none() || control_hwnd_opt == Some(HWND_INVALID) {
+                            continue;
+                        }
+                        let hwnd = control_hwnd_opt.unwrap();
+                        let width = (rect.right - rect.left).max(0);
+                        let height = (rect.bottom - rect.top).max(0);
+                        _ = MoveWindow(hwnd, rect.left, rect.top, width, height, true);
+                    }
+                    return;
+                }
             };
-            let control_hwnd_opt = self.control_hwnd_map.get(&rule.control_id).copied();
-            if control_hwnd_opt.is_none() || control_hwnd_opt == Some(HWND_INVALID) {
-                log::warn!(
-                    "Layout: HWND for control ID {} not found or invalid.",
+
+            let mut moved_count = 0usize;
+            for rule in &child_rules {
+                let rect = match layout_map.get(&rule.control_id) {
+                    Some(r) => r,
+                    None => continue,
+                };
+                let control_hwnd_opt = self.control_hwnd_map.get(&rule.control_id).copied();
+                if control_hwnd_opt.is_none() || control_hwnd_opt == Some(HWND_INVALID) {
+                    log::warn!(
+                        "Layout: HWND for control ID {} not found or invalid.",
+                        rule.control_id.raw()
+                    );
+                    continue;
+                }
+                let hwnd = control_hwnd_opt.unwrap();
+                let width = (rect.right - rect.left).max(0);
+                let height = (rect.bottom - rect.top).max(0);
+
+                // Use DeferWindowPos instead of MoveWindow for atomic repositioning
+                // SWP_NOREDRAW suppresses individual redraws for flicker-free updates
+                match DeferWindowPos(
+                    current_hdwp,
+                    hwnd,
+                    None,
+                    rect.left,
+                    rect.top,
+                    width,
+                    height,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW,
+                ) {
+                    Ok(new_hdwp) if !new_hdwp.is_invalid() => {
+                        current_hdwp = new_hdwp;
+                        moved_count += 1;
+                    }
+                    _ => {
+                        log::warn!(
+                            "Layout: DeferWindowPos failed for control ID {}",
+                            rule.control_id.raw()
+                        );
+                    }
+                }
+            }
+
+            // Apply all deferred moves atomically
+            _ = EndDeferWindowPos(current_hdwp);
+
+            log::debug!(
+                "[Layout] Deferred layout applied: parent_id={parent_id_for_layout:?}, moved={moved_count}"
+            );
+
+            // Trigger a single redraw of the parent window to show all changes at once
+            // This eliminates flicker from individual control repaints
+            // Invalidate container panels (Static with children) without erase to refresh background.
+            for rule in &child_rules {
+                let has_children = all_window_rules
+                    .iter()
+                    .any(|r_child| r_child.parent_control_id == Some(rule.control_id));
+                if !has_children {
+                    continue;
+                }
+                let kind = self.control_kinds.get(&rule.control_id).copied();
+                if !matches!(kind, Some(ControlKind::Static)) {
+                    continue;
+                }
+                let control_hwnd_opt = self.control_hwnd_map.get(&rule.control_id).copied();
+                if control_hwnd_opt.is_none() || control_hwnd_opt == Some(HWND_INVALID) {
+                    continue;
+                }
+                let hwnd = control_hwnd_opt.unwrap();
+                _ = InvalidateRect(Some(hwnd), None, true);
+                _ = UpdateWindow(hwnd);
+                log::debug!(
+                    "[Layout] Invalidated panel control id={} kind={kind:?} erase=true hwnd={hwnd:?}",
                     rule.control_id.raw()
                 );
-                continue;
             }
-            let hwnd = control_hwnd_opt.unwrap();
-            let width = (rect.right - rect.left).max(0);
-            let height = (rect.bottom - rect.top).max(0);
-            unsafe {
-                _ = MoveWindow(hwnd, rect.left, rect.top, width, height, true);
+
+            // Invalidate leaf content controls (TreeView/Edit/Splitter/Static) to refresh content
+            // without triggering a full parent erase.
+            let mut invalidated = 0usize;
+            for rule in &child_rules {
+                let has_children = all_window_rules
+                    .iter()
+                    .any(|r_child| r_child.parent_control_id == Some(rule.control_id));
+                if has_children {
+                    continue;
+                }
+                let kind = self.control_kinds.get(&rule.control_id).copied();
+                if !matches!(
+                    kind,
+                    Some(
+                        ControlKind::TreeView
+                            | ControlKind::Edit
+                            | ControlKind::Splitter
+                            | ControlKind::Static
+                    )
+                ) {
+                    continue;
+                }
+                let control_hwnd_opt = self.control_hwnd_map.get(&rule.control_id).copied();
+                if control_hwnd_opt.is_none() || control_hwnd_opt == Some(HWND_INVALID) {
+                    continue;
+                }
+                let hwnd = control_hwnd_opt.unwrap();
+                let is_header_label = matches!(
+                    (kind, self.get_style_for_control(rule.control_id)),
+                    (Some(ControlKind::Static), Some(StyleId::HeaderLabel))
+                );
+                let suppress_header_erase = self.suppresses_erasebkgnd() && is_header_label;
+                let erase = if suppress_header_erase {
+                    false
+                } else {
+                    matches!(
+                        kind,
+                        Some(ControlKind::TreeView | ControlKind::Edit | ControlKind::Static)
+                    )
+                };
+                if matches!(kind, Some(ControlKind::TreeView)) {
+                    _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+                    );
+                }
+                _ = InvalidateRect(Some(hwnd), None, erase);
+                _ = UpdateWindow(hwnd);
+                log::debug!(
+                    "[Layout] Invalidated leaf control id={} kind={kind:?} erase={erase} hwnd={hwnd:?}",
+                    rule.control_id.raw()
+                );
+                invalidated += 1;
             }
+            log::debug!(
+                "[Layout] Leaf invalidation completed (parent_id={parent_id_for_layout:?}, count={invalidated})"
+            );
+        }
+
+        // Persist latest rects for future invalidation.
+        {
+            let mut last_rects = self.last_layout_rects.borrow_mut();
+            for (control_id, rect) in &layout_map {
+                last_rects.insert(*control_id, *rect);
+            }
+        }
+
+        // Recursively apply layout to children after all moves are complete
+        for rule in &child_rules {
             if all_window_rules
                 .iter()
                 .any(|r_child| r_child.parent_control_id == Some(rule.control_id))
             {
+                let rect = match layout_map.get(&rule.control_id) {
+                    Some(r) => r,
+                    None => continue,
+                };
+                let width = (rect.right - rect.left).max(0);
+                let height = (rect.bottom - rect.top).max(0);
                 let panel_client_rect = RECT {
                     left: 0,
                     top: 0,
@@ -808,16 +1016,16 @@ pub(crate) fn create_native_window(
 
     unsafe {
         let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),            // Optional extended window styles
-            &class_name_hstring,                   // Window class name
-            &HSTRING::from(title),                 // Window title
-            WS_OVERLAPPEDWINDOW,                   // Common window style
-            CW_USEDEFAULT,                         // Default X position
-            CW_USEDEFAULT,                         // Default Y position
-            width,                                 // Width
-            height,                                // Height
-            None,                                  // Parent window (None for top-level)
-            None,                                  // Menu (None for no default menu)
+            WINDOW_EX_STYLE(0),
+            &class_name_hstring,   // Window class name
+            &HSTRING::from(title), // Window title
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, // Common window style + clip children
+            CW_USEDEFAULT,         // Default X position
+            CW_USEDEFAULT,         // Default Y position
+            width,                 // Width
+            height,                // Height
+            None,                  // Parent window (None for top-level)
+            None,                  // Menu (None for no default menu)
             Some(internal_state_arc.h_instance()), // Application instance
             Some(Box::into_raw(creation_context) as *mut c_void), // lParam for WM_CREATE/WM_NCCREATE
         )?; // Returns Result<HWND, Error>, so ? operator handles error conversion
@@ -1335,6 +1543,10 @@ impl Win32ApiInternalState {
 
         match msg {
             WM_APP_SPLITTER_DRAGGING => {
+                let _ = self.with_window_data_write(window_id, |window_data| {
+                    window_data.set_suppress_erasebkgnd(true);
+                    Ok(())
+                });
                 log::trace!(
                     "SplitterHandler: Dragging splitter ID {} - desired_left_width_px: {}",
                     control_id.raw(),
@@ -1347,6 +1559,10 @@ impl Win32ApiInternalState {
                 })
             }
             WM_APP_SPLITTER_DRAG_ENDED => {
+                let _ = self.with_window_data_write(window_id, |window_data| {
+                    window_data.set_suppress_erasebkgnd(false);
+                    Ok(())
+                });
                 log::debug!(
                     "SplitterHandler: Drag ended for splitter ID {} - final desired_left_width_px: {}",
                     control_id.raw(),
@@ -1410,6 +1626,15 @@ impl Win32ApiInternalState {
         lparam: LPARAM,
         _window_id: WindowId,
     ) -> LRESULT {
+        log::debug!("[Paint] WM_ERASEBKGND hwnd={hwnd:?}");
+        let suppress = self
+            .with_window_data_read(_window_id, |window_data| {
+                Ok(window_data.suppresses_erasebkgnd())
+            })
+            .unwrap_or(false);
+        if suppress {
+            return LRESULT(1);
+        }
         unsafe {
             if let Some(style) = self.get_parsed_style(StyleId::MainWindowBackground)
                 && let Some(bg_brush) = style.background_brush
@@ -1435,6 +1660,7 @@ impl Win32ApiInternalState {
         _lparam: LPARAM,
         _window_id: WindowId,
     ) -> LRESULT {
+        log::debug!("[Paint] WM_PAINT hwnd={hwnd:?}");
         unsafe {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);

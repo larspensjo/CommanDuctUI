@@ -14,29 +14,36 @@ use std::sync::Arc;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     Graphics::Gdi::{
-        BeginPaint, CreateSolidBrush, EndPaint, FillRect, PAINTSTRUCT, ScreenToClient,
+        BeginPaint, CreateSolidBrush, EndPaint, FillRect, InvalidateRect, PAINTSTRUCT,
+        ScreenToClient,
     },
     UI::{
-        Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture},
+        Input::KeyboardAndMouse::{
+            GetCapture, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+        },
         WindowsAndMessaging::{
-            CallWindowProcW, CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GetCursorPos,
-            GetParent, GetWindowLongPtrW, HMENU, IDC_SIZEWE, LoadCursorW, RegisterClassW,
-            SendMessageW, SetCursor, WINDOW_EX_STYLE, WM_CANCELMODE, WM_CAPTURECHANGED,
-            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WNDCLASSW, WNDPROC,
+            CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GetCursorPos, GetParent,
+            GetWindowLongPtrW, HMENU, IDC_SIZEWE, LoadCursorW, RegisterClassW, SendMessageW,
+            SetCursor, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_CANCELMODE, WM_CAPTURECHANGED,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WNDCLASSW,
             WS_CHILD, WS_VISIBLE,
         },
     },
 };
+
+// WM_MOUSELEAVE is not exported by windows-rs, define it manually
+const WM_MOUSELEAVE: u32 = 0x02A3;
 use windows::core::{HSTRING, PCWSTR};
 
 const WC_SPLITTER: PCWSTR = windows::core::w!("CommanductUI_Splitter");
 
 /// Internal state for a single splitter control instance.
-/// Stored per-control to track drag state.
+/// Stored per-control to track drag and hover state.
 #[derive(Debug, Clone)]
 pub(crate) struct SplitterInternalState {
     pub orientation: SplitterOrientation,
     pub is_dragging: bool,
+    pub is_hovered: bool,
 }
 
 impl SplitterInternalState {
@@ -44,13 +51,50 @@ impl SplitterInternalState {
         Self {
             orientation,
             is_dragging: false,
+            is_hovered: false,
+        }
+    }
+}
+
+// Colors for splitter states
+const COLOR_NORMAL: crate::styling::Color = crate::styling::Color {
+    r: 0x40,
+    g: 0x44,
+    b: 0x4B,
+};
+const COLOR_HOVER: crate::styling::Color = crate::styling::Color {
+    r: 0x55,
+    g: 0x5A,
+    b: 0x64,
+};
+
+/// Per-window-instance state stored in GWLP_USERDATA.
+/// Used by the splitter's custom WndProc to track hover/drag state.
+#[derive(Debug, Default)]
+struct SplitterWndData {
+    is_hovered: bool,
+    is_tracking_mouse: bool,
+}
+
+/// Helper to get or create window data from GWLP_USERDATA.
+unsafe fn get_wnd_data(hwnd: HWND) -> *mut SplitterWndData {
+    unsafe {
+        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        if ptr == 0 {
+            // Allocate and store new window data
+            let data = Box::new(SplitterWndData::default());
+            let raw = Box::into_raw(data);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
+            raw
+        } else {
+            ptr as *mut SplitterWndData
         }
     }
 }
 
 /*
  * Custom window procedure for splitter controls.
- * Handles mouse events for dragging, cursor changes, and painting.
+ * Handles mouse events for dragging, cursor changes, hover state, and painting.
  */
 unsafe extern "system" fn splitter_wnd_proc(
     hwnd: HWND,
@@ -71,32 +115,58 @@ unsafe extern "system" fn splitter_wnd_proc(
                 SetCapture(hwnd);
                 log::debug!("SplitterHandler: Mouse capture started for splitter {hwnd:?}");
 
-                // Update internal state to mark dragging as active
-                // (State will be managed through the window data in handle_wm_lbuttondown)
-
                 return LRESULT(0);
             }
             WM_MOUSEMOVE => {
-                // If we have capture, send dragging message to parent
+                let data = get_wnd_data(hwnd);
+
+                // If we have capture, we're dragging - send message to parent
                 if GetCapture() == hwnd {
-                    if let Ok(parent) = GetParent(hwnd) {
-                        if !parent.is_invalid() {
-                            let mut cursor_pos = windows::Win32::Foundation::POINT::default();
-                            if GetCursorPos(&mut cursor_pos).is_ok() {
-                                if ScreenToClient(parent, &mut cursor_pos).as_bool() {
-                                    // Send message to parent: WPARAM = splitter hwnd, LPARAM = desired_left_width
-                                    SendMessageW(
-                                        parent,
-                                        WM_APP_SPLITTER_DRAGGING,
-                                        Some(WPARAM(hwnd.0 as usize)),
-                                        Some(LPARAM(cursor_pos.x as isize)),
-                                    );
-                                }
-                            }
+                    if let Ok(parent) = GetParent(hwnd)
+                        && !parent.is_invalid()
+                    {
+                        let mut cursor_pos = windows::Win32::Foundation::POINT::default();
+                        if GetCursorPos(&mut cursor_pos).is_ok()
+                            && ScreenToClient(parent, &mut cursor_pos).as_bool()
+                        {
+                            SendMessageW(
+                                parent,
+                                WM_APP_SPLITTER_DRAGGING,
+                                Some(WPARAM(hwnd.0 as usize)),
+                                Some(LPARAM(cursor_pos.x as isize)),
+                            );
                         }
                     }
                     return LRESULT(0);
                 }
+
+                // Not dragging - track hover state
+                if !(*data).is_hovered {
+                    (*data).is_hovered = true;
+                    // Request WM_MOUSELEAVE notification
+                    if !(*data).is_tracking_mouse {
+                        let mut tme = TRACKMOUSEEVENT {
+                            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                            dwFlags: TME_LEAVE,
+                            hwndTrack: hwnd,
+                            dwHoverTime: 0,
+                        };
+                        if TrackMouseEvent(&mut tme).is_ok() {
+                            (*data).is_tracking_mouse = true;
+                        }
+                    }
+                    // Trigger repaint for hover effect
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                return LRESULT(0);
+            }
+            WM_MOUSELEAVE => {
+                let data = get_wnd_data(hwnd);
+                (*data).is_hovered = false;
+                (*data).is_tracking_mouse = false;
+                // Trigger repaint to remove hover effect
+                let _ = InvalidateRect(Some(hwnd), None, false);
+                return LRESULT(0);
             }
             WM_LBUTTONUP => {
                 // End drag: release capture and notify parent
@@ -105,20 +175,19 @@ unsafe extern "system" fn splitter_wnd_proc(
                     log::debug!("SplitterHandler: Mouse capture released for splitter {hwnd:?}");
 
                     // Send drag ended message to parent
-                    if let Ok(parent) = GetParent(hwnd) {
-                        if !parent.is_invalid() {
-                            let mut cursor_pos = windows::Win32::Foundation::POINT::default();
-                            if GetCursorPos(&mut cursor_pos).is_ok() {
-                                if ScreenToClient(parent, &mut cursor_pos).as_bool() {
-                                    // WPARAM = splitter hwnd, LPARAM = desired_left_width
-                                    SendMessageW(
-                                        parent,
-                                        WM_APP_SPLITTER_DRAG_ENDED,
-                                        Some(WPARAM(hwnd.0 as usize)),
-                                        Some(LPARAM(cursor_pos.x as isize)),
-                                    );
-                                }
-                            }
+                    if let Ok(parent) = GetParent(hwnd)
+                        && !parent.is_invalid()
+                    {
+                        let mut cursor_pos = windows::Win32::Foundation::POINT::default();
+                        if GetCursorPos(&mut cursor_pos).is_ok()
+                            && ScreenToClient(parent, &mut cursor_pos).as_bool()
+                        {
+                            SendMessageW(
+                                parent,
+                                WM_APP_SPLITTER_DRAG_ENDED,
+                                Some(WPARAM(hwnd.0 as usize)),
+                                Some(LPARAM(cursor_pos.x as isize)),
+                            );
                         }
                     }
                 }
@@ -127,37 +196,39 @@ unsafe extern "system" fn splitter_wnd_proc(
             WM_CAPTURECHANGED | WM_CANCELMODE => {
                 // Capture was lost (e.g., Alt+Tab, Esc) - cancel drag
                 log::debug!("SplitterHandler: Capture lost for splitter {hwnd:?} (msg: {msg})");
-                // State cleanup handled in the main event dispatcher
                 return LRESULT(0);
             }
             WM_PAINT => {
+                let data = get_wnd_data(hwnd);
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &mut ps);
                 if !hdc.is_invalid() {
-                    // Paint is handled through styling system if a style is applied
-                    // Default: use a neutral gray background
-                    let brush = CreateSolidBrush(color_to_colorref(&crate::styling::Color {
-                        r: 0x40,
-                        g: 0x44,
-                        b: 0x4B,
-                    }));
+                    // Use hover color when hovered, normal color otherwise
+                    let color = if (*data).is_hovered {
+                        &COLOR_HOVER
+                    } else {
+                        &COLOR_NORMAL
+                    };
+                    let brush = CreateSolidBrush(color_to_colorref(color));
                     FillRect(hdc, &ps.rcPaint, brush);
                     let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush.into());
                     let _ = EndPaint(hwnd, &ps);
                 }
                 return LRESULT(0);
             }
+            windows::Win32::UI::WindowsAndMessaging::WM_DESTROY => {
+                // Clean up allocated window data
+                let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if ptr != 0 {
+                    let _ = Box::from_raw(ptr as *mut SplitterWndData);
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                }
+                return LRESULT(0);
+            }
             _ => {}
         }
 
-        // Call default window procedure for unhandled messages
-        let prev = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-        if prev != 0 {
-            let prev_proc: WNDPROC = std::mem::transmute(prev);
-            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
-        } else {
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
+        DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 }
 
