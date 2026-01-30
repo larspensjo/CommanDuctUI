@@ -7,11 +7,11 @@
 
 use crate::app::Win32ApiInternalState;
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::window_common::WC_STATIC;
 use crate::{
     types::{ControlId, WindowId},
     window_common::ControlKind,
 };
-use crate::window_common::WC_STATIC;
 
 use std::sync::Arc;
 use windows::Win32::{
@@ -19,7 +19,7 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{
         CallWindowProcW, CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GWLP_WNDPROC, GetParent,
         GetWindowLongPtrW, HMENU, SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WM_COMMAND, WM_COMPAREITEM, WM_CTLCOLOREDIT, WM_CTLCOLORBTN, WM_CTLCOLORDLG,
+        WM_COMMAND, WM_COMPAREITEM, WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLOREDIT,
         WM_CTLCOLORLISTBOX, WM_CTLCOLORSCROLLBAR, WM_CTLCOLORSTATIC, WM_DELETEITEM, WM_DRAWITEM,
         WM_HSCROLL, WM_MEASUREITEM, WM_NOTIFY, WM_PARENTNOTIFY, WM_VSCROLL, WNDPROC, WS_CHILD,
         WS_CLIPCHILDREN, WS_VISIBLE,

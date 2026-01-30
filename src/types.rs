@@ -115,6 +115,18 @@ pub struct TreeItemDescriptor {
     pub style_override: Option<StyleId>,
 }
 
+/// Identifies the optional color marker that can be rendered next to a tree item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeItemMarkerKind {
+    None,
+    Blue,
+    Green,
+    Yellow,
+    Red,
+    Purple,
+    Gray,
+}
+
 /*
  * Configuration for a single menu item, used by `PlatformCommand::CreateMainMenu`.
  *
@@ -567,11 +579,71 @@ pub trait PlatformEventHandler: Send + Sync + 'static {
 /// This trait allows the platform layer to query the application logic for
 /// specific pieces of information without sending events. Currently it only
 /// exposes the ability to check if a tree item should be drawn with the "new"
-/// indicator.
+/// indicator and to request the marker that should be painted for that item.
 pub trait UiStateProvider: Send + Sync + 'static {
     /// Queries if a specific tree item is currently in the "New" state.
     /// The platform layer uses this during custom drawing to determine if the
     /// "New" visual indicator (e.g., a blue circle) should be rendered for the
     /// item.
     fn is_tree_item_new(&self, window_id: WindowId, item_id: TreeItemId) -> bool;
+
+    /// Asks the provider for the marker that should be drawn beside the tree item.
+    fn tree_item_marker(&self, _window_id: WindowId, _item_id: TreeItemId) -> TreeItemMarkerKind {
+        TreeItemMarkerKind::None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TreeItemId, TreeItemMarkerKind, UiStateProvider, WindowId};
+
+    struct SilentProvider;
+
+    impl UiStateProvider for SilentProvider {
+        fn is_tree_item_new(&self, _window_id: WindowId, _item_id: TreeItemId) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn default_provider_returns_none() {
+        let provider = SilentProvider;
+        assert_eq!(
+            provider.tree_item_marker(WindowId::new(1), TreeItemId(7)),
+            TreeItemMarkerKind::None
+        );
+    }
+
+    struct CustomMarkerProvider;
+
+    impl UiStateProvider for CustomMarkerProvider {
+        fn is_tree_item_new(&self, _window_id: WindowId, _item_id: TreeItemId) -> bool {
+            false
+        }
+
+        fn tree_item_marker(
+            &self,
+            _window_id: WindowId,
+            item_id: TreeItemId,
+        ) -> TreeItemMarkerKind {
+            if item_id.0 == 13 {
+                TreeItemMarkerKind::Green
+            } else {
+                TreeItemMarkerKind::Purple
+            }
+        }
+    }
+
+    #[test]
+    fn custom_provider_returns_expected_marker() {
+        let provider = CustomMarkerProvider;
+        assert_eq!(
+            provider.tree_item_marker(WindowId::new(2), TreeItemId(13)),
+            TreeItemMarkerKind::Green
+        );
+        assert_eq!(
+            provider.tree_item_marker(WindowId::new(2), TreeItemId(99)),
+            TreeItemMarkerKind::Purple
+        );
+    }
 }
