@@ -11,10 +11,7 @@
  */
 use super::{
     app::Win32ApiInternalState,
-    controls::{
-        button_handler, input_handler, label_handler, paint_router, splitter_handler,
-        treeview_handler,
-    },
+    controls::{button_handler, input_handler, label_handler, paint_router, treeview_handler},
     error::{PlatformError, Result as PlatformResult},
     styling::StyleId,
     types::{AppEvent, ControlId, DockStyle, LayoutRule, MenuActionId, MessageSeverity, WindowId},
@@ -166,8 +163,6 @@ pub(crate) struct NativeWindowData {
     label_severities: HashMap<ControlId, MessageSeverity>,
     status_bar_font: Option<HFONT>,
     treeview_new_item_font: Option<HFONT>,
-    /// Internal state for splitter controls, keyed by control ID.
-    splitter_states: HashMap<ControlId, splitter_handler::SplitterInternalState>,
     suppress_erasebkgnd: bool,
     last_layout_rects: RefCell<HashMap<ControlId, RECT>>,
 }
@@ -187,7 +182,6 @@ impl NativeWindowData {
             label_severities: HashMap::new(),
             status_bar_font: None,
             treeview_new_item_font: None,
-            splitter_states: HashMap::new(),
             suppress_erasebkgnd: false,
             last_layout_rects: RefCell::new(HashMap::new()),
         }
@@ -257,28 +251,6 @@ impl NativeWindowData {
 
     pub(crate) fn get_control_kind(&self, control_id: ControlId) -> Option<ControlKind> {
         self.control_kinds.get(&control_id).copied()
-    }
-
-    pub(crate) fn register_splitter_state(
-        &mut self,
-        control_id: ControlId,
-        state: splitter_handler::SplitterInternalState,
-    ) {
-        self.splitter_states.insert(control_id, state);
-    }
-
-    pub(crate) fn get_splitter_state(
-        &self,
-        control_id: ControlId,
-    ) -> Option<&splitter_handler::SplitterInternalState> {
-        self.splitter_states.get(&control_id)
-    }
-
-    pub(crate) fn get_splitter_state_mut(
-        &mut self,
-        control_id: ControlId,
-    ) -> Option<&mut splitter_handler::SplitterInternalState> {
-        self.splitter_states.get_mut(&control_id)
     }
 
     pub(crate) fn set_suppress_erasebkgnd(&mut self, suppress: bool) {
@@ -1017,15 +989,15 @@ pub(crate) fn create_native_window(
     unsafe {
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
-            &class_name_hstring,   // Window class name
-            &HSTRING::from(title), // Window title
+            &class_name_hstring,                   // Window class name
+            &HSTRING::from(title),                 // Window title
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, // Common window style + clip children
-            CW_USEDEFAULT,         // Default X position
-            CW_USEDEFAULT,         // Default Y position
-            width,                 // Width
-            height,                // Height
-            None,                  // Parent window (None for top-level)
-            None,                  // Menu (None for no default menu)
+            CW_USEDEFAULT,                         // Default X position
+            CW_USEDEFAULT,                         // Default Y position
+            width,                                 // Width
+            height,                                // Height
+            None,                                  // Parent window (None for top-level)
+            None,                                  // Menu (None for no default menu)
             Some(internal_state_arc.h_instance()), // Application instance
             Some(Box::into_raw(creation_context) as *mut c_void), // lParam for WM_CREATE/WM_NCCREATE
         )?; // Returns Result<HWND, Error>, so ? operator handles error conversion

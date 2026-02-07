@@ -37,25 +37,6 @@ use windows::core::{HSTRING, PCWSTR};
 
 const WC_SPLITTER: PCWSTR = windows::core::w!("CommanductUI_Splitter");
 
-/// Internal state for a single splitter control instance.
-/// Stored per-control to track drag and hover state.
-#[derive(Debug, Clone)]
-pub(crate) struct SplitterInternalState {
-    pub orientation: SplitterOrientation,
-    pub is_dragging: bool,
-    pub is_hovered: bool,
-}
-
-impl SplitterInternalState {
-    fn new(orientation: SplitterOrientation) -> Self {
-        Self {
-            orientation,
-            is_dragging: false,
-            is_hovered: false,
-        }
-    }
-}
-
 // Colors for splitter states
 const COLOR_NORMAL: crate::styling::Color = crate::styling::Color {
     r: 0x40,
@@ -377,7 +358,6 @@ pub(crate) fn handle_create_splitter_command(
         }
 
         window_data.register_control_hwnd(control_id, hwnd_splitter);
-        window_data.register_splitter_state(control_id, SplitterInternalState::new(orientation));
 
         log::debug!(
             "SplitterHandler: Created splitter (ID {}) for window {window_id:?} with HWND {hwnd_splitter:?}",
