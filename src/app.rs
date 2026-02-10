@@ -989,6 +989,7 @@ impl PlatformInterface {
      * Initializes the internal Win32 state and registers the main window class.
      */
     pub fn new(app_name_for_class: String) -> PlatformResult<Self> {
+        window_common::init_app_dark_mode();
         let internal_state = Win32ApiInternalState::new(app_name_for_class)?;
         window_common::register_window_class(&internal_state)?;
         log::debug!(

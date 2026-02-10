@@ -20,8 +20,8 @@ use windows::{
     Win32::{
         Foundation::{GetLastError, HWND},
         UI::WindowsAndMessaging::{
-            AppendMenuW, CreateMenu, CreatePopupMenu, DestroyMenu, HMENU, MF_POPUP, MF_STRING,
-            DrawMenuBar, SetMenu,
+            AppendMenuW, CreateMenu, CreatePopupMenu, DestroyMenu, DrawMenuBar, HMENU, MF_POPUP,
+            MF_STRING, SetMenu,
         },
     },
     core::HSTRING,
@@ -72,10 +72,10 @@ pub(crate) fn handle_create_main_menu_command(
             "SetMenu failed for main menu on WindowId {window_id:?}: {last_error:?}"
         )));
     }
+    try_enable_dark_mode(hwnd_owner);
     unsafe {
         let _ = DrawMenuBar(hwnd_owner);
     }
-    try_enable_dark_mode(hwnd_owner);
 
     log::debug!("MenuHandler: main menu created and set for WindowId {window_id:?}");
     Ok(())

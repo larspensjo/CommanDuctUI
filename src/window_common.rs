@@ -21,20 +21,24 @@ use windows::core::w;
 use windows::{
     Win32::{
         Foundation::{
-            ERROR_INVALID_WINDOW_HANDLE, GetLastError, HWND, LPARAM, LRESULT, RECT, WPARAM,
+            COLORREF, ERROR_INVALID_WINDOW_HANDLE, GetLastError, HWND, LPARAM, LRESULT, POINT,
+            RECT, WPARAM,
         },
         Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute},
         Graphics::Gdi::{
             BeginPaint, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, CreateFontIndirectW, CreateFontW,
-            DEFAULT_CHARSET, DEFAULT_GUI_FONT, DEFAULT_QUALITY, DeleteObject, EndPaint,
+            CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DEFAULT_QUALITY, DT_CENTER,
+            DT_HIDEPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, EndPaint,
             FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetObjectW,
-            GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGFONTW, LOGPIXELSY,
-            OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC, UpdateWindow,
+            GetStockObject, GetWindowDC, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGFONTW,
+            LOGPIXELSY, MapWindowPoints, OUT_DEFAULT_PRECIS, OffsetRect, PAINTSTRUCT, ReleaseDC,
+            SetBkMode, SetTextColor, TRANSPARENT, UpdateWindow,
         },
         System::LibraryLoader::{GetProcAddress, LoadLibraryW},
         System::WindowsProgramming::MulDiv,
         UI::Controls::{
-            DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, SetWindowTheme, TVN_ITEMCHANGEDW,
+            DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, ODS_HOTLIGHT, ODS_NOACCEL,
+            ODS_SELECTED, SetWindowTheme, TVN_ITEMCHANGEDW,
         },
         UI::WindowsAndMessaging::*, // This list is massive, just import all of them.
     },
@@ -80,6 +84,7 @@ pub const INPUT_DEBOUNCE_MS: u32 = 300;
 pub(crate) const HWND_INVALID: HWND = HWND(std::ptr::null_mut());
 
 const SUCCESS_CODE: LRESULT = LRESULT(0);
+const UXTHEME_ORD_REFRESH_IMMERSIVE_COLOR_POLICY_STATE: usize = 104;
 const UXTHEME_ORD_ALLOW_DARK_MODE_FOR_WINDOW: usize = 133;
 const UXTHEME_ORD_SET_PREFERRED_APP_MODE: usize = 135;
 const UXTHEME_ORD_FLUSH_MENU_THEMES: usize = 136;
@@ -1063,6 +1068,51 @@ pub(crate) fn hiword_from_lparam(lparam: LPARAM) -> i32 {
     ((lparam.0 >> 16) & 0xFFFF) as i32
 }
 
+/// App-level dark mode initialization.
+///
+/// Must be called **before** any window is created (`CreateWindowExW`).
+/// Sets `SetPreferredAppMode(AllowDark)`, refreshes the immersive color
+/// policy, and flushes menu themes so Windows knows the process opts into
+/// dark rendering for title bars, menus, and scrollbars.
+pub(crate) fn init_app_dark_mode() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| unsafe {
+        let module = match LoadLibraryW(w!("uxtheme.dll")) {
+            Ok(m) => m,
+            Err(err) => {
+                log::debug!("Failed to load uxtheme.dll for app-level dark mode: {err:?}");
+                return;
+            }
+        };
+
+        // SetPreferredAppMode(AllowDark) — ordinal 135
+        if let Some(ptr) = get_uxtheme_proc_address(module, UXTHEME_ORD_SET_PREFERRED_APP_MODE) {
+            let set_preferred: SetPreferredAppModeFn =
+                std::mem::transmute::<*const c_void, SetPreferredAppModeFn>(ptr);
+            let _ = set_preferred(PreferredAppMode::AllowDark);
+            log::debug!("Dark mode: SetPreferredAppMode(AllowDark) succeeded.");
+        }
+
+        // RefreshImmersiveColorPolicyState — ordinal 104
+        if let Some(ptr) =
+            get_uxtheme_proc_address(module, UXTHEME_ORD_REFRESH_IMMERSIVE_COLOR_POLICY_STATE)
+        {
+            let refresh: RefreshImmersiveColorPolicyStateFn =
+                std::mem::transmute::<*const c_void, RefreshImmersiveColorPolicyStateFn>(ptr);
+            refresh();
+            log::debug!("Dark mode: RefreshImmersiveColorPolicyState succeeded.");
+        }
+
+        // FlushMenuThemes — ordinal 136
+        if let Some(ptr) = get_uxtheme_proc_address(module, UXTHEME_ORD_FLUSH_MENU_THEMES) {
+            let flush: FlushMenuThemesFn =
+                std::mem::transmute::<*const c_void, FlushMenuThemesFn>(ptr);
+            flush();
+            log::debug!("Dark mode: FlushMenuThemes succeeded.");
+        }
+    });
+}
+
 /// Best-effort enablement of dark mode for non-client areas (notably scrollbars) on supported OS builds.
 pub(crate) fn try_enable_dark_mode(hwnd: HWND) {
     try_enable_dark_menu_theme_support(hwnd);
@@ -1096,6 +1146,7 @@ enum PreferredAppMode {
 
 type SetPreferredAppModeFn = unsafe extern "system" fn(PreferredAppMode) -> PreferredAppMode;
 type FlushMenuThemesFn = unsafe extern "system" fn();
+type RefreshImmersiveColorPolicyStateFn = unsafe extern "system" fn();
 type AllowDarkModeForWindowFn = unsafe extern "system" fn(HWND, BOOL) -> BOOL;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1125,8 +1176,7 @@ fn get_uxtheme_proc_address(
     module: windows::Win32::Foundation::HMODULE,
     ordinal: usize,
 ) -> Option<*const c_void> {
-    unsafe { GetProcAddress(module, PCSTR(ordinal as *const u8)) }
-        .map(|func| func as *const c_void)
+    unsafe { GetProcAddress(module, PCSTR(ordinal as *const u8)) }.map(|func| func as *const c_void)
 }
 
 fn try_enable_dark_menu_theme_support(hwnd: HWND) {
@@ -1180,6 +1230,207 @@ fn try_enable_dark_menu_theme_support(hwnd: HWND) {
         unsafe {
             let _ = allow_dark_mode_for_window(hwnd, true.into());
         }
+        // Re-flush menu themes so Windows re-evaluates the menu bar
+        // now that per-window dark mode has been enabled.
+        flush_menu_themes_if_available();
+    }
+}
+
+fn flush_menu_themes_if_available() {
+    static FLUSH_FN: OnceLock<Option<FlushMenuThemesFn>> = OnceLock::new();
+    let maybe_flush = FLUSH_FN.get_or_init(|| unsafe {
+        let module = LoadLibraryW(w!("uxtheme.dll")).ok()?;
+        get_uxtheme_proc_address(module, UXTHEME_ORD_FLUSH_MENU_THEMES)
+            .map(|ptr| std::mem::transmute::<*const c_void, FlushMenuThemesFn>(ptr))
+    });
+    if let Some(flush) = maybe_flush {
+        unsafe { flush() };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Undocumented UAH (User-Action-Handler) messages for painting the menu bar.
+// Windows sends these to the owning window so it can custom-draw the menu bar
+// strip.  Without handling them the bar stays light even when dark mode is on.
+// ---------------------------------------------------------------------------
+const WM_UAHDRAWMENU: u32 = 0x0091;
+const WM_UAHDRAWMENUITEM: u32 = 0x0092;
+
+/// Win32 `OBJID_MENU` (avoids pulling in `Win32_UI_Accessibility`).
+const OBJID_MENU_BAR: i32 = -3;
+
+/// Mirrors the undocumented `UAHMENU` structure Windows passes via `lParam`.
+#[repr(C)]
+struct UahMenu {
+    hmenu: HMENU,
+    hdc: HDC,
+    _dw_flags: u32,
+}
+
+/// Mirrors the undocumented `UAHMENUITEM` that follows the `UAHMENU` inside
+/// the `UAHDRAWMENUITEM` blob.
+#[repr(C)]
+struct UahMenuItem {
+    i_position: i32,
+    _dw_flags: u32,
+}
+
+/// Full `lParam` payload for `WM_UAHDRAWMENUITEM`.
+#[repr(C)]
+struct UahDrawMenuItem {
+    dis: DRAWITEMSTRUCT,
+    um: UahMenu,
+    umi: UahMenuItem,
+}
+
+/// Dark-mode colours used for the menu bar painting.
+struct MenuBarColors {
+    bar_bg: COLORREF,
+    text_normal: COLORREF,
+    hot_bg: COLORREF,
+    pushed_bg: COLORREF,
+}
+
+impl MenuBarColors {
+    /// Derive from the `MainWindowBackground` style, falling back to sensible
+    /// dark defaults when no style is set.
+    fn from_state(state: &Win32ApiInternalState) -> Self {
+        use super::controls::styling_handler::color_to_colorref;
+        use super::styling_primitives::Color;
+
+        let default_bg = Color {
+            r: 0x2E,
+            g: 0x32,
+            b: 0x39,
+        };
+        let default_text = Color {
+            r: 0xE0,
+            g: 0xE5,
+            b: 0xEC,
+        };
+
+        if let Some(parsed) = state.get_parsed_style(StyleId::MainWindowBackground) {
+            let bg_color = parsed.background_color.as_ref().unwrap_or(&default_bg);
+            let txt_color = parsed.text_color.as_ref().unwrap_or(&default_text);
+            let bg = color_to_colorref(bg_color);
+            MenuBarColors {
+                bar_bg: bg,
+                text_normal: color_to_colorref(txt_color),
+                hot_bg: COLORREF(lighten_colorref(bg, 20)),
+                pushed_bg: COLORREF(lighten_colorref(bg, 35)),
+            }
+        } else {
+            // Reasonable dark fallback.
+            let bg = color_to_colorref(&default_bg);
+            MenuBarColors {
+                bar_bg: bg,
+                text_normal: color_to_colorref(&default_text),
+                hot_bg: COLORREF(lighten_colorref(bg, 20)),
+                pushed_bg: COLORREF(lighten_colorref(bg, 35)),
+            }
+        }
+    }
+}
+
+/// Brighten each channel of a `COLORREF` by `amount` (clamped to 255).
+fn lighten_colorref(c: COLORREF, amount: u32) -> u32 {
+    let r = (c.0 & 0xFF).min(255 - amount) + amount;
+    let g = ((c.0 >> 8) & 0xFF).min(255 - amount) + amount;
+    let b = ((c.0 >> 16) & 0xFF).min(255 - amount) + amount;
+    r | (g << 8) | (b << 16)
+}
+
+/// Fill the entire menu bar background (`WM_UAHDRAWMENU`).
+unsafe fn paint_dark_menu_bar(hwnd: HWND, hdc: HDC, bar_bg: COLORREF) {
+    unsafe {
+        let mut mbi = MENUBARINFO {
+            cbSize: std::mem::size_of::<MENUBARINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMenuBarInfo(hwnd, OBJECT_IDENTIFIER(OBJID_MENU_BAR), 0, &mut mbi).is_err() {
+            return;
+        }
+        let mut rc_window = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut rc_window);
+        let mut rc_bar = mbi.rcBar;
+        let _ = OffsetRect(&mut rc_bar, -rc_window.left, -rc_window.top);
+        rc_bar.top -= 1;
+        let brush = CreateSolidBrush(bar_bg);
+        FillRect(hdc, &rc_bar, brush);
+        let _ = DeleteObject(brush.into());
+    }
+}
+
+/// Draw a single menu bar item (`WM_UAHDRAWMENUITEM`).
+unsafe fn paint_dark_menu_bar_item(udmi: &UahDrawMenuItem, colors: &MenuBarColors) {
+    unsafe {
+        // Fetch menu item text.
+        let mut buf = [0u16; 256];
+        let mut mii = MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_STRING,
+            dwTypeData: windows::core::PWSTR(buf.as_mut_ptr()),
+            cch: (buf.len() - 1) as u32,
+            ..std::mem::zeroed()
+        };
+        let _ = GetMenuItemInfoW(udmi.um.hmenu, udmi.umi.i_position as u32, true, &mut mii);
+
+        // Determine background brush.
+        let item_state = udmi.dis.itemState;
+        let bg_color = if (item_state.0 & ODS_SELECTED.0) != 0 {
+            colors.pushed_bg
+        } else if (item_state.0 & ODS_HOTLIGHT.0) != 0 {
+            colors.hot_bg
+        } else {
+            colors.bar_bg
+        };
+
+        let brush = CreateSolidBrush(bg_color);
+        FillRect(udmi.um.hdc, &udmi.dis.rcItem, brush);
+        let _ = DeleteObject(brush.into());
+
+        // Draw the text.
+        let text_color = colors.text_normal;
+        SetBkMode(udmi.um.hdc, TRANSPARENT);
+        SetTextColor(udmi.um.hdc, text_color);
+
+        let mut dt_flags = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
+        if (item_state.0 & ODS_NOACCEL.0) != 0 {
+            dt_flags |= DT_HIDEPREFIX;
+        }
+        let mut rc = udmi.dis.rcItem;
+        DrawTextW(udmi.um.hdc, &mut buf[..mii.cch as usize], &mut rc, dt_flags);
+    }
+}
+
+/// Paint over the 1-px bright line Windows leaves between menu bar and client.
+unsafe fn draw_dark_menu_nc_bottom_line(hwnd: HWND, bar_bg: COLORREF) {
+    unsafe {
+        let mut mbi = MENUBARINFO {
+            cbSize: std::mem::size_of::<MENUBARINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMenuBarInfo(hwnd, OBJECT_IDENTIFIER(OBJID_MENU_BAR), 0, &mut mbi).is_err() {
+            return;
+        }
+        let mut rc_client = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rc_client);
+        let points = std::slice::from_raw_parts_mut(&mut rc_client as *mut RECT as *mut POINT, 2);
+        MapWindowPoints(Some(hwnd), None, points);
+        let mut rc_window = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut rc_window);
+        let _ = OffsetRect(&mut rc_client, -rc_window.left, -rc_window.top);
+        let rc_line = RECT {
+            left: rc_client.left,
+            top: rc_client.top - 1,
+            right: rc_client.right,
+            bottom: rc_client.top,
+        };
+        let hdc = GetWindowDC(Some(hwnd));
+        let brush = CreateSolidBrush(bar_bg);
+        FillRect(hdc, &rc_line, brush);
+        let _ = DeleteObject(brush.into());
+        ReleaseDC(Some(hwnd), hdc);
     }
 }
 
@@ -1268,6 +1519,39 @@ impl Win32ApiInternalState {
             WM_GETMINMAXINFO => {
                 lresult_override =
                     Some(self.handle_wm_getminmaxinfo(hwnd, wparam, lparam, window_id));
+            }
+            WM_UAHDRAWMENU => {
+                if self
+                    .get_parsed_style(StyleId::MainWindowBackground)
+                    .is_some()
+                {
+                    let uah = lparam.0 as *const UahMenu;
+                    let colors = MenuBarColors::from_state(self);
+                    unsafe { paint_dark_menu_bar(hwnd, (*uah).hdc, colors.bar_bg) };
+                    lresult_override = Some(LRESULT(0));
+                }
+            }
+            WM_UAHDRAWMENUITEM => {
+                if self
+                    .get_parsed_style(StyleId::MainWindowBackground)
+                    .is_some()
+                {
+                    let udmi = unsafe { &*(lparam.0 as *const UahDrawMenuItem) };
+                    let colors = MenuBarColors::from_state(self);
+                    unsafe { paint_dark_menu_bar_item(udmi, &colors) };
+                    lresult_override = Some(LRESULT(0));
+                }
+            }
+            WM_NCPAINT | WM_NCACTIVATE => {
+                if self
+                    .get_parsed_style(StyleId::MainWindowBackground)
+                    .is_some()
+                {
+                    let def_result = unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                    let colors = MenuBarColors::from_state(self);
+                    unsafe { draw_dark_menu_nc_bottom_line(hwnd, colors.bar_bg) };
+                    lresult_override = Some(def_result);
+                }
             }
             WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
                 let hdc = HDC(wparam.0 as *mut c_void);
