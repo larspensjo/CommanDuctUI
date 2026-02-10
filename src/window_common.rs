@@ -31,19 +31,20 @@ use windows::{
             GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGFONTW, LOGPIXELSY,
             OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC, UpdateWindow,
         },
+        System::LibraryLoader::{GetProcAddress, LoadLibraryW},
         System::WindowsProgramming::MulDiv,
         UI::Controls::{
             DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, SetWindowTheme, TVN_ITEMCHANGEDW,
         },
         UI::WindowsAndMessaging::*, // This list is massive, just import all of them.
     },
-    core::{HSTRING, PCWSTR},
+    core::{BOOL, HSTRING, PCSTR, PCWSTR},
 };
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use log::warn;
 
@@ -79,6 +80,9 @@ pub const INPUT_DEBOUNCE_MS: u32 = 300;
 pub(crate) const HWND_INVALID: HWND = HWND(std::ptr::null_mut());
 
 const SUCCESS_CODE: LRESULT = LRESULT(0);
+const UXTHEME_ORD_ALLOW_DARK_MODE_FOR_WINDOW: usize = 133;
+const UXTHEME_ORD_SET_PREFERRED_APP_MODE: usize = 135;
+const UXTHEME_ORD_FLUSH_MENU_THEMES: usize = 136;
 
 /// Identifies the kind of a control so styles can be dispatched without Win32 class queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1061,6 +1065,7 @@ pub(crate) fn hiword_from_lparam(lparam: LPARAM) -> i32 {
 
 /// Best-effort enablement of dark mode for non-client areas (notably scrollbars) on supported OS builds.
 pub(crate) fn try_enable_dark_mode(hwnd: HWND) {
+    try_enable_dark_menu_theme_support(hwnd);
     unsafe {
         let enable_dark: i32 = 1;
         const DWMWA_USE_IMMERSIVE_DARK_MODE: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(20);
@@ -1080,6 +1085,101 @@ pub(crate) fn try_enable_dark_mode(hwnd: HWND) {
         );
         // Explorer dark theme often yields dark scrollbars on common controls.
         let _ = SetWindowTheme(hwnd, w!("DarkMode_Explorer"), None);
+    }
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy)]
+enum PreferredAppMode {
+    AllowDark = 1,
+}
+
+type SetPreferredAppModeFn = unsafe extern "system" fn(PreferredAppMode) -> PreferredAppMode;
+type FlushMenuThemesFn = unsafe extern "system" fn();
+type AllowDarkModeForWindowFn = unsafe extern "system" fn(HWND, BOOL) -> BOOL;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DarkModeUxThemeOrdinals {
+    allow_dark_mode_for_window: bool,
+    set_preferred_app_mode: bool,
+    flush_menu_themes: bool,
+}
+
+impl DarkModeUxThemeOrdinals {
+    fn has_any(self) -> bool {
+        self.allow_dark_mode_for_window || self.set_preferred_app_mode || self.flush_menu_themes
+    }
+}
+
+fn resolve_dark_mode_uxtheme_ordinals(
+    has_ordinal: impl Fn(usize) -> bool,
+) -> DarkModeUxThemeOrdinals {
+    DarkModeUxThemeOrdinals {
+        allow_dark_mode_for_window: has_ordinal(UXTHEME_ORD_ALLOW_DARK_MODE_FOR_WINDOW),
+        set_preferred_app_mode: has_ordinal(UXTHEME_ORD_SET_PREFERRED_APP_MODE),
+        flush_menu_themes: has_ordinal(UXTHEME_ORD_FLUSH_MENU_THEMES),
+    }
+}
+
+fn get_uxtheme_proc_address(
+    module: windows::Win32::Foundation::HMODULE,
+    ordinal: usize,
+) -> Option<*const c_void> {
+    unsafe { GetProcAddress(module, PCSTR(ordinal as *const u8)) }
+        .map(|func| func as *const c_void)
+}
+
+fn try_enable_dark_menu_theme_support(hwnd: HWND) {
+    static ALLOW_DARK_MODE_FOR_WINDOW_PTR: OnceLock<Option<AllowDarkModeForWindowFn>> =
+        OnceLock::new();
+
+    let maybe_allow_window_dark = ALLOW_DARK_MODE_FOR_WINDOW_PTR.get_or_init(|| unsafe {
+        let module = match LoadLibraryW(w!("uxtheme.dll")) {
+            Ok(module) => module,
+            Err(err) => {
+                log::debug!("Failed to load uxtheme.dll for dark menu support: {err:?}");
+                return None;
+            }
+        };
+
+        let ordinals = resolve_dark_mode_uxtheme_ordinals(|ordinal| {
+            get_uxtheme_proc_address(module, ordinal).is_some()
+        });
+
+        if !ordinals.has_any() {
+            log::debug!("uxtheme dark menu ordinals are unavailable on this OS build.");
+            return None;
+        }
+
+        if let Some(set_preferred_ptr) =
+            get_uxtheme_proc_address(module, UXTHEME_ORD_SET_PREFERRED_APP_MODE)
+        {
+            let set_preferred: SetPreferredAppModeFn =
+                std::mem::transmute::<*const c_void, SetPreferredAppModeFn>(set_preferred_ptr);
+            let _ = set_preferred(PreferredAppMode::AllowDark);
+        }
+
+        if let Some(flush_menu_themes_ptr) =
+            get_uxtheme_proc_address(module, UXTHEME_ORD_FLUSH_MENU_THEMES)
+        {
+            let flush_menu_themes: FlushMenuThemesFn =
+                std::mem::transmute::<*const c_void, FlushMenuThemesFn>(flush_menu_themes_ptr);
+            flush_menu_themes();
+        }
+
+        get_uxtheme_proc_address(module, UXTHEME_ORD_ALLOW_DARK_MODE_FOR_WINDOW).map(
+            |allow_dark_mode_for_window_ptr| {
+                std::mem::transmute::<*const c_void, AllowDarkModeForWindowFn>(
+                    allow_dark_mode_for_window_ptr,
+                )
+            },
+        )
+    });
+
+    if let Some(allow_dark_mode_for_window) = maybe_allow_window_dark {
+        unsafe {
+            let _ = allow_dark_mode_for_window(hwnd, true.into());
+        }
     }
 }
 
@@ -2066,5 +2166,19 @@ mod tests {
         assert_eq!(outer_rect.right - outer_rect.left, 50);
         assert_eq!(inner_map.get(&ControlId::new(2)).unwrap().bottom, 10);
         assert_eq!(inner_map.get(&ControlId::new(3)).unwrap().top, 10);
+    }
+
+    #[test]
+    fn resolve_dark_mode_uxtheme_ordinals_detects_expected_ordinals() {
+        let ordinals = resolve_dark_mode_uxtheme_ordinals(|ordinal| {
+            matches!(
+                ordinal,
+                UXTHEME_ORD_ALLOW_DARK_MODE_FOR_WINDOW | UXTHEME_ORD_FLUSH_MENU_THEMES
+            )
+        });
+
+        assert!(ordinals.allow_dark_mode_for_window);
+        assert!(!ordinals.set_preferred_app_mode);
+        assert!(ordinals.flush_menu_themes);
     }
 }
