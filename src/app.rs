@@ -232,21 +232,6 @@ impl Win32ApiInternalState {
     }
 
     /*
-     * Returns `true` when any window entries are currently registered. In case of a
-     * poisoned lock, the method assumes windows are present and logs the failure.
-     */
-    pub(crate) fn has_active_windows(&self) -> bool {
-        match self.active_windows.read() {
-            Ok(map) => !map.is_empty(),
-            Err(e) => {
-                log::error!(
-                    "Win32ApiInternalState: Failed to read active_windows to check emptiness: {e:?}"
-                );
-                true
-            }
-        }
-    }
-    /*
      * A specialized helper for mutating the TreeView's internal state.
      * This function safely takes the TreeView state out of the `NativeWindowData`,
      * executes the provided closure on it *without* holding the main window map lock,
@@ -1129,42 +1114,19 @@ impl PlatformInterface {
                     }
                 }
 
-                // Then process OS messages
-                let result = GetMessageW(&mut msg, None, 0, 0);
-                match result.0 {
-                    n if n > 0 => {
-                        // Regular message
-                        let _ = TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
-                    }
-                    0 => {
-                        // WM_QUIT
+                // Process at most one OS message per cycle. If no messages are queued,
+                // sleep briefly so command dequeue stays responsive without user input.
+                if PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    if msg.message == WM_QUIT {
                         log::debug!(
-                            "Platform: GetMessageW returned 0 (WM_QUIT), exiting message loop."
+                            "Platform: PeekMessageW received WM_QUIT, exiting message loop."
                         );
                         break;
                     }
-                    _ => {
-                        // Error from GetMessageW (result.0 == -1)
-                        let last_error = GetLastError();
-                        log::error!(
-                            "Platform: GetMessageW failed with return -1. LastError: {last_error:?}"
-                        );
-                        // Check if we should break despite error (e.g., if quitting and no windows)
-                        let should_still_break =
-                            self.internal_state.is_quitting.load(Ordering::Relaxed) == 1
-                                && !self.internal_state.has_active_windows();
-                        if should_still_break {
-                            log::debug!(
-                                "Platform: GetMessageW error during intended quit sequence with no windows, treating as clean exit."
-                            );
-                            break;
-                        }
-                        return Err(PlatformError::OperationFailed(format!(
-                            "GetMessageW failed: {}",
-                            windows::core::Error::from_thread()
-                        )));
-                    }
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(15));
                 }
             }
         }
