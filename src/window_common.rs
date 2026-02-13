@@ -97,6 +97,7 @@ pub(crate) enum ControlKind {
     TreeView,
     Static,
     Edit,
+    RichEdit,
     Splitter,
 }
 
@@ -594,6 +595,7 @@ impl NativeWindowData {
                     Some(
                         ControlKind::TreeView
                             | ControlKind::Edit
+                            | ControlKind::RichEdit
                             | ControlKind::Splitter
                             | ControlKind::Static
                     )
@@ -616,6 +618,7 @@ impl NativeWindowData {
                     matches!(
                         kind,
                         Some(ControlKind::TreeView | ControlKind::Edit | ControlKind::Static)
+                            | Some(ControlKind::RichEdit)
                     )
                 };
                 if matches!(kind, Some(ControlKind::TreeView)) {

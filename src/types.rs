@@ -469,6 +469,11 @@ pub enum PlatformCommand {
         multiline: bool,
         vertical_scroll: bool,
     },
+    CreateRichEdit {
+        window_id: WindowId,
+        parent_control_id: Option<ControlId>,
+        control_id: ControlId,
+    },
     CreateProgressBar {
         window_id: WindowId,
         parent_control_id: Option<ControlId>,
@@ -505,6 +510,11 @@ pub enum PlatformCommand {
         window_id: WindowId,
         control_id: ControlId,
         text: String,
+    },
+    SetRichEditContent {
+        window_id: WindowId,
+        control_id: ControlId,
+        rtf_text: String,
     },
     SetScrollPosition {
         window_id: WindowId,

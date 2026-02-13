@@ -10,7 +10,7 @@
  */
 
 use super::app::Win32ApiInternalState;
-use super::controls::treeview_handler; // Ensure treeview_handler is used for its functions
+use super::controls::{richedit_handler, treeview_handler}; // Ensure treeview_handler is used for its functions
 use super::error::{PlatformError, Result as PlatformResult};
 use super::styling::StyleId;
 use super::types::{CheckState, ControlId, LayoutRule, TreeItemId, WindowId};
@@ -383,6 +383,20 @@ pub(crate) fn execute_create_input(
     })
 }
 
+pub(crate) fn execute_create_rich_edit(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    parent_control_id: Option<ControlId>,
+    control_id: ControlId,
+) -> PlatformResult<()> {
+    richedit_handler::handle_create_rich_edit_command(
+        internal_state,
+        window_id,
+        parent_control_id,
+        control_id,
+    )
+}
+
 /*
  * Updates the displayed text for any HWND-backed control identified by a logical ID.
  * This is the shared implementation behind SetInputText, SetViewerContent, and button text updates.
@@ -464,6 +478,20 @@ pub(crate) fn execute_set_viewer_content(
         let _ = InvalidateRect(Some(hwnd_viewer), None, true);
     }
     Ok(())
+}
+
+pub(crate) fn execute_set_rich_edit_content(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    control_id: ControlId,
+    rtf_text: String,
+) -> PlatformResult<()> {
+    richedit_handler::handle_set_rich_edit_content_command(
+        internal_state,
+        window_id,
+        control_id,
+        rtf_text,
+    )
 }
 
 /*
@@ -613,6 +641,7 @@ mod tests {
         WindowId, app::Win32ApiInternalState, types::ControlId, window_common::NativeWindowData,
     };
     use std::sync::Arc;
+    use windows::Win32::Foundation::HWND;
 
     // Helper to set up a basic Win32ApiInternalState and NativeWindowData for tests
     // This helper function is now local to the tests module.
@@ -712,6 +741,53 @@ mod tests {
                 vertical_scroll: false,
             },
         );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_rich_edit_content_missing_control_returns_error() {
+        let (internal_state, window_id, native_window_data) = setup_test_env();
+        {
+            let mut guard = internal_state.active_windows().write().unwrap();
+            guard.insert(window_id, native_window_data);
+        }
+
+        let result = execute_set_rich_edit_content(
+            &internal_state,
+            window_id,
+            ControlId::new(888),
+            "{\\rtf1\\ansi test}".to_string(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_rich_edit_missing_parent_errors() {
+        let (internal_state, window_id, native_window_data) = setup_test_env();
+        {
+            let mut guard = internal_state.active_windows().write().unwrap();
+            guard.insert(window_id, native_window_data);
+        }
+
+        let result = execute_create_rich_edit(
+            &internal_state,
+            window_id,
+            Some(ControlId::new(77)),
+            ControlId::new(88),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_rich_edit_duplicate_control_id_errors() {
+        let (internal_state, window_id, mut native_window_data) = setup_test_env();
+        native_window_data.register_control_hwnd(ControlId::new(42), HWND(0x1234usize as _));
+        {
+            let mut guard = internal_state.active_windows().write().unwrap();
+            guard.insert(window_id, native_window_data);
+        }
+
+        let result = execute_create_rich_edit(&internal_state, window_id, None, ControlId::new(42));
         assert!(result.is_err());
     }
 }

@@ -2,7 +2,7 @@ use crate::{
     command_executor,
     controls::{
         button_handler, dialog_handler, label_handler, menu_handler, panel_handler,
-        progress_handler, splitter_handler, styling_handler, treeview_handler,
+        progress_handler, richedit_handler, splitter_handler, styling_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
@@ -23,7 +23,7 @@ use windows::{
             LOGPIXELSY, OUT_DEFAULT_PRECIS, ReleaseDC,
         },
         System::Com::{CoInitializeEx, CoUninitialize},
-        System::LibraryLoader::GetModuleHandleW,
+        System::LibraryLoader::{GetModuleHandleW, LoadLibraryW},
         System::WindowsProgramming::MulDiv,
         UI::Controls::{
             ICC_PROGRESS_CLASS, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx,
@@ -31,14 +31,17 @@ use windows::{
         },
         UI::WindowsAndMessaging::*,
     },
-    core::{HSTRING, PCWSTR},
+    core::{HSTRING, PCWSTR, w},
 };
 
 use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex, RwLock, Weak,
     atomic::{AtomicUsize, Ordering},
+    Once,
 };
+
+static LOAD_RICHEDIT_DLL_ONCE: Once = Once::new();
 
 // Type alias for the complex UI state provider type to reduce type complexity.
 type UiStateProviderHolder = Mutex<Option<Weak<Mutex<dyn UiStateProvider>>>>;
@@ -158,6 +161,12 @@ impl Win32ApiInternalState {
                     GetLastError()
                 );
             }
+
+            LOAD_RICHEDIT_DLL_ONCE.call_once(|| {
+                if let Err(err) = LoadLibraryW(w!("Msftedit.dll")) {
+                    log::warn!("Failed to load Msftedit.dll for RichEdit support: {err:?}");
+                }
+            });
 
             let h_instance = HINSTANCE(GetModuleHandleW(PCWSTR::null())?.0);
             Ok(Arc::new(Self {
@@ -591,6 +600,16 @@ impl Win32ApiInternalState {
                     vertical_scroll,
                 },
             ),
+            PlatformCommand::CreateRichEdit {
+                window_id,
+                parent_control_id,
+                control_id,
+            } => command_executor::execute_create_rich_edit(
+                self,
+                window_id,
+                parent_control_id,
+                control_id,
+            ),
             PlatformCommand::CreateProgressBar {
                 window_id,
                 parent_control_id,
@@ -643,6 +662,13 @@ impl Win32ApiInternalState {
                 control_id,
                 text,
             } => command_executor::execute_set_viewer_content(self, window_id, control_id, text),
+            PlatformCommand::SetRichEditContent {
+                window_id,
+                control_id,
+                rtf_text,
+            } => command_executor::execute_set_rich_edit_content(
+                self, window_id, control_id, rtf_text,
+            ),
             PlatformCommand::SetScrollPosition {
                 window_id,
                 control_id,
@@ -893,6 +919,13 @@ impl Win32ApiInternalState {
                         _ = InvalidateRect(Some(control_hwnd), None, true);
                     }
                 }
+            }
+            // RichEdit uses dedicated messages for background/text color.
+            else if control_kind == window_common::ControlKind::RichEdit
+                && let Some(ref style) = parsed_style
+            {
+                let (background, foreground) = richedit_handler::style_colors_for_rich_edit(style);
+                richedit_handler::apply_rich_edit_colors(control_hwnd, background, foreground);
             }
         }
 
