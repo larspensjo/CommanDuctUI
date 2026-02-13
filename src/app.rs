@@ -36,9 +36,8 @@ use windows::{
 
 use std::collections::HashMap;
 use std::sync::{
-    Arc, Mutex, RwLock, Weak,
+    Arc, Mutex, Once, RwLock, Weak,
     atomic::{AtomicUsize, Ordering},
-    Once,
 };
 
 static LOAD_RICHEDIT_DLL_ONCE: Once = Once::new();

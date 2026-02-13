@@ -1,6 +1,6 @@
 use crate::app::Win32ApiInternalState;
-use crate::error::{PlatformError, Result as PlatformResult};
 use crate::controls::styling_handler::color_to_colorref;
+use crate::error::{PlatformError, Result as PlatformResult};
 use crate::types::{ControlId, WindowId};
 use crate::window_common::{ControlKind, try_enable_dark_mode};
 
@@ -11,8 +11,8 @@ use windows::Win32::UI::Controls::RichEdit::{
     MSFTEDIT_CLASS, SCF_DEFAULT, SF_RTF,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, HMENU,
-    SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE, WS_VSCROLL,
+    CreateWindowExW, DestroyWindow, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, HMENU, SendMessageW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE, WS_VSCROLL,
 };
 use windows::core::HSTRING;
 
@@ -214,7 +214,10 @@ pub(crate) fn handle_set_rich_edit_content_command(
 pub(crate) fn style_colors_for_rich_edit(
     parsed_style: &crate::styling::ParsedControlStyle,
 ) -> (Option<COLORREF>, Option<COLORREF>) {
-    let background = parsed_style.background_color.as_ref().map(color_to_colorref);
+    let background = parsed_style
+        .background_color
+        .as_ref()
+        .map(color_to_colorref);
     let foreground = parsed_style.text_color.as_ref().map(color_to_colorref);
     (background, foreground)
 }
