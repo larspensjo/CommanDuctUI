@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.6 - 2026-02-13
+- Add `TreeItemDisabled` variant to `StyleId` enum for muted-gray styling of tree items that lack associated data.
+
 ## 0.2.5 - 2026-02-10
 - Enable best-effort dark theming for native Win32 menus by applying UXTheme dark-mode policy hooks.
 - Re-apply dark-mode settings and redraw the menu bar immediately after `SetMenu` so `File` and popup menus render consistently.

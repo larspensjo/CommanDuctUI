@@ -77,4 +77,6 @@ pub enum StyleId {
     ProgressBar,
     // Splitter control
     Splitter,
+    // Tree item styling
+    TreeItemDisabled,
 }
