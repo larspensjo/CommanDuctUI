@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.7 - 2026-02-13
+- Add `ViewerReadable` variant to `StyleId` enum so apps can assign a prose-friendly preview style without changing existing monospace usages.
+
 ## 0.2.6 - 2026-02-13
 - Add `TreeItemDisabled` variant to `StyleId` enum for muted-gray styling of tree items that lack associated data.
 
