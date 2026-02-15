@@ -80,15 +80,10 @@ pub(crate) fn get_hwnd_owner(
  * appropriate `AppEvent` constructed by `event_constructor`.
  * [CDU-Dialogs-FileV1] Both Open and Save dialog commands flow through this helper so `AppEvent`s always contain a normalized `PathBuf`.
  */
-#[allow(clippy::too_many_arguments)]
 fn show_common_file_dialog<FDialog, FEvent>(
     internal_state: &Arc<Win32ApiInternalState>,
     window_id: WindowId,
-    title: String,
-    default_filename: Option<String>,
-    filter_spec: String,
-    initial_dir: Option<PathBuf>,
-    specific_flags: OPEN_FILENAME_FLAGS,
+    request: CommonFileDialogRequest,
     dialog_fn: FDialog,
     event_constructor: FEvent,
 ) -> PlatformResult<()>
@@ -101,7 +96,7 @@ where
 
     // Prepare buffer for the file path.
     let mut file_buffer: Vec<u16> = vec![0; 2048]; // Buffer for the path.
-    if let Some(fname) = default_filename
+    if let Some(fname) = request.default_filename
         && !fname.is_empty()
     {
         let default_name_utf16: Vec<u16> = fname.encode_utf16().collect();
@@ -110,9 +105,11 @@ where
     }
 
     // Prepare strings for the OPENFILENAMEW struct.
-    let title_hstring = HSTRING::from(title);
-    let filter_utf16: Vec<u16> = filter_spec.encode_utf16().collect();
-    let initial_dir_hstring = initial_dir.map(|p| HSTRING::from(p.to_string_lossy().as_ref()));
+    let title_hstring = HSTRING::from(request.title);
+    let filter_utf16: Vec<u16> = request.filter_spec.encode_utf16().collect();
+    let initial_dir_hstring = request
+        .initial_dir
+        .map(|p| HSTRING::from(p.to_string_lossy().as_ref()));
     let initial_dir_pcwstr = initial_dir_hstring
         .as_ref()
         .map_or(PCWSTR::null(), |h_str| PCWSTR(h_str.as_ptr()));
@@ -126,7 +123,7 @@ where
         lpstrFilter: PCWSTR(filter_utf16.as_ptr()),
         lpstrTitle: PCWSTR(title_hstring.as_ptr()),
         lpstrInitialDir: initial_dir_pcwstr,
-        Flags: OFN_EXPLORER | specific_flags,
+        Flags: OFN_EXPLORER | request.specific_flags,
         ..Default::default()
     };
 
@@ -157,6 +154,14 @@ where
     Ok(())
 }
 
+struct CommonFileDialogRequest {
+    title: String,
+    default_filename: Option<String>,
+    filter_spec: String,
+    initial_dir: Option<PathBuf>,
+    specific_flags: OPEN_FILENAME_FLAGS,
+}
+
 /*
  * Handles the `ShowSaveFileDialog` platform command.
  * It uses `show_common_file_dialog` to display a Win32 "Save As" dialog and
@@ -174,11 +179,13 @@ pub(crate) fn handle_show_save_file_dialog_command(
     show_common_file_dialog(
         internal_state,
         window_id,
-        title,
-        Some(default_filename),
-        filter_spec,
-        initial_dir,
-        OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR,
+        CommonFileDialogRequest {
+            title,
+            default_filename: Some(default_filename),
+            filter_spec,
+            initial_dir,
+            specific_flags: OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR,
+        },
         |ofn_ptr| unsafe { GetSaveFileNameW(ofn_ptr) },
         |win_id, res_path| AppEvent::FileSaveDialogCompleted {
             window_id: win_id,
@@ -203,11 +210,13 @@ pub(crate) fn handle_show_open_file_dialog_command(
     show_common_file_dialog(
         internal_state,
         window_id,
-        title,
-        None,
-        filter_spec,
-        initial_dir,
-        OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR,
+        CommonFileDialogRequest {
+            title,
+            default_filename: None,
+            filter_spec,
+            initial_dir,
+            specific_flags: OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR,
+        },
         |ofn_ptr| unsafe { GetOpenFileNameW(ofn_ptr) },
         |win_id, res_path| AppEvent::FileOpenProfileDialogCompleted {
             window_id: win_id,
