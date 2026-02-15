@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.8 - 2026-02-15
+- Force a full-window redraw pass after layout recalculation (`RedrawWindow` with `RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW`) to eliminate residual paint artifacts during dynamic relayout.
+
 ## 0.2.7 - 2026-02-13
 - Add `ViewerReadable` variant to `StyleId` enum so apps can assign a prose-friendly preview style without changing existing monospace usages.
 - Add `PlatformCommand::CreateRichEdit` and `PlatformCommand::SetRichEditContent`.

@@ -31,8 +31,9 @@ use windows::{
             DT_HIDEPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, EndPaint,
             FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetObjectW,
             GetStockObject, GetWindowDC, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGFONTW,
-            LOGPIXELSY, MapWindowPoints, OUT_DEFAULT_PRECIS, OffsetRect, PAINTSTRUCT, ReleaseDC,
-            SetBkMode, SetTextColor, TRANSPARENT, UpdateWindow,
+            LOGPIXELSY, MapWindowPoints, OUT_DEFAULT_PRECIS, OffsetRect, PAINTSTRUCT, RDW_ALLCHILDREN,
+            RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, ReleaseDC, SetBkMode,
+            SetTextColor, TRANSPARENT, UpdateWindow,
         },
         System::LibraryLoader::{GetProcAddress, LoadLibraryW},
         System::WindowsProgramming::MulDiv,
@@ -736,6 +737,17 @@ impl NativeWindowData {
             self.logical_window_id
         );
         self.apply_layout_rules_for_children(None, client_rect);
+
+        // Force a full post-layout redraw pass. Dynamic Prompt Lab mode/section toggles can
+        // otherwise leave stale pixels from previously larger control regions.
+        unsafe {
+            _ = RedrawWindow(
+                Some(self.this_window_hwnd),
+                None,
+                None,
+                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+            );
+        }
     }
 
     pub(crate) fn set_label_severity(&mut self, label_id: ControlId, severity: MessageSeverity) {
