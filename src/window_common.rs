@@ -11,7 +11,10 @@
  */
 use super::{
     app::Win32ApiInternalState,
-    controls::{button_handler, input_handler, label_handler, paint_router, treeview_handler},
+    controls::{
+        button_handler, combobox_handler, input_handler, label_handler, paint_router,
+        styling_handler, treeview_handler,
+    },
     error::{PlatformError, Result as PlatformResult},
     styling::StyleId,
     types::{AppEvent, ControlId, DockStyle, LayoutRule, MenuActionId, MessageSeverity, WindowId},
@@ -32,7 +35,7 @@ use windows::{
             FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetObjectW,
             GetStockObject, GetWindowDC, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGFONTW,
             LOGPIXELSY, MapWindowPoints, OUT_DEFAULT_PRECIS, OffsetRect, PAINTSTRUCT, RDW_ALLCHILDREN,
-            RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, ReleaseDC, SetBkMode,
+            RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, ReleaseDC, SetBkColor, SetBkMode,
             SetTextColor, TRANSPARENT, UpdateWindow,
         },
         System::LibraryLoader::{GetProcAddress, LoadLibraryW},
@@ -100,6 +103,8 @@ pub(crate) enum ControlKind {
     Edit,
     RichEdit,
     Splitter,
+    ComboBox,
+    RadioButton,
 }
 
 /*
@@ -1568,7 +1573,7 @@ impl Win32ApiInternalState {
                     lresult_override = Some(def_result);
                 }
             }
-            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let hwnd_control = HWND(lparam.0 as *mut c_void);
                 let route = self.resolve_ctlcolor_route(window_id, hwnd_control, msg);
@@ -1578,6 +1583,9 @@ impl Win32ApiInternalState {
                     }
                     paint_router::PaintRoute::LabelStatic => {
                         label_handler::handle_wm_ctlcolorstatic(self, window_id, hdc, hwnd_control)
+                    }
+                    paint_router::PaintRoute::ComboListBox => {
+                        self.handle_wm_ctlcolorlistbox(window_id, hdc, hwnd_control)
                     }
                     _ => None,
                 };
@@ -1772,12 +1780,90 @@ impl Win32ApiInternalState {
             // Control notification
             let hwnd_control = HWND(control_hwnd.0 as *mut std::ffi::c_void);
             let control_id = ControlId::new(command_id);
+
+            // Route based on notification code and control kind
             if notification_code == BN_CLICKED as i32 {
-                return Some(button_handler::handle_bn_clicked(
-                    window_id,
-                    control_id,
-                    hwnd_control,
-                ));
+                // Disambiguate between push buttons and radio buttons
+                let kind_result = self.with_window_data_read(window_id, |window_data| {
+                    Ok(window_data.get_control_kind(control_id))
+                });
+
+                match kind_result {
+                    Ok(Some(ControlKind::RadioButton)) => {
+                        log::debug!(
+                            "RadioButton ID {} clicked in WinID {:?}",
+                            control_id.raw(),
+                            window_id
+                        );
+                        return Some(AppEvent::RadioButtonSelected {
+                            window_id,
+                            control_id,
+                        });
+                    }
+                    Ok(Some(ControlKind::Button)) | Ok(None) => {
+                        // Fallback to push button behavior
+                        return Some(button_handler::handle_bn_clicked(
+                            window_id,
+                            control_id,
+                            hwnd_control,
+                        ));
+                    }
+                    Ok(Some(_)) => {
+                        log::trace!(
+                            "BN_CLICKED for non-button control ID {} in WinID {:?}",
+                            control_id.raw(),
+                            window_id
+                        );
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "Failed to resolve ControlKind for BN_CLICKED on ID {} in WinID {:?}: {err:?}",
+                            control_id.raw(),
+                            window_id
+                        );
+                    }
+                }
+            } else if notification_code == CBN_SELCHANGE as i32 {
+                // ComboBox selection changed
+                let kind_result = self.with_window_data_read(window_id, |window_data| {
+                    Ok(window_data.get_control_kind(control_id))
+                });
+
+                match kind_result {
+                    Ok(Some(ControlKind::ComboBox)) => {
+                        log::debug!(
+                            "ComboBox ID {} selection changed in WinID {:?}",
+                            control_id.raw(),
+                            window_id
+                        );
+                        return Some(combobox_handler::handle_cbn_selchange(
+                            window_id,
+                            control_id,
+                            hwnd_control,
+                        ));
+                    }
+                    Ok(Some(_)) => {
+                        log::trace!(
+                            "CBN_SELCHANGE for non-combobox control ID {} in WinID {:?}",
+                            control_id.raw(),
+                            window_id
+                        );
+                    }
+                    Ok(None) => {
+                        log::warn!(
+                            "CBN_SELCHANGE for unknown control ID {} in WinID {:?}",
+                            control_id.raw(),
+                            window_id
+                        );
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "Failed to resolve ControlKind for CBN_SELCHANGE on ID {} in WinID {:?}: {err:?}",
+                            control_id.raw(),
+                            window_id
+                        );
+                    }
+                }
             } else if notification_code == EN_CHANGE as i32 {
                 log::trace!(
                     "Edit control ID {} changed, starting debounce timer",
@@ -1990,6 +2076,47 @@ impl Win32ApiInternalState {
         }
     }
 
+    /*
+     * Handles WM_CTLCOLORLISTBOX for ComboBox dropdown lists.
+     * Applies dark theme styling by resolving ComboBox or DefaultInput styles.
+     */
+    fn handle_wm_ctlcolorlistbox(
+        self: &Arc<Self>,
+        window_id: WindowId,
+        hdc: HDC,
+        hwnd_listbox: HWND,
+    ) -> Option<LRESULT> {
+        log::trace!(
+            "[Paint] handle_wm_ctlcolorlistbox for listbox HWND {:?} in WinID {:?}",
+            hwnd_listbox,
+            window_id
+        );
+
+        // Resolve style: try ComboBox first, fallback to DefaultInput
+        let style = self
+            .get_parsed_style(StyleId::ComboBox)
+            .or_else(|| self.get_parsed_style(StyleId::DefaultInput));
+
+        if let Some(style) = style {
+            // Convert Color to COLORREF using styling_handler helper
+            if let Some(ref text_color) = style.text_color {
+                unsafe {
+                    SetTextColor(hdc, styling_handler::color_to_colorref(text_color));
+                }
+            }
+            if let Some(ref bg_color) = style.background_color {
+                unsafe {
+                    SetBkColor(hdc, styling_handler::color_to_colorref(bg_color));
+                }
+            }
+            if let Some(bg_brush) = style.background_brush {
+                return Some(LRESULT(bg_brush.0 as isize));
+            }
+        }
+
+        None
+    }
+
     fn handle_wm_erasebkgnd(
         self: &Arc<Self>,
         hwnd: HWND,
@@ -2071,6 +2198,7 @@ fn fallback_ctlcolor_route(msg: u32) -> paint_router::PaintRoute {
     match msg {
         WM_CTLCOLOREDIT => paint_router::PaintRoute::Edit,
         WM_CTLCOLORSTATIC => paint_router::PaintRoute::LabelStatic,
+        WM_CTLCOLORLISTBOX => paint_router::PaintRoute::ComboListBox,
         _ => paint_router::PaintRoute::Default,
     }
 }

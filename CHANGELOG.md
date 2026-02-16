@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 - 2026-02-16
+- **BREAKING**: Add `ComboBox` and `RadioButton` variants to `ControlKind` enum.
+- **BREAKING**: Add `ComboBox` and `RadioButton` variants to `StyleId` enum.
+- **BREAKING**: Add `ComboBoxSelectionChanged` and `RadioButtonSelected` variants to `AppEvent` enum.
+- Add `CreateComboBox`, `SetComboBoxItems`, `SetComboBoxSelection`, and `CreateRadioButton` commands to `PlatformCommand` enum.
+- Add native ComboBox control support with dropdown list style (CBS_DROPDOWNLIST).
+- Add native RadioButton control support with group start semantics (BS_AUTORADIOBUTTON with WS_GROUP).
+- Add `WM_CTLCOLORLISTBOX` handling for ComboBox dropdown list dark theme support.
+- Route `CBN_SELCHANGE` notifications to `ComboBoxSelectionChanged` events.
+- Disambiguate `BN_CLICKED` notifications between push buttons and radio buttons using `ControlKind`.
+- Add comprehensive unit tests for ComboBox and RadioButton handlers.
+
 ## 0.2.8 - 2026-02-15
 - Force a full-window redraw pass after layout recalculation (`RedrawWindow` with `RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW`) to eliminate residual paint artifacts during dynamic relayout.
 

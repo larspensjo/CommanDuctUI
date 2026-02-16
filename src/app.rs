@@ -1,8 +1,9 @@
 use crate::{
     command_executor,
     controls::{
-        button_handler, dialog_handler, label_handler, menu_handler, panel_handler,
-        progress_handler, richedit_handler, splitter_handler, styling_handler, treeview_handler,
+        button_handler, combobox_handler, dialog_handler, label_handler, menu_handler,
+        panel_handler, progress_handler, radiobutton_handler, richedit_handler,
+        splitter_handler, styling_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
@@ -630,6 +631,45 @@ impl Win32ApiInternalState {
                 parent_control_id,
                 control_id,
                 orientation,
+            ),
+            PlatformCommand::CreateComboBox {
+                window_id,
+                parent_control_id,
+                control_id,
+            } => combobox_handler::handle_create_combobox_command(
+                self,
+                window_id,
+                parent_control_id,
+                control_id,
+            ),
+            PlatformCommand::SetComboBoxItems {
+                window_id,
+                control_id,
+                items,
+            } => combobox_handler::handle_set_combobox_items(self, window_id, control_id, items),
+            PlatformCommand::SetComboBoxSelection {
+                window_id,
+                control_id,
+                selected_index,
+            } => combobox_handler::handle_set_combobox_selection(
+                self,
+                window_id,
+                control_id,
+                selected_index,
+            ),
+            PlatformCommand::CreateRadioButton {
+                window_id,
+                parent_control_id,
+                control_id,
+                text,
+                group_start,
+            } => radiobutton_handler::handle_create_radiobutton_command(
+                self,
+                window_id,
+                parent_control_id,
+                control_id,
+                text,
+                group_start,
             ),
             PlatformCommand::SetProgressBarRange {
                 window_id,

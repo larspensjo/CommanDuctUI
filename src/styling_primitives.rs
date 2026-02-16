@@ -80,4 +80,7 @@ pub enum StyleId {
     Splitter,
     // Tree item styling
     TreeItemDisabled,
+    // ComboBox and RadioButton controls
+    ComboBox,
+    RadioButton,
 }

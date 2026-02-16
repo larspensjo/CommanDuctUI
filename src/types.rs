@@ -294,6 +294,18 @@ pub enum AppEvent {
         control_id: ControlId,
         desired_left_width_px: i32,
     },
+    // Signals that a ComboBox selection was changed by the user.
+    // None means no selection (CB_ERR).
+    ComboBoxSelectionChanged {
+        window_id: WindowId,
+        control_id: ControlId,
+        selected_index: Option<usize>,
+    },
+    // Signals that a RadioButton was selected by the user.
+    RadioButtonSelected {
+        window_id: WindowId,
+        control_id: ControlId,
+    },
 }
 
 // Defines the severity of a message to be displayed, e.g., in the status bar.
@@ -547,6 +559,28 @@ pub enum PlatformCommand {
         window_id: WindowId,
         control_id: ControlId, /* New: Logical ID of the TreeView containing the item */
         item_id: TreeItemId,
+    },
+    CreateComboBox {
+        window_id: WindowId,
+        parent_control_id: Option<ControlId>,
+        control_id: ControlId,
+    },
+    SetComboBoxItems {
+        window_id: WindowId,
+        control_id: ControlId,
+        items: Vec<String>,
+    },
+    SetComboBoxSelection {
+        window_id: WindowId,
+        control_id: ControlId,
+        selected_index: Option<usize>,
+    },
+    CreateRadioButton {
+        window_id: WindowId,
+        parent_control_id: Option<ControlId>,
+        control_id: ControlId,
+        text: String,
+        group_start: bool,
     },
 
     // --- Style Management Commands ---

@@ -1,11 +1,14 @@
 use crate::window_common::ControlKind;
 use log::{debug, warn};
-use windows::Win32::UI::WindowsAndMessaging::{WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC};
+use windows::Win32::UI::WindowsAndMessaging::{
+    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PaintRoute {
     LabelStatic,
     Edit,
+    ComboListBox,
     Default,
 }
 
@@ -16,6 +19,10 @@ pub(crate) fn resolve_paint_route(kind: ControlKind, msg: u32) -> PaintRoute {
             PaintRoute::Edit
         }
         (ControlKind::Edit, WM_CTLCOLOREDIT) => PaintRoute::Edit,
+        (ControlKind::ComboBox, WM_CTLCOLORLISTBOX) => {
+            debug!("[Paint] ControlKind::ComboBox routed WM_CTLCOLORLISTBOX to combo listbox styling");
+            PaintRoute::ComboListBox
+        }
         (ControlKind::Static, WM_CTLCOLORSTATIC) => PaintRoute::LabelStatic,
         (ControlKind::Static, WM_CTLCOLOREDIT) => {
             warn!("[Paint] ControlKind::Static received WM_CTLCOLOREDIT; using default route");
@@ -50,6 +57,14 @@ mod tests {
         assert_eq!(
             resolve_paint_route(ControlKind::Static, WM_CTLCOLOREDIT),
             PaintRoute::Default
+        );
+    }
+
+    #[test]
+    fn combobox_routes_listbox_message_to_combo_listbox() {
+        assert_eq!(
+            resolve_paint_route(ControlKind::ComboBox, WM_CTLCOLORLISTBOX),
+            PaintRoute::ComboListBox
         );
     }
 }
