@@ -34,9 +34,9 @@ use windows::{
             DT_HIDEPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, EndPaint,
             FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetObjectW,
             GetStockObject, GetWindowDC, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGFONTW,
-            LOGPIXELSY, MapWindowPoints, OUT_DEFAULT_PRECIS, OffsetRect, PAINTSTRUCT, RDW_ALLCHILDREN,
-            RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, ReleaseDC, SetBkColor, SetBkMode,
-            SetTextColor, TRANSPARENT, UpdateWindow,
+            LOGPIXELSY, MapWindowPoints, OUT_DEFAULT_PRECIS, OffsetRect, PAINTSTRUCT,
+            RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, ReleaseDC,
+            SetBkColor, SetBkMode, SetTextColor, TRANSPARENT, UpdateWindow,
         },
         System::LibraryLoader::{GetProcAddress, LoadLibraryW},
         System::WindowsProgramming::MulDiv,
@@ -52,7 +52,7 @@ use windows::{
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use log::warn;
 
@@ -83,6 +83,7 @@ pub(crate) const WM_APP_SPLITTER_DRAG_ENDED: u32 = WM_APP + 0x103;
 // General UI constants
 /// Default debounce delay for edit controls in milliseconds.
 pub const INPUT_DEBOUNCE_MS: u32 = 300;
+const COMBOBOX_DROPDOWN_NATIVE_MIN_HEIGHT_PX: i32 = 260;
 
 // Represents an invalid HWND, useful for initialization or checks.
 pub(crate) const HWND_INVALID: HWND = HWND(std::ptr::null_mut());
@@ -267,6 +268,20 @@ impl NativeWindowData {
 
     pub(crate) fn get_control_kind(&self, control_id: ControlId) -> Option<ControlKind> {
         self.control_kinds.get(&control_id).copied()
+    }
+
+    fn effective_native_height_for_control(&self, control_id: ControlId, base_height: i32) -> i32 {
+        if self.get_control_kind(control_id) == Some(ControlKind::ComboBox) {
+            base_height.max(COMBOBOX_DROPDOWN_NATIVE_MIN_HEIGHT_PX)
+        } else {
+            base_height
+        }
+    }
+
+    pub(crate) fn find_control_id_by_hwnd(&self, hwnd: HWND) -> Option<ControlId> {
+        self.control_hwnd_map
+            .iter()
+            .find_map(|(control_id, mapped_hwnd)| (*mapped_hwnd == hwnd).then_some(*control_id))
     }
 
     pub(crate) fn set_suppress_erasebkgnd(&mut self, suppress: bool) {
@@ -502,7 +517,9 @@ impl NativeWindowData {
                         let hwnd = control_hwnd_opt.unwrap();
                         let width = (rect.right - rect.left).max(0);
                         let height = (rect.bottom - rect.top).max(0);
-                        _ = MoveWindow(hwnd, rect.left, rect.top, width, height, true);
+                        let native_height =
+                            self.effective_native_height_for_control(rule.control_id, height);
+                        _ = MoveWindow(hwnd, rect.left, rect.top, width, native_height, true);
                     }
                     return;
                 }
@@ -525,6 +542,8 @@ impl NativeWindowData {
                 let hwnd = control_hwnd_opt.unwrap();
                 let width = (rect.right - rect.left).max(0);
                 let height = (rect.bottom - rect.top).max(0);
+                let native_height =
+                    self.effective_native_height_for_control(rule.control_id, height);
 
                 // Use DeferWindowPos instead of MoveWindow for atomic repositioning
                 // SWP_NOREDRAW suppresses individual redraws for flicker-free updates
@@ -535,7 +554,7 @@ impl NativeWindowData {
                     rect.left,
                     rect.top,
                     width,
-                    height,
+                    native_height,
                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW,
                 ) {
                     Ok(new_hdwp) if !new_hdwp.is_invalid() => {
@@ -604,6 +623,7 @@ impl NativeWindowData {
                             | ControlKind::RichEdit
                             | ControlKind::Splitter
                             | ControlKind::Static
+                            | ControlKind::ComboBox
                     )
                 ) {
                     continue;
@@ -1864,6 +1884,18 @@ impl Win32ApiInternalState {
                         );
                     }
                 }
+            } else if notification_code == CBN_DROPDOWN as i32 {
+                log::info!(
+                    "ComboBox ID {} dropdown opened in WinID {:?}",
+                    control_id.raw(),
+                    window_id
+                );
+            } else if notification_code == CBN_CLOSEUP as i32 {
+                log::info!(
+                    "ComboBox ID {} dropdown closed in WinID {:?}",
+                    control_id.raw(),
+                    window_id
+                );
             } else if notification_code == EN_CHANGE as i32 {
                 log::trace!(
                     "Edit control ID {} changed, starting debounce timer",
@@ -2043,6 +2075,9 @@ impl Win32ApiInternalState {
     ) -> paint_router::PaintRoute {
         let control_id_raw = unsafe { GetDlgCtrlID(hwnd_control) };
         if control_id_raw == 0 {
+            if self.is_combo_owned_ctlcolor_hwnd(window_id, hwnd_control) {
+                return paint_router::PaintRoute::ComboListBox;
+            }
             warn!(
                 "[Paint] WM_CTLCOLOR message for HWND {:?} without control ID; using fallback",
                 hwnd_control
@@ -2058,6 +2093,18 @@ impl Win32ApiInternalState {
         match kind_result {
             Ok(Some(kind)) => paint_router::resolve_paint_route(kind, msg),
             Ok(None) => {
+                if self.is_combo_owned_ctlcolor_hwnd(window_id, hwnd_control) {
+                    return paint_router::PaintRoute::ComboListBox;
+                }
+                // For WM_CTLCOLORLISTBOX, the HWND is the dropdown listbox
+                // auto-created by Windows inside a CBS_DROPDOWNLIST combo box.
+                // It carries a Windows-assigned control ID (typically 1000)
+                // that we never register, so normal lookup misses. Route
+                // directly to ComboListBox — this message is only ever sent
+                // by combo box controls.
+                if msg == WM_CTLCOLORLISTBOX {
+                    return paint_router::PaintRoute::ComboListBox;
+                }
                 warn!(
                     "[Paint] Missing ControlKind for ControlID {} in WinID {:?}; using fallback",
                     control_id.raw(),
@@ -2076,6 +2123,38 @@ impl Win32ApiInternalState {
         }
     }
 
+    fn is_combo_owned_ctlcolor_hwnd(
+        self: &Arc<Self>,
+        window_id: WindowId,
+        hwnd_control: HWND,
+    ) -> bool {
+        let hwnd_parent = match unsafe { GetParent(hwnd_control) } {
+            Ok(hwnd) if !hwnd.is_invalid() && hwnd != HWND_INVALID => hwnd,
+            _ => return false,
+        };
+
+        let is_combo_owned = self
+            .with_window_data_read(window_id, |window_data| {
+                let owner_control_id = window_data.find_control_id_by_hwnd(hwnd_parent);
+                Ok(
+                    owner_control_id
+                        .and_then(|control_id| window_data.get_control_kind(control_id))
+                        == Some(ControlKind::ComboBox),
+                )
+            })
+            .unwrap_or(false);
+
+        if is_combo_owned {
+            log::trace!(
+                "[Paint] WM_CTLCOLOR HWND {:?} resolved as combo-owned child (parent={:?})",
+                hwnd_control,
+                hwnd_parent
+            );
+        }
+
+        is_combo_owned
+    }
+
     /*
      * Handles WM_CTLCOLORLISTBOX for ComboBox dropdown lists.
      * Applies dark theme styling by resolving ComboBox or DefaultInput styles.
@@ -2084,13 +2163,32 @@ impl Win32ApiInternalState {
         self: &Arc<Self>,
         window_id: WindowId,
         hdc: HDC,
-        hwnd_listbox: HWND,
+        hwnd_combo_child: HWND,
     ) -> Option<LRESULT> {
         log::trace!(
-            "[Paint] handle_wm_ctlcolorlistbox for listbox HWND {:?} in WinID {:?}",
-            hwnd_listbox,
+            "[Paint] handle_wm_ctlcolorlistbox for combo child HWND {:?} in WinID {:?}",
+            hwnd_combo_child,
             window_id
         );
+
+        // Best effort: apply dark theme one time per child/owner HWND pair.
+        // Reapplying SetWindowTheme during every WM_CTLCOLOR can cause excessive
+        // repaint churn and effectively self-sustaining paint traffic.
+        if Self::mark_combo_hwnd_themed(hwnd_combo_child) {
+            unsafe {
+                let _ = SetWindowTheme(hwnd_combo_child, w!("DarkMode_Explorer"), None);
+                try_enable_dark_mode(hwnd_combo_child);
+
+                if let Ok(hwnd_parent_combo) = GetParent(hwnd_combo_child)
+                    && !hwnd_parent_combo.is_invalid()
+                    && hwnd_parent_combo != HWND_INVALID
+                    && Self::mark_combo_hwnd_themed(hwnd_parent_combo)
+                {
+                    let _ = SetWindowTheme(hwnd_parent_combo, w!("DarkMode_CFD"), None);
+                    try_enable_dark_mode(hwnd_parent_combo);
+                }
+            }
+        }
 
         // Resolve style: try ComboBox first, fallback to DefaultInput
         let style = self
@@ -2098,6 +2196,11 @@ impl Win32ApiInternalState {
             .or_else(|| self.get_parsed_style(StyleId::DefaultInput));
 
         if let Some(style) = style {
+            log::trace!(
+                "[Paint] Applying ComboBox dark colors for HWND {:?} in WinID {:?}",
+                hwnd_combo_child,
+                window_id
+            );
             // Convert Color to COLORREF using styling_handler helper
             if let Some(ref text_color) = style.text_color {
                 unsafe {
@@ -2115,6 +2218,15 @@ impl Win32ApiInternalState {
         }
 
         None
+    }
+
+    fn mark_combo_hwnd_themed(hwnd: HWND) -> bool {
+        static THEMED_HWNDS: OnceLock<Mutex<HashSet<isize>>> = OnceLock::new();
+        let set = THEMED_HWNDS.get_or_init(|| Mutex::new(HashSet::new()));
+        match set.lock() {
+            Ok(mut guard) => guard.insert(hwnd.0 as isize),
+            Err(_) => false,
+        }
     }
 
     fn handle_wm_erasebkgnd(
@@ -2607,5 +2719,27 @@ mod tests {
         assert!(ordinals.allow_dark_mode_for_window);
         assert!(!ordinals.set_preferred_app_mode);
         assert!(ordinals.flush_menu_themes);
+    }
+
+    #[test]
+    fn find_control_id_by_hwnd_returns_registered_control() {
+        let mut data = NativeWindowData::new(WindowId::new(1));
+        let control_id = ControlId::new(42);
+        let hwnd = HWND(0x1234isize as *mut _);
+
+        data.register_control_hwnd(control_id, hwnd);
+
+        assert_eq!(data.find_control_id_by_hwnd(hwnd), Some(control_id));
+    }
+
+    #[test]
+    fn effective_native_height_for_combobox_is_expanded() {
+        let mut data = NativeWindowData::new(WindowId::new(1));
+        let combo_id = ControlId::new(77);
+        data.register_control_kind(combo_id, ControlKind::ComboBox);
+
+        let result = data.effective_native_height_for_control(combo_id, 26);
+
+        assert_eq!(result, COMBOBOX_DROPDOWN_NATIVE_MIN_HEIGHT_PX);
     }
 }

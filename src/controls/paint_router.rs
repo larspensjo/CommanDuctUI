@@ -19,8 +19,8 @@ pub(crate) fn resolve_paint_route(kind: ControlKind, msg: u32) -> PaintRoute {
             PaintRoute::Edit
         }
         (ControlKind::Edit, WM_CTLCOLOREDIT) => PaintRoute::Edit,
-        (ControlKind::ComboBox, WM_CTLCOLORLISTBOX) => {
-            debug!("[Paint] ControlKind::ComboBox routed WM_CTLCOLORLISTBOX to combo listbox styling");
+        (ControlKind::ComboBox, WM_CTLCOLORLISTBOX | WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT) => {
+            debug!("[Paint] ControlKind::ComboBox routed {msg:#x} to combo listbox styling");
             PaintRoute::ComboListBox
         }
         (ControlKind::Static, WM_CTLCOLORSTATIC) => PaintRoute::LabelStatic,
@@ -65,6 +65,24 @@ mod tests {
         assert_eq!(
             resolve_paint_route(ControlKind::ComboBox, WM_CTLCOLORLISTBOX),
             PaintRoute::ComboListBox
+        );
+    }
+
+    #[test]
+    fn combobox_routes_static_message_to_combo_listbox() {
+        assert_eq!(
+            resolve_paint_route(ControlKind::ComboBox, WM_CTLCOLORSTATIC),
+            PaintRoute::ComboListBox,
+            "CBS_DROPDOWNLIST sends WM_CTLCOLORSTATIC for the closed combo face"
+        );
+    }
+
+    #[test]
+    fn combobox_routes_edit_message_to_combo_listbox() {
+        assert_eq!(
+            resolve_paint_route(ControlKind::ComboBox, WM_CTLCOLOREDIT),
+            PaintRoute::ComboListBox,
+            "Some systems/themes route the closed combo face through WM_CTLCOLOREDIT"
         );
     }
 }

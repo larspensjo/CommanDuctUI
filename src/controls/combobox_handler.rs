@@ -9,12 +9,17 @@ use crate::error::{PlatformError, Result as PlatformResult};
 use crate::types::{AppEvent, ControlId, WindowId};
 use crate::window_common::ControlKind;
 
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
 use std::sync::Arc;
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, WPARAM},
+    Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
+    Graphics::Gdi::{CreateSolidBrush, DeleteObject, FrameRect, GetDC, ReleaseDC},
+    UI::Controls::SetWindowTheme,
     UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, SendMessageW, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WS_CHILD, WS_VISIBLE, WS_VSCROLL,
+        CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
+        GWLP_WNDPROC, GetClientRect, GetWindowLongPtrW, HMENU, SendMessageW, SetWindowLongPtrW,
+        WINDOW_EX_STYLE, WINDOW_STYLE, WM_PAINT, WNDPROC, WS_CHILD, WS_VISIBLE, WS_VSCROLL,
     },
 };
 use windows::core::{HSTRING, PCWSTR};
@@ -23,14 +28,76 @@ const WC_COMBOBOX: PCWSTR = windows::core::w!("COMBOBOX");
 
 // ComboBox styles
 const CBS_DROPDOWNLIST: u32 = 0x0003;
+const CBS_FLAT: u32 = 0x0008;
 const CBS_HASSTRINGS: u32 = 0x0200;
 
 // ComboBox messages
 const CB_RESETCONTENT: u32 = 0x014B;
 const CB_ADDSTRING: u32 = 0x0143;
+const CB_GETCOUNT: u32 = 0x0146;
 const CB_SETCURSEL: u32 = 0x014E;
 const CB_GETCURSEL: u32 = 0x0147;
+const CB_SETMINVISIBLE: u32 = 0x1701;
 const CB_ERR: isize = -1;
+const COMBO_BORDER_DARK_R: u8 = 31;
+const COMBO_BORDER_DARK_G: u8 = 36;
+const COMBO_BORDER_DARK_B: u8 = 48;
+
+fn is_combo_border_paint_message(msg: u32) -> bool {
+    matches!(msg, WM_PAINT)
+}
+
+unsafe fn paint_combo_dark_border(hwnd: HWND) {
+    unsafe {
+        let hdc = GetDC(Some(hwnd));
+        if hdc.is_invalid() {
+            return;
+        }
+
+        let mut rect = RECT::default();
+        if GetClientRect(hwnd, &mut rect).is_ok() {
+            if rect.right <= rect.left || rect.bottom <= rect.top {
+                let _ = ReleaseDC(Some(hwnd), hdc);
+                return;
+            }
+
+            let brush = CreateSolidBrush(COLORREF(
+                (COMBO_BORDER_DARK_R as u32)
+                    | ((COMBO_BORDER_DARK_G as u32) << 8)
+                    | ((COMBO_BORDER_DARK_B as u32) << 16),
+            ));
+            if !brush.0.is_null() {
+                let _ = FrameRect(hdc, &rect, brush);
+                let _ = DeleteObject(brush.into());
+            }
+        }
+
+        let _ = ReleaseDC(Some(hwnd), hdc);
+    }
+}
+
+unsafe extern "system" fn dark_combobox_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        let prev = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        let result = if prev != 0 {
+            let prev_proc: WNDPROC = std::mem::transmute(prev);
+            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
+        } else {
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        };
+
+        if is_combo_border_paint_message(msg) {
+            paint_combo_dark_border(hwnd);
+        }
+
+        result
+    }
+}
 
 /*
  * Creates a native ComboBox (dropdown list style) and registers it.
@@ -114,11 +181,13 @@ pub(crate) fn handle_create_combobox_command(
             WINDOW_EX_STYLE(0),
             WC_COMBOBOX,
             &HSTRING::new(),
-            WS_CHILD | WS_VISIBLE | WS_VSCROLL
-                | WINDOW_STYLE(CBS_DROPDOWNLIST | CBS_HASSTRINGS),
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_VSCROLL
+                | WINDOW_STYLE(CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_FLAT),
             0,
             0,
-            10,
+            150,
             200, // Height for dropdown list
             Some(hwnd_parent_for_creation),
             Some(HMENU(control_id.raw() as *mut _)),
@@ -136,8 +205,43 @@ pub(crate) fn handle_create_combobox_command(
         }
     };
 
+    // Try to apply dark control theme and enable dark mode best-effort.
+    // Use DarkMode_CFD for the closed ComboBox face; it controls face/border
+    // rendering differently than the list child theme.
+    unsafe {
+        let _ = SetWindowTheme(hwnd_combo, windows::core::w!("DarkMode_CFD"), None);
+    }
+
     // Try to enable dark mode best-effort
     crate::window_common::try_enable_dark_mode(hwnd_combo);
+
+    // Install a lightweight subclass to repaint the closed-face border in dark mode.
+    // This avoids bright/light themed border artifacts on some Windows theme paths.
+    unsafe {
+        #[allow(clippy::fn_to_numeric_cast)]
+        let prev = SetWindowLongPtrW(hwnd_combo, GWLP_WNDPROC, dark_combobox_proc as isize);
+        if prev != 0 {
+            SetWindowLongPtrW(hwnd_combo, GWLP_USERDATA, prev);
+        }
+    }
+
+    // Request a usable dropdown list height even when layout keeps the control row compact.
+    // On supported systems this avoids a near-zero dropdown area for CBS_DROPDOWNLIST.
+    let min_visible_items = 12usize;
+    let set_min_visible_result = unsafe {
+        SendMessageW(
+            hwnd_combo,
+            CB_SETMINVISIBLE,
+            Some(WPARAM(min_visible_items)),
+            Some(LPARAM(0)),
+        )
+    };
+    log::info!(
+        "ComboBoxHandler: CB_SETMINVISIBLE control_id={} min_visible={} result={}",
+        control_id.raw(),
+        min_visible_items,
+        set_min_visible_result.0
+    );
 
     // Phase 3: Register the new HWND
     internal_state.with_window_data_write(window_id, |window_data| {
@@ -173,7 +277,7 @@ pub(crate) fn handle_set_combobox_items(
     control_id: ControlId,
     items: Vec<String>,
 ) -> PlatformResult<()> {
-    log::debug!(
+    log::info!(
         "ComboBoxHandler: handle_set_combobox_items for WinID {window_id:?}, ControlID {}, {} items",
         control_id.raw(),
         items.len()
@@ -194,24 +298,72 @@ pub(crate) fn handle_set_combobox_items(
 
     // Clear existing items
     unsafe {
-        SendMessageW(hwnd_combo, CB_RESETCONTENT, Some(WPARAM(0)), Some(LPARAM(0)));
+        SendMessageW(
+            hwnd_combo,
+            CB_RESETCONTENT,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
     }
 
     // Add new items
+    let expected_count = items.len();
+    let sample = items.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
     for item in items {
-        let h_item = HSTRING::from(item.as_str());
-        unsafe {
+        let utf16 = utf16_null_terminated(&item);
+        let result = unsafe {
             SendMessageW(
                 hwnd_combo,
                 CB_ADDSTRING,
                 Some(WPARAM(0)),
-                Some(LPARAM(h_item.as_ptr() as isize)),
+                Some(LPARAM(utf16.as_ptr() as isize)),
+            )
+        };
+        if result.0 == CB_ERR {
+            log::warn!(
+                "ComboBoxHandler: CB_ADDSTRING failed for ControlID {} (item='{}')",
+                control_id.raw(),
+                item
             );
         }
     }
 
-    log::debug!("ComboBoxHandler: Successfully set items for ControlID {}", control_id.raw());
+    let final_count =
+        unsafe { SendMessageW(hwnd_combo, CB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0))) }.0;
+
+    if final_count < 0 {
+        log::warn!(
+            "ComboBoxHandler: CB_GETCOUNT failed for ControlID {}",
+            control_id.raw()
+        );
+    } else if final_count as usize != expected_count {
+        log::warn!(
+            "ComboBoxHandler: Item count mismatch for ControlID {} (expected={}, actual={})",
+            control_id.raw(),
+            expected_count,
+            final_count
+        );
+    } else {
+        log::info!(
+            "ComboBoxHandler: Item count confirmed for ControlID {} (count={}, sample=[{}])",
+            control_id.raw(),
+            final_count,
+            sample
+        );
+    }
+
+    log::debug!(
+        "ComboBoxHandler: Successfully set items for ControlID {}",
+        control_id.raw()
+    );
     Ok(())
+}
+
+fn utf16_null_terminated(text: &str) -> Vec<u16> {
+    OsStr::new(text)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 /*
@@ -244,7 +396,14 @@ pub(crate) fn handle_set_combobox_selection(
     })?;
 
     let wparam = selected_index.map(|i| i as isize).unwrap_or(-1);
-    let result = unsafe { SendMessageW(hwnd_combo, CB_SETCURSEL, Some(WPARAM(wparam as usize)), Some(LPARAM(0))) };
+    let result = unsafe {
+        SendMessageW(
+            hwnd_combo,
+            CB_SETCURSEL,
+            Some(WPARAM(wparam as usize)),
+            Some(LPARAM(0)),
+        )
+    };
 
     if result.0 == CB_ERR && selected_index.is_some() {
         log::warn!(
@@ -271,7 +430,8 @@ pub(crate) fn handle_cbn_selchange(
     control_id: ControlId,
     hwnd_combo: HWND,
 ) -> AppEvent {
-    let result = unsafe { SendMessageW(hwnd_combo, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))) };
+    let result =
+        unsafe { SendMessageW(hwnd_combo, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))) };
     let selected_index = if result.0 == CB_ERR {
         None
     } else {
@@ -314,5 +474,19 @@ mod tests {
             Some(raw as usize)
         };
         assert_eq!(result, Some(5));
+    }
+
+    #[test]
+    fn utf16_null_terminated_appends_zero_terminator() {
+        let utf16 = utf16_null_terminated("Default");
+        assert_eq!(utf16.last().copied(), Some(0));
+        assert!(utf16.len() >= 2);
+    }
+
+    #[test]
+    fn combo_border_paint_message_detects_paint_and_ncpaint() {
+        assert!(is_combo_border_paint_message(WM_PAINT));
+        assert!(!is_combo_border_paint_message(0x0085));
+        assert!(!is_combo_border_paint_message(CB_RESETCONTENT));
     }
 }
