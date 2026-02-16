@@ -624,6 +624,7 @@ impl NativeWindowData {
                             | ControlKind::Splitter
                             | ControlKind::Static
                             | ControlKind::ComboBox
+                            | ControlKind::ProgressBar
                     )
                 ) {
                     continue;
@@ -2178,15 +2179,6 @@ impl Win32ApiInternalState {
             unsafe {
                 let _ = SetWindowTheme(hwnd_combo_child, w!("DarkMode_Explorer"), None);
                 try_enable_dark_mode(hwnd_combo_child);
-
-                if let Ok(hwnd_parent_combo) = GetParent(hwnd_combo_child)
-                    && !hwnd_parent_combo.is_invalid()
-                    && hwnd_parent_combo != HWND_INVALID
-                    && Self::mark_combo_hwnd_themed(hwnd_parent_combo)
-                {
-                    let _ = SetWindowTheme(hwnd_parent_combo, w!("DarkMode_CFD"), None);
-                    try_enable_dark_mode(hwnd_parent_combo);
-                }
             }
         }
 

@@ -13,13 +13,10 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::Arc;
 use windows::Win32::{
-    Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
-    Graphics::Gdi::{CreateSolidBrush, DeleteObject, FrameRect, GetDC, ReleaseDC},
-    UI::Controls::SetWindowTheme,
+    Foundation::{HWND, LPARAM, WPARAM},
     UI::WindowsAndMessaging::{
-        CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
-        GWLP_WNDPROC, GetClientRect, GetWindowLongPtrW, HMENU, SendMessageW, SetWindowLongPtrW,
-        WINDOW_EX_STYLE, WINDOW_STYLE, WM_PAINT, WNDPROC, WS_CHILD, WS_VISIBLE, WS_VSCROLL,
+        CreateWindowExW, DestroyWindow, HMENU, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE,
+        WS_BORDER, WS_CHILD, WS_VISIBLE, WS_VSCROLL,
     },
 };
 use windows::core::{HSTRING, PCWSTR};
@@ -28,7 +25,6 @@ const WC_COMBOBOX: PCWSTR = windows::core::w!("COMBOBOX");
 
 // ComboBox styles
 const CBS_DROPDOWNLIST: u32 = 0x0003;
-const CBS_FLAT: u32 = 0x0008;
 const CBS_HASSTRINGS: u32 = 0x0200;
 
 // ComboBox messages
@@ -39,65 +35,6 @@ const CB_SETCURSEL: u32 = 0x014E;
 const CB_GETCURSEL: u32 = 0x0147;
 const CB_SETMINVISIBLE: u32 = 0x1701;
 const CB_ERR: isize = -1;
-const COMBO_BORDER_DARK_R: u8 = 31;
-const COMBO_BORDER_DARK_G: u8 = 36;
-const COMBO_BORDER_DARK_B: u8 = 48;
-
-fn is_combo_border_paint_message(msg: u32) -> bool {
-    matches!(msg, WM_PAINT)
-}
-
-unsafe fn paint_combo_dark_border(hwnd: HWND) {
-    unsafe {
-        let hdc = GetDC(Some(hwnd));
-        if hdc.is_invalid() {
-            return;
-        }
-
-        let mut rect = RECT::default();
-        if GetClientRect(hwnd, &mut rect).is_ok() {
-            if rect.right <= rect.left || rect.bottom <= rect.top {
-                let _ = ReleaseDC(Some(hwnd), hdc);
-                return;
-            }
-
-            let brush = CreateSolidBrush(COLORREF(
-                (COMBO_BORDER_DARK_R as u32)
-                    | ((COMBO_BORDER_DARK_G as u32) << 8)
-                    | ((COMBO_BORDER_DARK_B as u32) << 16),
-            ));
-            if !brush.0.is_null() {
-                let _ = FrameRect(hdc, &rect, brush);
-                let _ = DeleteObject(brush.into());
-            }
-        }
-
-        let _ = ReleaseDC(Some(hwnd), hdc);
-    }
-}
-
-unsafe extern "system" fn dark_combobox_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe {
-        let prev = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-        let result = if prev != 0 {
-            let prev_proc: WNDPROC = std::mem::transmute(prev);
-            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
-        } else {
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        };
-
-        if is_combo_border_paint_message(msg) {
-            paint_combo_dark_border(hwnd);
-        }
-
-        result
-    }
-}
 
 /*
  * Creates a native ComboBox (dropdown list style) and registers it.
@@ -184,7 +121,8 @@ pub(crate) fn handle_create_combobox_command(
             WS_CHILD
                 | WS_VISIBLE
                 | WS_VSCROLL
-                | WINDOW_STYLE(CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_FLAT),
+                | WS_BORDER
+                | WINDOW_STYLE(CBS_DROPDOWNLIST | CBS_HASSTRINGS),
             0,
             0,
             150,
@@ -205,25 +143,13 @@ pub(crate) fn handle_create_combobox_command(
         }
     };
 
-    // Try to apply dark control theme and enable dark mode best-effort.
-    // Use DarkMode_CFD for the closed ComboBox face; it controls face/border
-    // rendering differently than the list child theme.
-    unsafe {
-        let _ = SetWindowTheme(hwnd_combo, windows::core::w!("DarkMode_CFD"), None);
-    }
-
-    // Try to enable dark mode best-effort
+    // Enable dark mode — try_enable_dark_mode sets DarkMode_Explorer theme
+    // which gives the combo the same visual treatment as edit controls.
     crate::window_common::try_enable_dark_mode(hwnd_combo);
 
-    // Install a lightweight subclass to repaint the closed-face border in dark mode.
-    // This avoids bright/light themed border artifacts on some Windows theme paths.
-    unsafe {
-        #[allow(clippy::fn_to_numeric_cast)]
-        let prev = SetWindowLongPtrW(hwnd_combo, GWLP_WNDPROC, dark_combobox_proc as isize);
-        if prev != 0 {
-            SetWindowLongPtrW(hwnd_combo, GWLP_USERDATA, prev);
-        }
-    }
+    // Install a subclass that paints a uniform gray border, covering the
+    // system-drawn 3D sunken edge that appears white in dark mode.
+    super::dark_border::install_dark_border_subclass(hwnd_combo);
 
     // Request a usable dropdown list height even when layout keeps the control row compact.
     // On supported systems this avoids a near-zero dropdown area for CBS_DROPDOWNLIST.
@@ -481,12 +407,5 @@ mod tests {
         let utf16 = utf16_null_terminated("Default");
         assert_eq!(utf16.last().copied(), Some(0));
         assert!(utf16.len() >= 2);
-    }
-
-    #[test]
-    fn combo_border_paint_message_detects_paint_and_ncpaint() {
-        assert!(is_combo_border_paint_message(WM_PAINT));
-        assert!(!is_combo_border_paint_message(0x0085));
-        assert!(!is_combo_border_paint_message(CB_RESETCONTENT));
     }
 }

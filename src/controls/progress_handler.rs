@@ -80,6 +80,11 @@ pub(crate) fn handle_create_progress_bar_command(
         }
     };
 
+    // Apply dark mode theming and border subclass to eliminate the
+    // light 3D sunken edge that looks wrong on dark backgrounds.
+    crate::window_common::try_enable_dark_mode(hwnd_progress);
+    super::dark_border::install_dark_border_subclass(hwnd_progress);
+
     internal_state.with_window_data_write(window_id, |window_data| {
         if window_data.has_control(control_id) {
             unsafe {
