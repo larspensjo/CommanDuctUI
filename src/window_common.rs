@@ -83,7 +83,6 @@ pub(crate) const WM_APP_SPLITTER_DRAG_ENDED: u32 = WM_APP + 0x103;
 // General UI constants
 /// Default debounce delay for edit controls in milliseconds.
 pub const INPUT_DEBOUNCE_MS: u32 = 300;
-const COMBOBOX_DROPDOWN_NATIVE_MIN_HEIGHT_PX: i32 = 260;
 
 // Represents an invalid HWND, useful for initialization or checks.
 pub(crate) const HWND_INVALID: HWND = HWND(std::ptr::null_mut());
@@ -182,6 +181,7 @@ pub(crate) struct NativeWindowData {
     treeview_new_item_font: Option<HFONT>,
     suppress_erasebkgnd: bool,
     last_layout_rects: RefCell<HashMap<ControlId, RECT>>,
+    combo_dropdown_heal_attempted: HashSet<ControlId>,
 }
 
 impl NativeWindowData {
@@ -201,6 +201,7 @@ impl NativeWindowData {
             treeview_new_item_font: None,
             suppress_erasebkgnd: false,
             last_layout_rects: RefCell::new(HashMap::new()),
+            combo_dropdown_heal_attempted: HashSet::new(),
         }
     }
 
@@ -272,10 +273,21 @@ impl NativeWindowData {
 
     fn effective_native_height_for_control(&self, control_id: ControlId, base_height: i32) -> i32 {
         if self.get_control_kind(control_id) == Some(ControlKind::ComboBox) {
-            base_height.max(COMBOBOX_DROPDOWN_NATIVE_MIN_HEIGHT_PX)
+            match self.get_control_hwnd(control_id) {
+                Some(hwnd) => combobox_handler::compute_min_dropdown_height_px(hwnd, base_height),
+                None => base_height.max(combobox_handler::fallback_min_dropdown_height_px()),
+            }
         } else {
             base_height
         }
+    }
+
+    fn mark_dropdown_heal_attempted(&mut self, control_id: ControlId) -> bool {
+        self.combo_dropdown_heal_attempted.insert(control_id)
+    }
+
+    fn clear_dropdown_heal_attempted(&mut self, control_id: ControlId) {
+        self.combo_dropdown_heal_attempted.remove(&control_id);
     }
 
     pub(crate) fn find_control_id_by_hwnd(&self, hwnd: HWND) -> Option<ControlId> {
@@ -1891,12 +1903,28 @@ impl Win32ApiInternalState {
                     control_id.raw(),
                     window_id
                 );
+                let should_attempt_heal =
+                    self.with_window_data_write(window_id, |window_data| {
+                        Ok(window_data.mark_dropdown_heal_attempted(control_id))
+                    })
+                    .unwrap_or(false);
+                if should_attempt_heal {
+                    combobox_handler::validate_and_heal_dropdown_geometry(
+                        window_id,
+                        control_id,
+                        hwnd_control,
+                    );
+                }
             } else if notification_code == CBN_CLOSEUP as i32 {
                 log::info!(
                     "ComboBox ID {} dropdown closed in WinID {:?}",
                     control_id.raw(),
                     window_id
                 );
+                let _ = self.with_window_data_write(window_id, |window_data| {
+                    window_data.clear_dropdown_heal_attempted(control_id);
+                    Ok(())
+                });
             } else if notification_code == EN_CHANGE as i32 {
                 log::trace!(
                     "Edit control ID {} changed, starting debounce timer",
@@ -2729,9 +2757,10 @@ mod tests {
         let mut data = NativeWindowData::new(WindowId::new(1));
         let combo_id = ControlId::new(77);
         data.register_control_kind(combo_id, ControlKind::ComboBox);
+        data.register_control_hwnd(combo_id, HWND(0x1234isize as *mut _));
 
         let result = data.effective_native_height_for_control(combo_id, 26);
 
-        assert_eq!(result, COMBOBOX_DROPDOWN_NATIVE_MIN_HEIGHT_PX);
+        assert!(result >= combobox_handler::fallback_min_dropdown_height_px());
     }
 }

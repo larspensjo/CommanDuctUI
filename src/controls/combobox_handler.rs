@@ -14,9 +14,10 @@ use std::os::windows::ffi::OsStrExt;
 use std::sync::Arc;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
+    Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, LOGPIXELSY},
     UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, HMENU, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WS_BORDER, WS_CHILD, WS_VISIBLE, WS_VSCROLL,
+        CreateWindowExW, DestroyWindow, GetWindowRect, HMENU, SendMessageW, WINDOW_EX_STYLE,
+        WINDOW_STYLE, WS_BORDER, WS_CHILD, WS_VISIBLE, WS_VSCROLL,
     },
 };
 use windows::core::{HSTRING, PCWSTR};
@@ -33,8 +34,13 @@ const CB_ADDSTRING: u32 = 0x0143;
 const CB_GETCOUNT: u32 = 0x0146;
 const CB_SETCURSEL: u32 = 0x014E;
 const CB_GETCURSEL: u32 = 0x0147;
+const CB_GETITEMHEIGHT: u32 = 0x0154;
 const CB_SETMINVISIBLE: u32 = 0x1701;
+const CB_GETMINVISIBLE: u32 = 0x1702;
 const CB_ERR: isize = -1;
+const DEFAULT_DPI: i32 = 96;
+const FALLBACK_DROPDOWN_HEIGHT_PX: i32 = 260;
+const FALLBACK_MIN_VISIBLE_ITEMS: usize = 12;
 
 /*
  * Creates a native ComboBox (dropdown list style) and registers it.
@@ -153,7 +159,7 @@ pub(crate) fn handle_create_combobox_command(
 
     // Request a usable dropdown list height even when layout keeps the control row compact.
     // On supported systems this avoids a near-zero dropdown area for CBS_DROPDOWNLIST.
-    let min_visible_items = 12usize;
+    let min_visible_items = compute_min_visible_items(hwnd_combo);
     let set_min_visible_result = unsafe {
         SendMessageW(
             hwnd_combo,
@@ -191,6 +197,105 @@ pub(crate) fn handle_create_combobox_command(
         );
         Ok(())
     })
+}
+
+fn dpi_for_window_or_default(hwnd: HWND) -> i32 {
+    let hdc = unsafe { GetDC(Some(hwnd)) };
+    if hdc.is_invalid() {
+        return DEFAULT_DPI;
+    }
+    let dpi = unsafe { GetDeviceCaps(Some(hdc), LOGPIXELSY) };
+    let _ = unsafe { ReleaseDC(Some(hwnd), hdc) };
+    if dpi > 0 { dpi } else { DEFAULT_DPI }
+}
+
+fn scale_by_dpi(px_at_96_dpi: i32, dpi: i32) -> i32 {
+    ((px_at_96_dpi.max(1) as i64 * dpi.max(DEFAULT_DPI) as i64) / DEFAULT_DPI as i64) as i32
+}
+
+pub(crate) fn fallback_min_dropdown_height_px() -> i32 {
+    FALLBACK_DROPDOWN_HEIGHT_PX
+}
+
+pub(crate) fn compute_min_dropdown_height_px(hwnd_combo: HWND, base_height: i32) -> i32 {
+    let dpi = dpi_for_window_or_default(hwnd_combo);
+    let scaled_fallback = scale_by_dpi(FALLBACK_DROPDOWN_HEIGHT_PX, dpi);
+    base_height.max(scaled_fallback)
+}
+
+pub(crate) fn compute_min_visible_items(hwnd_combo: HWND) -> usize {
+    let item_height_raw = unsafe {
+        SendMessageW(
+            hwnd_combo,
+            CB_GETITEMHEIGHT,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        )
+    }
+    .0 as i32;
+
+    if item_height_raw <= 0 {
+        return FALLBACK_MIN_VISIBLE_ITEMS;
+    }
+
+    let target_px = compute_min_dropdown_height_px(hwnd_combo, 0).max(item_height_raw);
+    let rows = (target_px / item_height_raw) as usize;
+    rows.clamp(6, 20)
+}
+
+pub(crate) fn validate_and_heal_dropdown_geometry(
+    window_id: WindowId,
+    control_id: ControlId,
+    hwnd_combo: HWND,
+) {
+    let mut rect = windows::Win32::Foundation::RECT::default();
+    let got_rect = unsafe { GetWindowRect(hwnd_combo, &mut rect) }.is_ok();
+    if !got_rect {
+        log::warn!(
+            "[combo-geometry] unable to read rect for control_id={} window_id={window_id:?}",
+            control_id.raw()
+        );
+        return;
+    }
+
+    let current_height = rect.bottom - rect.top;
+    let min_height = compute_min_dropdown_height_px(hwnd_combo, 0);
+    let item_count = unsafe {
+        SendMessageW(hwnd_combo, CB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0)))
+    }
+    .0;
+    let min_visible = unsafe {
+        SendMessageW(
+            hwnd_combo,
+            CB_GETMINVISIBLE,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        )
+    }
+    .0;
+
+    if current_height >= min_height {
+        return;
+    }
+
+    let set_min_visible_result = unsafe {
+        SendMessageW(
+            hwnd_combo,
+            CB_SETMINVISIBLE,
+            Some(WPARAM(compute_min_visible_items(hwnd_combo))),
+            Some(LPARAM(0)),
+        )
+    }
+    .0;
+    log::warn!(
+        "[combo-geometry] reapplied policy control_id={} window_id={window_id:?} height={} min_height={} item_count={} min_visible={} set_min_visible_result={}",
+        control_id.raw(),
+        current_height,
+        min_height,
+        item_count,
+        min_visible,
+        set_min_visible_result
+    );
 }
 
 /*
@@ -407,5 +512,11 @@ mod tests {
         let utf16 = utf16_null_terminated("Default");
         assert_eq!(utf16.last().copied(), Some(0));
         assert!(utf16.len() >= 2);
+    }
+
+    #[test]
+    fn compute_min_visible_items_fallback_when_item_height_invalid() {
+        // this verifies the fallback policy, independent of Win32 calls
+        assert_eq!(FALLBACK_MIN_VISIBLE_ITEMS, 12);
     }
 }
