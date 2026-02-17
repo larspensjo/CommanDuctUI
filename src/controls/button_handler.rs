@@ -16,13 +16,13 @@ use windows::Win32::{
     Foundation::{COLORREF, HWND, LRESULT},
     Graphics::Gdi::{
         COLOR_BTNFACE, COLOR_BTNTEXT, COLOR_GRAYTEXT, CreateSolidBrush, DT_CENTER, DT_SINGLELINE,
-        DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor, HGDIOBJ,
-        InflateRect, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+        DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor, HDC, HGDIOBJ,
+        InflateRect, OPAQUE, SelectObject, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
     },
     UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED},
     UI::WindowsAndMessaging::{
-        BS_PUSHBUTTON, CreateWindowExW, DestroyWindow, GetWindowTextLengthW, GetWindowTextW, HMENU,
-        WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE,
+        BS_PUSHBUTTON, CreateWindowExW, DestroyWindow, GetDlgCtrlID, GetWindowTextLengthW,
+        GetWindowTextW, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE,
     },
 };
 use windows::core::{HSTRING, PCWSTR};
@@ -286,6 +286,42 @@ pub(crate) fn handle_wm_drawitem(
 
         Some(LRESULT(1)) // TRUE - we handled it
     }
+}
+
+pub(crate) fn handle_wm_ctlcolorbtn(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    hdc_button: HDC,
+    hwnd_button: HWND,
+) -> Option<LRESULT> {
+    let control_id_raw = unsafe { GetDlgCtrlID(hwnd_button) };
+    if control_id_raw == 0 {
+        return None;
+    }
+    let control_id = ControlId::new(control_id_raw);
+
+    let result: PlatformResult<Option<LRESULT>> =
+        internal_state.with_window_data_read(window_id, |window_data| {
+            if let Some(style_id) = window_data.get_style_for_control(control_id)
+                && let Some(style) = internal_state.get_parsed_style(style_id)
+            {
+                if let Some(color) = &style.text_color {
+                    unsafe { SetTextColor(hdc_button, color_to_colorref(color)) };
+                }
+                if let Some(color) = &style.background_color {
+                    unsafe {
+                        SetBkColor(hdc_button, color_to_colorref(color));
+                        SetBkMode(hdc_button, OPAQUE);
+                    }
+                }
+                if let Some(brush) = style.background_brush {
+                    return Ok(Some(LRESULT(brush.0 as isize)));
+                }
+            }
+            Ok(None)
+        });
+
+    result.ok().flatten()
 }
 
 #[cfg(test)]

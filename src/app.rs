@@ -2,8 +2,8 @@ use crate::{
     command_executor,
     controls::{
         button_handler, combobox_handler, dialog_handler, label_handler, menu_handler,
-        panel_handler, progress_handler, radiobutton_handler, richedit_handler,
-        splitter_handler, styling_handler, treeview_handler,
+        panel_handler, progress_handler, radiobutton_handler, richedit_handler, splitter_handler,
+        styling_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
@@ -671,6 +671,13 @@ impl Win32ApiInternalState {
                 text,
                 group_start,
             ),
+            PlatformCommand::SetRadioButtonChecked {
+                window_id,
+                control_id,
+                checked,
+            } => radiobutton_handler::handle_set_radiobutton_checked_command(
+                self, window_id, control_id, checked,
+            ),
             PlatformCommand::SetProgressBarRange {
                 window_id,
                 control_id,
@@ -957,6 +964,13 @@ impl Win32ApiInternalState {
                         }
                         _ = InvalidateRect(Some(control_hwnd), None, true);
                     }
+                }
+            }
+            // Radio buttons need classic rendering to respect WM_CTLCOLORBTN colors.
+            else if control_kind == window_common::ControlKind::RadioButton {
+                unsafe {
+                    let empty = HSTRING::new();
+                    _ = SetWindowTheme(control_hwnd, &empty, &empty);
                 }
             }
             // RichEdit uses dedicated messages for background/text color.

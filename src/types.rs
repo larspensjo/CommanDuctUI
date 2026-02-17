@@ -582,6 +582,11 @@ pub enum PlatformCommand {
         text: String,
         group_start: bool,
     },
+    SetRadioButtonChecked {
+        window_id: WindowId,
+        control_id: ControlId,
+        checked: bool,
+    },
 
     // --- Style Management Commands ---
     // This style can then be applied to controls.

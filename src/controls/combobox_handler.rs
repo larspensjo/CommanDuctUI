@@ -14,7 +14,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::sync::Arc;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
-    Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, LOGPIXELSY},
+    Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSY, ReleaseDC},
     UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, GetWindowRect, HMENU, SendMessageW, WINDOW_EX_STYLE,
         WINDOW_STYLE, WS_BORDER, WS_CHILD, WS_VISIBLE, WS_VSCROLL,
@@ -260,10 +260,8 @@ pub(crate) fn validate_and_heal_dropdown_geometry(
 
     let current_height = rect.bottom - rect.top;
     let min_height = compute_min_dropdown_height_px(hwnd_combo, 0);
-    let item_count = unsafe {
-        SendMessageW(hwnd_combo, CB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0)))
-    }
-    .0;
+    let item_count =
+        unsafe { SendMessageW(hwnd_combo, CB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0))) }.0;
     let min_visible = unsafe {
         SendMessageW(
             hwnd_combo,

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 - 2026-02-17
+- **BREAKING**: Add `SetRadioButtonChecked` variant to `PlatformCommand` for explicit radio checked-state control from app state.
+- Route `WM_CTLCOLORSTATIC` for `ControlKind::RadioButton` through button color handling so dark palette is applied on all radio paint paths.
+- Disable themed rendering for radio buttons during style application (`SetWindowTheme("", "")`) so `WM_CTLCOLOR*` colors are respected consistently.
+
 ## 0.3.0 - 2026-02-16
 - **BREAKING**: Add `ComboBox` and `RadioButton` variants to `ControlKind` enum.
 - **BREAKING**: Add `ComboBox` and `RadioButton` variants to `StyleId` enum.

@@ -1,7 +1,7 @@
 use crate::window_common::ControlKind;
 use log::{debug, warn};
 use windows::Win32::UI::WindowsAndMessaging::{
-    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +9,7 @@ pub(crate) enum PaintRoute {
     LabelStatic,
     Edit,
     ComboListBox,
+    Button,
     Default,
 }
 
@@ -22,6 +23,20 @@ pub(crate) fn resolve_paint_route(kind: ControlKind, msg: u32) -> PaintRoute {
         (ControlKind::ComboBox, WM_CTLCOLORLISTBOX | WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT) => {
             debug!("[Paint] ControlKind::ComboBox routed {msg:#x} to combo listbox styling");
             PaintRoute::ComboListBox
+        }
+        (ControlKind::Button, WM_CTLCOLORBTN) => {
+            debug!("[Paint] ControlKind::Button routed WM_CTLCOLORBTN to button styling");
+            PaintRoute::Button
+        }
+        (ControlKind::RadioButton, WM_CTLCOLORBTN) => {
+            debug!("[Paint] ControlKind::RadioButton routed WM_CTLCOLORBTN to button styling");
+            PaintRoute::Button
+        }
+        (ControlKind::RadioButton, WM_CTLCOLORSTATIC) => {
+            debug!(
+                "[Paint] ControlKind::RadioButton routed WM_CTLCOLORSTATIC to button styling"
+            );
+            PaintRoute::Button
         }
         (ControlKind::Static, WM_CTLCOLORSTATIC) => PaintRoute::LabelStatic,
         (ControlKind::Static, WM_CTLCOLOREDIT) => {
@@ -83,6 +98,31 @@ mod tests {
             resolve_paint_route(ControlKind::ComboBox, WM_CTLCOLOREDIT),
             PaintRoute::ComboListBox,
             "Some systems/themes route the closed combo face through WM_CTLCOLOREDIT"
+        );
+    }
+
+    #[test]
+    fn button_routes_btn_message_to_button() {
+        assert_eq!(
+            resolve_paint_route(ControlKind::Button, WM_CTLCOLORBTN),
+            PaintRoute::Button
+        );
+    }
+
+    #[test]
+    fn radiobutton_routes_btn_message_to_button() {
+        assert_eq!(
+            resolve_paint_route(ControlKind::RadioButton, WM_CTLCOLORBTN),
+            PaintRoute::Button
+        );
+    }
+
+    #[test]
+    fn radiobutton_routes_static_message_to_button() {
+        assert_eq!(
+            resolve_paint_route(ControlKind::RadioButton, WM_CTLCOLORSTATIC),
+            PaintRoute::Button,
+            "some radio-button paint paths surface as WM_CTLCOLORSTATIC"
         );
     }
 }

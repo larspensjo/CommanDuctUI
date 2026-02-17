@@ -10,11 +10,10 @@ use crate::types::WindowId;
 use crate::window_common::ControlKind;
 
 use std::sync::Arc;
-use windows::Win32::{
-    UI::WindowsAndMessaging::{
-        BS_AUTORADIOBUTTON, CreateWindowExW, DestroyWindow, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WS_CHILD, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
-    },
+use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{
+    BM_SETCHECK, BS_AUTORADIOBUTTON, CreateWindowExW, DestroyWindow, HMENU, SendMessageW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{HSTRING, PCWSTR};
 
@@ -167,6 +166,46 @@ fn compute_radiobutton_style(group_start: bool) -> WINDOW_STYLE {
     style
 }
 
+pub(crate) fn handle_set_radiobutton_checked_command(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    control_id: ControlId,
+    checked: bool,
+) -> PlatformResult<()> {
+    let hwnd_radio = internal_state.with_window_data_read(window_id, |window_data| {
+        let hwnd = window_data.get_control_hwnd(control_id).ok_or_else(|| {
+            PlatformError::InvalidHandle(format!(
+                "RadioButton with ID {} not found for window {window_id:?}",
+                control_id.raw()
+            ))
+        })?;
+
+        let kind = window_data.get_control_kind(control_id);
+        if kind != Some(ControlKind::RadioButton) {
+            return Err(PlatformError::OperationFailed(format!(
+                "Control ID {} is not a RadioButton in window {window_id:?}",
+                control_id.raw()
+            )));
+        }
+        Ok(hwnd)
+    })?;
+
+    let check_state = win32_check_state(checked);
+    unsafe {
+        let _ = SendMessageW(
+            hwnd_radio,
+            BM_SETCHECK,
+            Some(WPARAM(check_state)),
+            Some(LPARAM(0)),
+        );
+    }
+    Ok(())
+}
+
+fn win32_check_state(checked: bool) -> usize {
+    if checked { 1 } else { 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,8 +213,8 @@ mod tests {
     #[test]
     fn radiobutton_style_includes_group_flags_when_group_start() {
         let style = compute_radiobutton_style(true);
-        let expected = WS_CHILD | WS_VISIBLE | WS_GROUP | WS_TABSTOP
-            | WINDOW_STYLE(BS_AUTORADIOBUTTON as u32);
+        let expected =
+            WS_CHILD | WS_VISIBLE | WS_GROUP | WS_TABSTOP | WINDOW_STYLE(BS_AUTORADIOBUTTON as u32);
         assert_eq!(style, expected);
     }
 
@@ -184,5 +223,11 @@ mod tests {
         let style = compute_radiobutton_style(false);
         let expected = WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_AUTORADIOBUTTON as u32);
         assert_eq!(style, expected);
+    }
+
+    #[test]
+    fn checked_state_maps_to_expected_win32_constant() {
+        assert_eq!(win32_check_state(true), 1);
+        assert_eq!(win32_check_state(false), 0);
     }
 }

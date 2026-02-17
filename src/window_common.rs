@@ -1606,7 +1606,7 @@ impl Win32ApiInternalState {
                     lresult_override = Some(def_result);
                 }
             }
-            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let hwnd_control = HWND(lparam.0 as *mut c_void);
                 let route = self.resolve_ctlcolor_route(window_id, hwnd_control, msg);
@@ -1619,6 +1619,9 @@ impl Win32ApiInternalState {
                     }
                     paint_router::PaintRoute::ComboListBox => {
                         self.handle_wm_ctlcolorlistbox(window_id, hdc, hwnd_control)
+                    }
+                    paint_router::PaintRoute::Button => {
+                        button_handler::handle_wm_ctlcolorbtn(self, window_id, hdc, hwnd_control)
                     }
                     _ => None,
                 };
@@ -1903,8 +1906,8 @@ impl Win32ApiInternalState {
                     control_id.raw(),
                     window_id
                 );
-                let should_attempt_heal =
-                    self.with_window_data_write(window_id, |window_data| {
+                let should_attempt_heal = self
+                    .with_window_data_write(window_id, |window_data| {
                         Ok(window_data.mark_dropdown_heal_attempted(control_id))
                     })
                     .unwrap_or(false);
@@ -2331,6 +2334,7 @@ fn fallback_ctlcolor_route(msg: u32) -> paint_router::PaintRoute {
         WM_CTLCOLOREDIT => paint_router::PaintRoute::Edit,
         WM_CTLCOLORSTATIC => paint_router::PaintRoute::LabelStatic,
         WM_CTLCOLORLISTBOX => paint_router::PaintRoute::ComboListBox,
+        WM_CTLCOLORBTN => paint_router::PaintRoute::Button,
         _ => paint_router::PaintRoute::Default,
     }
 }
