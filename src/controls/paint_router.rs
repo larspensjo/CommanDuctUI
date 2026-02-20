@@ -33,9 +33,7 @@ pub(crate) fn resolve_paint_route(kind: ControlKind, msg: u32) -> PaintRoute {
             PaintRoute::Button
         }
         (ControlKind::RadioButton, WM_CTLCOLORSTATIC) => {
-            debug!(
-                "[Paint] ControlKind::RadioButton routed WM_CTLCOLORSTATIC to button styling"
-            );
+            debug!("[Paint] ControlKind::RadioButton routed WM_CTLCOLORSTATIC to button styling");
             PaintRoute::Button
         }
         (ControlKind::CheckBox, WM_CTLCOLORBTN) => {

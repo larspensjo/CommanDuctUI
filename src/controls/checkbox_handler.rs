@@ -224,10 +224,7 @@ mod tests {
     #[test]
     fn checkbox_style_includes_tabstop() {
         let style = compute_checkbox_style();
-        assert!(
-            style.0 & WS_TABSTOP.0 != 0,
-            "style must include WS_TABSTOP"
-        );
+        assert!(style.0 & WS_TABSTOP.0 != 0, "style must include WS_TABSTOP");
     }
 
     #[test]
