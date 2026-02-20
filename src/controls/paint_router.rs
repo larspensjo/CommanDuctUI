@@ -38,6 +38,14 @@ pub(crate) fn resolve_paint_route(kind: ControlKind, msg: u32) -> PaintRoute {
             );
             PaintRoute::Button
         }
+        (ControlKind::CheckBox, WM_CTLCOLORBTN) => {
+            debug!("[Paint] ControlKind::CheckBox routed WM_CTLCOLORBTN to button styling");
+            PaintRoute::Button
+        }
+        (ControlKind::CheckBox, WM_CTLCOLORSTATIC) => {
+            debug!("[Paint] ControlKind::CheckBox routed WM_CTLCOLORSTATIC to button styling");
+            PaintRoute::Button
+        }
         (ControlKind::Static, WM_CTLCOLORSTATIC) => PaintRoute::LabelStatic,
         (ControlKind::Static, WM_CTLCOLOREDIT) => {
             warn!("[Paint] ControlKind::Static received WM_CTLCOLOREDIT; using default route");
@@ -123,6 +131,23 @@ mod tests {
             resolve_paint_route(ControlKind::RadioButton, WM_CTLCOLORSTATIC),
             PaintRoute::Button,
             "some radio-button paint paths surface as WM_CTLCOLORSTATIC"
+        );
+    }
+
+    #[test]
+    fn checkbox_routes_btn_message_to_button() {
+        assert_eq!(
+            resolve_paint_route(ControlKind::CheckBox, WM_CTLCOLORBTN),
+            PaintRoute::Button
+        );
+    }
+
+    #[test]
+    fn checkbox_routes_static_message_to_button() {
+        assert_eq!(
+            resolve_paint_route(ControlKind::CheckBox, WM_CTLCOLORSTATIC),
+            PaintRoute::Button,
+            "checkbox paint paths can surface as WM_CTLCOLORSTATIC"
         );
     }
 }

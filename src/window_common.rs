@@ -12,8 +12,8 @@
 use super::{
     app::Win32ApiInternalState,
     controls::{
-        button_handler, combobox_handler, input_handler, label_handler, paint_router,
-        styling_handler, treeview_handler,
+        button_handler, checkbox_handler, combobox_handler, input_handler, label_handler,
+        paint_router, styling_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::StyleId,
@@ -105,6 +105,7 @@ pub(crate) enum ControlKind {
     Splitter,
     ComboBox,
     RadioButton,
+    CheckBox,
 }
 
 /*
@@ -1166,6 +1167,21 @@ pub(crate) fn init_app_dark_mode() {
     });
 }
 
+/// Enables dark mode and forces classic rendering (empty theme) on button-like controls.
+///
+/// This is the canonical setup path for RadioButton and CheckBox controls: it calls
+/// `try_enable_dark_mode` then `SetWindowTheme("", "")` so that `WM_CTLCOLORBTN` /
+/// `WM_CTLCOLORSTATIC` messages are delivered to the parent and our palette is applied.
+/// Using a single helper here prevents the split between creation-time dark-mode enablement
+/// and style-application-time classic rendering that caused previous dark-theme regressions.
+pub(crate) fn apply_button_dark_mode_classic_render(hwnd: HWND) {
+    try_enable_dark_mode(hwnd);
+    unsafe {
+        let empty = windows::core::HSTRING::new();
+        let _ = SetWindowTheme(hwnd, &empty, &empty);
+    }
+}
+
 /// Best-effort enablement of dark mode for non-client areas (notably scrollbars) on supported OS builds.
 pub(crate) fn try_enable_dark_mode(hwnd: HWND) {
     try_enable_dark_menu_theme_support(hwnd);
@@ -1834,6 +1850,21 @@ impl Win32ApiInternalState {
                         return Some(AppEvent::RadioButtonSelected {
                             window_id,
                             control_id,
+                        });
+                    }
+                    Ok(Some(ControlKind::CheckBox)) => {
+                        // BS_AUTOCHECKBOX has already toggled the state; read it back.
+                        let checked = checkbox_handler::read_checkbox_state(hwnd_control);
+                        log::debug!(
+                            "CheckBox ID {} clicked in WinID {:?}, new checked={}",
+                            control_id.raw(),
+                            window_id,
+                            checked
+                        );
+                        return Some(AppEvent::CheckBoxToggled {
+                            window_id,
+                            control_id,
+                            checked,
                         });
                     }
                     Ok(Some(ControlKind::Button)) | Ok(None) => {

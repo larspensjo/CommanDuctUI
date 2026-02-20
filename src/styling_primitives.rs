@@ -83,4 +83,6 @@ pub enum StyleId {
     // ComboBox and RadioButton controls
     ComboBox,
     RadioButton,
+    // CheckBox control
+    CheckBox,
 }

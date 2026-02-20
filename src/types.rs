@@ -306,6 +306,13 @@ pub enum AppEvent {
         window_id: WindowId,
         control_id: ControlId,
     },
+    // Signals that a CheckBox was toggled by the user.
+    // The `checked` field reflects the new state after the click.
+    CheckBoxToggled {
+        window_id: WindowId,
+        control_id: ControlId,
+        checked: bool,
+    },
 }
 
 // Defines the severity of a message to be displayed, e.g., in the status bar.
@@ -583,6 +590,17 @@ pub enum PlatformCommand {
         group_start: bool,
     },
     SetRadioButtonChecked {
+        window_id: WindowId,
+        control_id: ControlId,
+        checked: bool,
+    },
+    CreateCheckBox {
+        window_id: WindowId,
+        parent_control_id: Option<ControlId>,
+        control_id: ControlId,
+        text: String,
+    },
+    SetCheckBoxChecked {
         window_id: WindowId,
         control_id: ControlId,
         checked: bool,

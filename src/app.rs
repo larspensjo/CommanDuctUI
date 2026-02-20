@@ -1,9 +1,9 @@
 use crate::{
     command_executor,
     controls::{
-        button_handler, combobox_handler, dialog_handler, label_handler, menu_handler,
-        panel_handler, progress_handler, radiobutton_handler, richedit_handler, splitter_handler,
-        styling_handler, treeview_handler,
+        button_handler, checkbox_handler, combobox_handler, dialog_handler, label_handler,
+        menu_handler, panel_handler, progress_handler, radiobutton_handler, richedit_handler,
+        splitter_handler, styling_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
@@ -678,6 +678,25 @@ impl Win32ApiInternalState {
             } => radiobutton_handler::handle_set_radiobutton_checked_command(
                 self, window_id, control_id, checked,
             ),
+            PlatformCommand::CreateCheckBox {
+                window_id,
+                parent_control_id,
+                control_id,
+                text,
+            } => checkbox_handler::handle_create_checkbox_command(
+                self,
+                window_id,
+                parent_control_id,
+                control_id,
+                text,
+            ),
+            PlatformCommand::SetCheckBoxChecked {
+                window_id,
+                control_id,
+                checked,
+            } => checkbox_handler::handle_set_checkbox_checked_command(
+                self, window_id, control_id, checked,
+            ),
             PlatformCommand::SetProgressBarRange {
                 window_id,
                 control_id,
@@ -966,12 +985,12 @@ impl Win32ApiInternalState {
                     }
                 }
             }
-            // Radio buttons need classic rendering to respect WM_CTLCOLORBTN colors.
-            else if control_kind == window_common::ControlKind::RadioButton {
-                unsafe {
-                    let empty = HSTRING::new();
-                    _ = SetWindowTheme(control_hwnd, &empty, &empty);
-                }
+            // RadioButton and CheckBox both need classic rendering so WM_CTLCOLORBTN is delivered.
+            else if matches!(
+                control_kind,
+                window_common::ControlKind::RadioButton | window_common::ControlKind::CheckBox
+            ) {
+                window_common::apply_button_dark_mode_classic_render(control_hwnd);
             }
             // RichEdit uses dedicated messages for background/text color.
             else if control_kind == window_common::ControlKind::RichEdit

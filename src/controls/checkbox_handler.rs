@@ -1,6 +1,8 @@
 /*
- * Encapsulates Win32-specific operations for RadioButton controls.
- * Provides creation of auto radio buttons with optional group start semantics.
+ * Encapsulates Win32-specific operations for CheckBox controls.
+ * Provides creation of BS_AUTOCHECKBOX controls and checked-state management.
+ * [CDU-Control-CheckBoxV1] CheckBoxes are created exactly once per logical ID
+ * and emit toggle events via AppEvent::CheckBoxToggled.
  */
 
 use crate::app::Win32ApiInternalState;
@@ -11,34 +13,31 @@ use crate::window_common::ControlKind;
 
 use std::sync::Arc;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::UI::Controls::BST_CHECKED;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_SETCHECK, BS_AUTORADIOBUTTON, CreateWindowExW, DestroyWindow, HMENU, SendMessageW,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
+    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, CreateWindowExW, DestroyWindow, HMENU, SendMessageW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{HSTRING, PCWSTR};
 
 const WC_BUTTON: PCWSTR = windows::core::w!("BUTTON");
 
 /*
- * Creates a native RadioButton (BS_AUTORADIOBUTTON) and registers it.
- * Uses read/write/no-lock/write phase pattern for robustness.
- * [CDU-Control-RadioButtonV1] RadioButtons are created exactly once per logical ID
- * and emit selection events via AppEvents.
+ * Creates a native CheckBox (BS_AUTOCHECKBOX) and registers it.
+ * Uses read/write/no-lock/write phase pattern for robustness (same as radiobutton_handler).
  */
-pub(crate) fn handle_create_radiobutton_command(
+pub(crate) fn handle_create_checkbox_command(
     internal_state: &Arc<Win32ApiInternalState>,
     window_id: WindowId,
     parent_control_id: Option<ControlId>,
     control_id: ControlId,
     text: String,
-    group_start: bool,
 ) -> PlatformResult<()> {
     log::debug!(
-        "RadioButtonHandler: handle_create_radiobutton_command for WinID {window_id:?}, ParentID {:?}, ControlID {}, Text: '{}', GroupStart: {}",
+        "CheckBoxHandler: handle_create_checkbox_command for WinID {window_id:?}, ParentID {:?}, ControlID {}, Text: '{}'",
         parent_control_id.as_ref().map(|id| id.raw()),
         control_id.raw(),
         text,
-        group_start
     );
 
     // Phase 1: Read-only pre-checks and get parent HWND
@@ -46,11 +45,11 @@ pub(crate) fn handle_create_radiobutton_command(
         internal_state.with_window_data_read(window_id, |window_data| {
             if window_data.has_control(control_id) {
                 log::warn!(
-                    "RadioButtonHandler: RadioButton with ID {} already exists for window {window_id:?}.",
+                    "CheckBoxHandler: CheckBox with ID {} already exists for window {window_id:?}.",
                     control_id.raw()
                 );
                 return Err(PlatformError::OperationFailed(format!(
-                    "RadioButton with ID {} already exists for window {window_id:?}",
+                    "CheckBox with ID {} already exists for window {window_id:?}",
                     control_id.raw()
                 )));
             }
@@ -58,11 +57,11 @@ pub(crate) fn handle_create_radiobutton_command(
             let hwnd_parent = match parent_control_id {
                 Some(id) => window_data.get_control_hwnd(id).ok_or_else(|| {
                     log::warn!(
-                        "RadioButtonHandler: Parent control with ID {} not found for CreateRadioButton in WinID {window_id:?}",
+                        "CheckBoxHandler: Parent control with ID {} not found for CreateCheckBox in WinID {window_id:?}",
                         id.raw()
                     );
                     PlatformError::InvalidHandle(format!(
-                        "Parent control with ID {} not found for CreateRadioButton in WinID {window_id:?}",
+                        "Parent control with ID {} not found for CreateCheckBox in WinID {window_id:?}",
                         id.raw()
                     ))
                 })?,
@@ -71,11 +70,11 @@ pub(crate) fn handle_create_radiobutton_command(
 
             if hwnd_parent.is_invalid() {
                 log::error!(
-                    "RadioButtonHandler: Parent HWND for CreateRadioButton is invalid (WinID: {window_id:?}, ParentControlID: {:?})",
+                    "CheckBoxHandler: Parent HWND for CreateCheckBox is invalid (WinID: {window_id:?}, ParentControlID: {:?})",
                     parent_control_id.as_ref().map(|id| id.raw())
                 );
                 return Err(PlatformError::InvalidHandle(format!(
-                    "RadioButtonHandler: Parent HWND for CreateRadioButton is invalid (WinID: {window_id:?}, ParentControlID: {:?})",
+                    "CheckBoxHandler: Parent HWND for CreateCheckBox is invalid (WinID: {window_id:?}, ParentControlID: {:?})",
                     parent_control_id.as_ref().map(|id| id.raw())
                 )));
             }
@@ -86,22 +85,22 @@ pub(crate) fn handle_create_radiobutton_command(
     internal_state.with_window_data_write(window_id, |window_data| {
         if window_data.has_control(control_id) {
             log::warn!(
-                "RadioButtonHandler: RadioButton with ID {} already exists for window {window_id:?}.",
+                "CheckBoxHandler: CheckBox with ID {} already exists for window {window_id:?}.",
                 control_id.raw()
             );
             return Err(PlatformError::OperationFailed(format!(
-                "RadioButton with ID {} already exists for window {window_id:?}",
+                "CheckBox with ID {} already exists for window {window_id:?}",
                 control_id.raw()
             )));
         }
-        window_data.register_control_kind(control_id, ControlKind::RadioButton);
+        window_data.register_control_kind(control_id, ControlKind::CheckBox);
         Ok(())
     })?;
 
     // Phase 2: Create the native control without holding any locks
     let h_instance = internal_state.h_instance();
-    let style = compute_radiobutton_style(group_start);
-    let hwnd_radio = unsafe {
+    let style = compute_checkbox_style();
+    let hwnd_checkbox = unsafe {
         match CreateWindowExW(
             WINDOW_EX_STYLE(0),
             WC_BUTTON,
@@ -128,62 +127,50 @@ pub(crate) fn handle_create_radiobutton_command(
     };
 
     // Enable dark mode and force classic rendering so WM_CTLCOLORBTN is delivered.
-    crate::window_common::apply_button_dark_mode_classic_render(hwnd_radio);
+    crate::window_common::apply_button_dark_mode_classic_render(hwnd_checkbox);
 
     // Phase 3: Register the new HWND
     internal_state.with_window_data_write(window_id, |window_data| {
         // Re-check for race condition
         if window_data.has_control(control_id) {
             log::warn!(
-                "RadioButtonHandler: Control ID {} was created concurrently for window {window_id:?}. Destroying new HWND.",
+                "CheckBoxHandler: Control ID {} was created concurrently for window {window_id:?}. Destroying new HWND.",
                 control_id.raw()
             );
-            let _ = unsafe { DestroyWindow(hwnd_radio) };
+            let _ = unsafe { DestroyWindow(hwnd_checkbox) };
             return Err(PlatformError::OperationFailed(format!(
                 "Control ID {} created concurrently",
                 control_id.raw()
             )));
         }
 
-        window_data.register_control_hwnd(control_id, hwnd_radio);
+        window_data.register_control_hwnd(control_id, hwnd_checkbox);
         log::debug!(
-            "RadioButtonHandler: Registered RadioButton with ControlID {} and HWND {hwnd_radio:?}",
+            "CheckBoxHandler: Registered CheckBox with ControlID {} and HWND {hwnd_checkbox:?}",
             control_id.raw()
         );
         Ok(())
     })
 }
 
-/*
- * Pure helper for computing RadioButton style flags.
- * Group start buttons get WS_GROUP | WS_TABSTOP for mutual exclusion.
- */
-fn compute_radiobutton_style(group_start: bool) -> WINDOW_STYLE {
-    let mut style = WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_AUTORADIOBUTTON as u32);
-    if group_start {
-        style |= WS_GROUP | WS_TABSTOP;
-    }
-    style
-}
-
-pub(crate) fn handle_set_radiobutton_checked_command(
+pub(crate) fn handle_set_checkbox_checked_command(
     internal_state: &Arc<Win32ApiInternalState>,
     window_id: WindowId,
     control_id: ControlId,
     checked: bool,
 ) -> PlatformResult<()> {
-    let hwnd_radio = internal_state.with_window_data_read(window_id, |window_data| {
+    let hwnd_checkbox = internal_state.with_window_data_read(window_id, |window_data| {
         let hwnd = window_data.get_control_hwnd(control_id).ok_or_else(|| {
             PlatformError::InvalidHandle(format!(
-                "RadioButton with ID {} not found for window {window_id:?}",
+                "CheckBox with ID {} not found for window {window_id:?}",
                 control_id.raw()
             ))
         })?;
 
         let kind = window_data.get_control_kind(control_id);
-        if kind != Some(ControlKind::RadioButton) {
+        if kind != Some(ControlKind::CheckBox) {
             return Err(PlatformError::OperationFailed(format!(
-                "Control ID {} is not a RadioButton in window {window_id:?}",
+                "Control ID {} is not a CheckBox in window {window_id:?}",
                 control_id.raw()
             )));
         }
@@ -193,13 +180,28 @@ pub(crate) fn handle_set_radiobutton_checked_command(
     let check_state = win32_check_state(checked);
     unsafe {
         let _ = SendMessageW(
-            hwnd_radio,
+            hwnd_checkbox,
             BM_SETCHECK,
             Some(WPARAM(check_state)),
             Some(LPARAM(0)),
         );
     }
     Ok(())
+}
+
+/// Reads the current check state of a CheckBox HWND via BM_GETCHECK.
+/// Returns `true` if the checkbox is checked (BST_CHECKED), `false` otherwise.
+pub(crate) fn read_checkbox_state(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    let result = unsafe { SendMessageW(hwnd, BM_GETCHECK, None, None) };
+    result.0 as u32 == BST_CHECKED.0
+}
+
+/*
+ * Pure helper for computing CheckBox style flags.
+ * BS_AUTOCHECKBOX handles toggling automatically; WS_TABSTOP makes it keyboard-accessible.
+ */
+fn compute_checkbox_style() -> WINDOW_STYLE {
+    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32)
 }
 
 fn win32_check_state(checked: bool) -> usize {
@@ -211,18 +213,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn radiobutton_style_includes_group_flags_when_group_start() {
-        let style = compute_radiobutton_style(true);
-        let expected =
-            WS_CHILD | WS_VISIBLE | WS_GROUP | WS_TABSTOP | WINDOW_STYLE(BS_AUTORADIOBUTTON as u32);
-        assert_eq!(style, expected);
+    fn checkbox_style_includes_autocheckbox() {
+        let style = compute_checkbox_style();
+        assert!(
+            style.0 & (BS_AUTOCHECKBOX as u32) != 0,
+            "style must include BS_AUTOCHECKBOX"
+        );
     }
 
     #[test]
-    fn radiobutton_style_excludes_group_flags_when_not_group_start() {
-        let style = compute_radiobutton_style(false);
-        let expected = WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_AUTORADIOBUTTON as u32);
-        assert_eq!(style, expected);
+    fn checkbox_style_includes_tabstop() {
+        let style = compute_checkbox_style();
+        assert!(
+            style.0 & WS_TABSTOP.0 != 0,
+            "style must include WS_TABSTOP"
+        );
     }
 
     #[test]
