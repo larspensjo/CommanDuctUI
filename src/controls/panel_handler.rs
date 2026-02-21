@@ -172,8 +172,7 @@ pub(crate) fn handle_create_panel_command(
         };
 
         unsafe {
-            #[allow(clippy::fn_to_numeric_cast)]
-            let prev = SetWindowLongPtrW(hwnd_panel, GWLP_WNDPROC, forwarding_panel_proc as isize);
+            let prev = SetWindowLongPtrW(hwnd_panel, GWLP_WNDPROC, forwarding_panel_proc as *const () as isize);
             SetWindowLongPtrW(hwnd_panel, GWLP_USERDATA, prev);
         }
 

@@ -87,8 +87,11 @@ unsafe extern "system" fn dark_border_subclass_proc(
 /// The original window procedure is saved and restored via `GWLP_USERDATA`.
 pub(crate) fn install_dark_border_subclass(hwnd: HWND) {
     unsafe {
-        #[allow(clippy::fn_to_numeric_cast)]
-        let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, dark_border_subclass_proc as isize);
+        let prev = SetWindowLongPtrW(
+            hwnd,
+            GWLP_WNDPROC,
+            dark_border_subclass_proc as *const () as isize,
+        );
         if prev != 0 {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, prev);
         }
