@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1 - 2026-02-25
+- Validate `DefineLayout` input and reject layouts with multiple sibling `DockStyle::Fill` rules under the same parent (hard error instead of warning + silent degradation).
+- Add unit tests covering layout validation for invalid duplicate Fill siblings and valid one-Fill-per-parent layouts.
+
 ## 0.4.0 - 2026-02-17
 - **BREAKING**: Add `SetRadioButtonChecked` variant to `PlatformCommand` for explicit radio checked-state control from app state.
 - Route `WM_CTLCOLORSTATIC` for `ControlKind::RadioButton` through button color handling so dark palette is applied on all radio paint paths.

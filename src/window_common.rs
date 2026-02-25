@@ -735,8 +735,40 @@ impl NativeWindowData {
         self.next_menu_item_id_counter
     }
 
-    pub(crate) fn define_layout(&mut self, rules: Vec<LayoutRule>) {
+    pub(crate) fn define_layout(&mut self, rules: Vec<LayoutRule>) -> PlatformResult<()> {
+        Self::validate_layout_rules(&rules)?;
         self.layout_rules = Some(rules);
+        Ok(())
+    }
+
+    fn validate_layout_rules(rules: &[LayoutRule]) -> PlatformResult<()> {
+        let mut fill_by_parent: HashMap<Option<ControlId>, Vec<ControlId>> = HashMap::new();
+        for rule in rules {
+            if rule.dock_style == DockStyle::Fill {
+                fill_by_parent
+                    .entry(rule.parent_control_id)
+                    .or_default()
+                    .push(rule.control_id);
+            }
+        }
+
+        for (parent_id, fill_controls) in fill_by_parent {
+            if fill_controls.len() > 1 {
+                let parent_desc = parent_id
+                    .map(|id| format!("control {}", id.raw()))
+                    .unwrap_or_else(|| "main window".to_string());
+                let control_ids = fill_controls
+                    .iter()
+                    .map(|id| id.raw().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(PlatformError::OperationFailed(format!(
+                    "DefineLayout rejected: parent {parent_desc} has multiple DockStyle::Fill children ({control_ids}). CommanDuctUI supports exactly one Fill child per parent."
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     /*
@@ -2667,6 +2699,68 @@ mod tests {
         assert_eq!(map.get(&ControlId::new(1)).unwrap().bottom, 20);
         assert_eq!(map.get(&ControlId::new(2)).unwrap().top, 20);
         assert_eq!(map.get(&ControlId::new(2)).unwrap().bottom, 100);
+    }
+
+    #[test]
+    fn define_layout_validation_rejects_multiple_fill_siblings() {
+        let rules = vec![
+            LayoutRule {
+                control_id: ControlId::new(10),
+                parent_control_id: Some(ControlId::new(1)),
+                dock_style: DockStyle::Fill,
+                order: 0,
+                fixed_size: None,
+                margin: (0, 0, 0, 0),
+            },
+            LayoutRule {
+                control_id: ControlId::new(11),
+                parent_control_id: Some(ControlId::new(1)),
+                dock_style: DockStyle::Fill,
+                order: 1,
+                fixed_size: None,
+                margin: (0, 0, 0, 0),
+            },
+        ];
+
+        let err = NativeWindowData::validate_layout_rules(&rules)
+            .expect_err("multiple Fill siblings should be rejected");
+        let message = err.to_string();
+        assert!(message.contains("multiple DockStyle::Fill children"));
+        assert!(message.contains("10"));
+        assert!(message.contains("11"));
+    }
+
+    #[test]
+    fn define_layout_validation_allows_one_fill_per_parent() {
+        let rules = vec![
+            LayoutRule {
+                control_id: ControlId::new(20),
+                parent_control_id: Some(ControlId::new(1)),
+                dock_style: DockStyle::Fill,
+                order: 0,
+                fixed_size: None,
+                margin: (0, 0, 0, 0),
+            },
+            LayoutRule {
+                control_id: ControlId::new(21),
+                parent_control_id: Some(ControlId::new(2)),
+                dock_style: DockStyle::Fill,
+                order: 0,
+                fixed_size: None,
+                margin: (0, 0, 0, 0),
+            },
+            LayoutRule {
+                control_id: ControlId::new(22),
+                parent_control_id: Some(ControlId::new(1)),
+                dock_style: DockStyle::Top,
+                order: 1,
+                fixed_size: Some(10),
+                margin: (0, 0, 0, 0),
+            },
+        ];
+
+        NativeWindowData::validate_layout_rules(&rules)
+            .expect("one Fill child per parent should be valid");
     }
 
     #[test]
