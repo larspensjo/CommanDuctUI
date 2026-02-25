@@ -351,6 +351,28 @@ pub enum SplitterOrientation {
     Horizontal, // Divides top/bottom (future extension)
 }
 
+/// A single entity trend line sent to the chart control.
+#[derive(Debug, Clone)]
+pub struct ChartLineData {
+    /// Entity name shown in the legend.
+    pub label: String,
+    /// Weekly mention counts (one per x-axis point).
+    pub weekly_counts: Vec<u32>,
+    /// COLORREF (0x00BBGGRR) for this line's pen.
+    pub color: u32,
+}
+
+/// Full data payload for a `SetChartData` command.
+#[derive(Debug, Clone)]
+pub struct ChartDataPacket {
+    /// Lines to draw (index 0 = top legend entry). Max 10.
+    pub lines: Vec<ChartLineData>,
+    /// X-axis week label strings (same length as each `weekly_counts`).
+    pub week_labels: Vec<String>,
+    /// When true the chart renders an empty "Loading…" state.
+    pub is_loading: bool,
+}
+
 // Represents platform-agnostic commands sent from the application logic to the platform layer.
 //
 // These commands instruct the platform layer to perform specific actions on
@@ -498,6 +520,12 @@ pub enum PlatformCommand {
         window_id: WindowId,
         parent_control_id: Option<ControlId>,
         control_id: ControlId,
+    },
+    /// Replaces the chart's displayed data and triggers a repaint.
+    SetChartData {
+        window_id: WindowId,
+        control_id: ControlId,
+        data: ChartDataPacket,
     },
     CreateProgressBar {
         window_id: WindowId,

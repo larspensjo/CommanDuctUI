@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 - 2026-02-25
+- Add `ChartDataPacket` and `ChartLineData` public types.
+- **Add** `PlatformCommand::SetChartData { window_id, control_id, data }`.
+- `chart_handler`: store chart data in GWLP_USERDATA (`ChartWindowState`);
+  free Box on `WM_DESTROY`; paint dynamic multi-line chart with colored text legend;
+  handle `SetChartData` command.
+
 ## 0.5.0 - 2026-02-25
 - Add `ControlKind::Chart` (internal, pub(crate)).
 - **Add** `PlatformCommand::CreateChart { window_id, parent_control_id, control_id }`.
