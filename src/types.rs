@@ -493,6 +493,12 @@ pub enum PlatformCommand {
         parent_control_id: Option<ControlId>,
         control_id: ControlId,
     },
+    /// Creates a GDI line chart control as a child of `parent_control_id`.
+    CreateChart {
+        window_id: WindowId,
+        parent_control_id: Option<ControlId>,
+        control_id: ControlId,
+    },
     CreateProgressBar {
         window_id: WindowId,
         parent_control_id: Option<ControlId>,

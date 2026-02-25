@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 - 2026-02-25
+- Add `ControlKind::Chart` (internal, pub(crate)).
+- **Add** `PlatformCommand::CreateChart { window_id, parent_control_id, control_id }`.
+- Add `chart_handler`: custom `HarvesterChartControl` window class with dark-theme GDI paint.
+  Background `#1E2228`, dashed gridlines `#3A3F47`, hardcoded polyline `#4EC9B0`.
+  WndProc handles `WM_ERASEBKGND` (no flicker), `WM_PAINT`, `WM_SIZE` (repaint on resize).
+
 ## 0.4.1 - 2026-02-25
 - Validate `DefineLayout` input and reject layouts with multiple sibling `DockStyle::Fill` rules under the same parent (hard error instead of warning + silent degradation).
 - Add unit tests covering layout validation for invalid duplicate Fill siblings and valid one-Fill-per-parent layouts.

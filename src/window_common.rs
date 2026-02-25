@@ -106,6 +106,8 @@ pub(crate) enum ControlKind {
     ComboBox,
     RadioButton,
     CheckBox,
+    /// Owner-drawn line chart with its own WndProc.
+    Chart,
 }
 
 /*
@@ -638,6 +640,7 @@ impl NativeWindowData {
                             | ControlKind::Static
                             | ControlKind::ComboBox
                             | ControlKind::ProgressBar
+                            | ControlKind::Chart
                     )
                 ) {
                     continue;

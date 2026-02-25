@@ -1,5 +1,6 @@
 // Declare the control handler sub-modules
 pub(crate) mod button_handler;
+pub(crate) mod chart_handler;
 pub(crate) mod checkbox_handler;
 pub(crate) mod combobox_handler;
 pub(crate) mod dark_border;

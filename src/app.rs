@@ -1,9 +1,9 @@
 use crate::{
     command_executor,
     controls::{
-        button_handler, checkbox_handler, combobox_handler, dialog_handler, label_handler,
-        menu_handler, panel_handler, progress_handler, radiobutton_handler, richedit_handler,
-        splitter_handler, styling_handler, treeview_handler,
+        button_handler, chart_handler, checkbox_handler, combobox_handler, dialog_handler,
+        label_handler, menu_handler, panel_handler, progress_handler, radiobutton_handler,
+        richedit_handler, splitter_handler, styling_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
@@ -605,6 +605,16 @@ impl Win32ApiInternalState {
                 parent_control_id,
                 control_id,
             } => command_executor::execute_create_rich_edit(
+                self,
+                window_id,
+                parent_control_id,
+                control_id,
+            ),
+            PlatformCommand::CreateChart {
+                window_id,
+                parent_control_id,
+                control_id,
+            } => chart_handler::handle_create_chart_command(
                 self,
                 window_id,
                 parent_control_id,
