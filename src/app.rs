@@ -3,7 +3,7 @@ use crate::{
     controls::{
         button_handler, chart_handler, checkbox_handler, combobox_handler, dialog_handler,
         label_handler, menu_handler, panel_handler, progress_handler, radiobutton_handler,
-        richedit_handler, splitter_handler, styling_handler, treeview_handler,
+        richedit_handler, splitter_handler, styling_handler, tab_bar_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
@@ -711,6 +711,49 @@ impl Win32ApiInternalState {
                 checked,
             } => checkbox_handler::handle_set_checkbox_checked_command(
                 self, window_id, control_id, checked,
+            ),
+            PlatformCommand::CreateTabBar {
+                window_id,
+                control_id,
+                parent_control_id,
+                items,
+            } => tab_bar_handler::handle_create_tab_bar_command(
+                self,
+                window_id,
+                control_id,
+                parent_control_id,
+                items,
+            ),
+            PlatformCommand::SetTabBarItems {
+                window_id,
+                control_id,
+                items,
+            } => tab_bar_handler::handle_set_tab_bar_items(self, window_id, control_id, items),
+            PlatformCommand::SetTabBarSelection {
+                window_id,
+                control_id,
+                selected_index,
+            } => tab_bar_handler::handle_set_tab_bar_selection(
+                self,
+                window_id,
+                control_id,
+                selected_index,
+            ),
+            PlatformCommand::SetTabBarStyle {
+                window_id,
+                control_id,
+                background_color,
+                text_color,
+                accent_color,
+                font,
+            } => tab_bar_handler::handle_set_tab_bar_style(
+                self,
+                window_id,
+                control_id,
+                background_color,
+                text_color,
+                accent_color,
+                font,
             ),
             PlatformCommand::SetProgressBarRange {
                 window_id,

@@ -15,4 +15,5 @@ pub(crate) mod radiobutton_handler;
 pub(crate) mod richedit_handler;
 pub(crate) mod splitter_handler;
 pub(crate) mod styling_handler;
+pub(crate) mod tab_bar_handler;
 pub(crate) mod treeview_handler;

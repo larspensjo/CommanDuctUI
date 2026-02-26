@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 - 2026-06-11
+- **BREAKING**: Add `TabBarSelectionChanged` variant to `AppEvent` enum.
+- **Add** `PlatformCommand::CreateTabBar`, `SetTabBarItems`, `SetTabBarSelection`, `SetTabBarStyle`.
+- Add `ControlKind::TabBar` and `StyleId::TabBar` / `StyleId::TabBarAccent`.
+- Add `tab_bar_handler`: custom `HarvesterTabBarControl` Win32 window class with GDI paint.
+  Renders tab labels, hover fill, 3 px accent underline for the active tab, and inactive text blend.
+  Routes `WM_LBUTTONDOWN` click via `WM_APP_TAB_SELECTED` parent notification → `AppEvent::TabBarSelectionChanged`.
+- Add `WM_APP_TAB_SELECTED` (`WM_APP + 0x104`) constant.
+- All palette colors derived from background / text / accent with 40 % blend for inactive text and 6 % white overlay for hover fill.
+
 ## 0.6.0 - 2026-02-25
 - Add `ChartDataPacket` and `ChartLineData` public types.
 - **Add** `PlatformCommand::SetChartData { window_id, control_id, data }`.

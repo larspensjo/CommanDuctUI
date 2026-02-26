@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use super::styling_primitives::{ControlStyle, StyleId};
+use super::styling_primitives::{Color, ControlStyle, FontDescription, StyleId};
 
 // An opaque identifier for a native window, managed by the platform layer.
 //
@@ -312,6 +312,12 @@ pub enum AppEvent {
         window_id: WindowId,
         control_id: ControlId,
         checked: bool,
+    },
+    // Signals that the user clicked a tab in a TabBar control.
+    TabBarSelectionChanged {
+        window_id: WindowId,
+        control_id: ControlId,
+        selected_index: usize,
     },
 }
 
@@ -639,7 +645,34 @@ pub enum PlatformCommand {
         control_id: ControlId,
         checked: bool,
     },
-
+    /// Creates a custom TabBar control (bottom-accent-line style).
+    CreateTabBar {
+        window_id: WindowId,
+        control_id: ControlId,
+        parent_control_id: Option<ControlId>,
+        items: Vec<String>,
+    },
+    /// Replaces all tab labels and triggers a repaint.
+    SetTabBarItems {
+        window_id: WindowId,
+        control_id: ControlId,
+        items: Vec<String>,
+    },
+    /// Drives the active tab from the reducer (no event emitted for programmatic changes).
+    SetTabBarSelection {
+        window_id: WindowId,
+        control_id: ControlId,
+        selected_index: usize,
+    },
+    /// Pushes resolved palette data from `StyleId::TabBar`/`TabBarAccent` into the control.
+    SetTabBarStyle {
+        window_id: WindowId,
+        control_id: ControlId,
+        background_color: Color,
+        text_color: Color,
+        accent_color: Color,
+        font: Option<FontDescription>,
+    },
     // --- Style Management Commands ---
     // This style can then be applied to controls.
     DefineStyle {

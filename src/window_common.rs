@@ -79,6 +79,8 @@ pub(crate) const WM_APP_MAIN_WINDOW_UI_SETUP_COMPLETE: u32 = WM_APP + 0x101;
 // Custom application messages for splitter drag events.
 pub(crate) const WM_APP_SPLITTER_DRAGGING: u32 = WM_APP + 0x102;
 pub(crate) const WM_APP_SPLITTER_DRAG_ENDED: u32 = WM_APP + 0x103;
+// Custom application message sent by TabBar WndProc to parent on tab click.
+pub(crate) const WM_APP_TAB_SELECTED: u32 = WM_APP + 0x104;
 
 // General UI constants
 /// Default debounce delay for edit controls in milliseconds.
@@ -108,6 +110,8 @@ pub(crate) enum ControlKind {
     CheckBox,
     /// Owner-drawn line chart with its own WndProc.
     Chart,
+    /// Custom-WndProc tab bar with bottom accent line and hover effects.
+    TabBar,
 }
 
 /*
@@ -641,6 +645,7 @@ impl NativeWindowData {
                             | ControlKind::ComboBox
                             | ControlKind::ProgressBar
                             | ControlKind::Chart
+                            | ControlKind::TabBar
                     )
                 ) {
                     continue;
@@ -1620,6 +1625,10 @@ impl Win32ApiInternalState {
             WM_APP_SPLITTER_DRAGGING | WM_APP_SPLITTER_DRAG_ENDED => {
                 event_to_send = self.handle_wm_app_splitter(hwnd, wparam, lparam, window_id, msg);
             }
+            WM_APP_TAB_SELECTED => {
+                event_to_send =
+                    self.handle_wm_app_tab_selected(hwnd, wparam, lparam, window_id);
+            }
             WM_GETMINMAXINFO => {
                 lresult_override =
                     Some(self.handle_wm_getminmaxinfo(hwnd, wparam, lparam, window_id));
@@ -2163,6 +2172,42 @@ impl Win32ApiInternalState {
             }
             _ => None,
         }
+    }
+
+    /*
+     * Handles WM_APP_TAB_SELECTED messages sent by the TabBar WndProc to its parent.
+     * WPARAM = HWND of the tab bar control.
+     * LPARAM = selected tab index.
+     */
+    fn handle_wm_app_tab_selected(
+        self: &Arc<Self>,
+        _hwnd_parent: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        window_id: WindowId,
+    ) -> Option<AppEvent> {
+        let hwnd_tab_bar = HWND(wparam.0 as *mut std::ffi::c_void);
+        let selected_index = lparam.0 as usize;
+
+        let control_id_raw = unsafe { GetDlgCtrlID(hwnd_tab_bar) };
+        if control_id_raw == 0 {
+            log::warn!(
+                "[TabBar] WM_APP_TAB_SELECTED from HWND {:?} without control ID",
+                hwnd_tab_bar
+            );
+            return None;
+        }
+
+        let control_id = ControlId::new(control_id_raw);
+        log::debug!(
+            "[TabBar] Tab selected: control_id={} selected_index={selected_index}",
+            control_id.raw()
+        );
+        Some(AppEvent::TabBarSelectionChanged {
+            window_id,
+            control_id,
+            selected_index,
+        })
     }
 
     fn resolve_ctlcolor_route(

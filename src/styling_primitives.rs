@@ -85,4 +85,7 @@ pub enum StyleId {
     RadioButton,
     // CheckBox control
     CheckBox,
+    // TabBar custom control
+    TabBar,
+    TabBarAccent,
 }
