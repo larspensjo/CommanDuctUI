@@ -33,10 +33,10 @@ use windows::Win32::{
     UI::{
         Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         WindowsAndMessaging::{
-            CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GetClientRect,
-            GetParent, GetWindowLongPtrW, HMENU, RegisterClassW, SendMessageW,
-            SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN,
-            WM_MOUSEMOVE, WM_PAINT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_VISIBLE,
+            CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GET_ANCESTOR_FLAGS,
+            GWLP_USERDATA, GetAncestor, GetClientRect, GetWindowLongPtrW, HMENU, RegisterClassW,
+            SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND,
+            WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_VISIBLE,
         },
     },
 };
@@ -219,16 +219,18 @@ unsafe extern "system" fn tab_bar_wnd_proc(
                 if let Some(idx) = hit.filter(|&i| i != (*state).selected_index) {
                         (*state).selected_index = idx;
                         let _ = InvalidateRect(Some(hwnd), None, false);
-                        // Notify parent: WPARAM = our HWND, LPARAM = selected index
-                        let parent = GetParent(hwnd).ok();
-                        if let Some(parent_hwnd) = parent.filter(|p| !p.is_invalid()) {
-                                let _ = SendMessageW(
-                                    parent_hwnd,
-                                    WM_APP_TAB_SELECTED,
-                                    Some(WPARAM(hwnd.0 as usize)),
-                                    Some(LPARAM(idx as isize)),
-                                );
-                            }
+                        // Notify root window: WPARAM = our HWND, LPARAM = selected index.
+                        // Use GetAncestor(GA_ROOT) so the message reaches the main window's
+                        // WndProc even when the tab bar is a grandchild (panel nesting).
+                        let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)); // GA_ROOT
+                        if !root.is_invalid() {
+                            let _ = SendMessageW(
+                                root,
+                                WM_APP_TAB_SELECTED,
+                                Some(WPARAM(hwnd.0 as usize)),
+                                Some(LPARAM(idx as isize)),
+                            );
+                        }
                 }
             }
             LRESULT(0)

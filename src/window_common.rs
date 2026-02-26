@@ -1626,8 +1626,7 @@ impl Win32ApiInternalState {
                 event_to_send = self.handle_wm_app_splitter(hwnd, wparam, lparam, window_id, msg);
             }
             WM_APP_TAB_SELECTED => {
-                event_to_send =
-                    self.handle_wm_app_tab_selected(hwnd, wparam, lparam, window_id);
+                event_to_send = self.handle_wm_app_tab_selected(hwnd, wparam, lparam, window_id);
             }
             WM_GETMINMAXINFO => {
                 lresult_override =
