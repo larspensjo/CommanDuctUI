@@ -19,15 +19,14 @@ use crate::window_common::{ControlKind, WM_APP_TAB_SELECTED};
 
 use std::sync::{Arc, OnceLock};
 
-use windows::core::{HSTRING, PCWSTR, w};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM},
     Graphics::Gdi::{
         BeginPaint, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET,
-        DEFAULT_GUI_FONT, DEFAULT_QUALITY, DeleteObject, EndPaint, FF_DONTCARE, FillRect,
-        FW_BOLD, FW_NORMAL, GetDC, GetDeviceCaps, GetStockObject, GetTextExtentPoint32W, HFONT,
-        HDC, HGDIOBJ, InvalidateRect, LOGPIXELSY, OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC,
-        SelectObject, SetBkMode, SetTextColor, TextOutW, TRANSPARENT,
+        DEFAULT_GUI_FONT, DEFAULT_QUALITY, DeleteObject, EndPaint, FF_DONTCARE, FW_BOLD, FW_NORMAL,
+        FillRect, GetDC, GetDeviceCaps, GetStockObject, GetTextExtentPoint32W, HDC, HFONT, HGDIOBJ,
+        InvalidateRect, LOGPIXELSY, OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC, SelectObject,
+        SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
     },
     System::WindowsProgramming::MulDiv,
     UI::{
@@ -40,6 +39,7 @@ use windows::Win32::{
         },
     },
 };
+use windows::core::{HSTRING, PCWSTR, w};
 
 // WM_MOUSELEAVE is not exported by windows-rs; define the constant directly.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -47,13 +47,25 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 // ── Default palette ───────────────────────────────────────────────────────────
 
 fn default_background() -> Color {
-    Color { r: 0x2E, g: 0x32, b: 0x39 }
+    Color {
+        r: 0x2E,
+        g: 0x32,
+        b: 0x39,
+    }
 }
 fn default_text() -> Color {
-    Color { r: 0xE0, g: 0xE5, b: 0xEC }
+    Color {
+        r: 0xE0,
+        g: 0xE5,
+        b: 0xEC,
+    }
 }
 fn default_accent() -> Color {
-    Color { r: 0x00, g: 0x80, b: 0xFF }
+    Color {
+        r: 0x00,
+        g: 0x80,
+        b: 0xFF,
+    }
 }
 
 // ── TabBarPalette ─────────────────────────────────────────────────────────────
@@ -100,7 +112,13 @@ impl TabBarPalette {
             b: overlay(background.b),
         };
 
-        Self { background, text_active: text, text_inactive, hover_fill, accent }
+        Self {
+            background,
+            text_active: text,
+            text_inactive,
+            hover_fill,
+            accent,
+        }
     }
 }
 
@@ -142,9 +160,9 @@ impl TabBarState {
 impl Drop for TabBarState {
     fn drop(&mut self) {
         if let Some(hfont) = self.font.take().filter(|f| !f.is_invalid()) {
-                unsafe {
-                    let _ = DeleteObject(hfont.into());
-                }
+            unsafe {
+                let _ = DeleteObject(hfont.into());
+            }
         }
     }
 }
@@ -217,20 +235,20 @@ unsafe extern "system" fn tab_bar_wnd_proc(
                 let state = get_or_init_state(hwnd);
                 let hit = hit_test(&(*state).item_rects, x, y);
                 if let Some(idx) = hit.filter(|&i| i != (*state).selected_index) {
-                        (*state).selected_index = idx;
-                        let _ = InvalidateRect(Some(hwnd), None, false);
-                        // Notify root window: WPARAM = our HWND, LPARAM = selected index.
-                        // Use GetAncestor(GA_ROOT) so the message reaches the main window's
-                        // WndProc even when the tab bar is a grandchild (panel nesting).
-                        let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)); // GA_ROOT
-                        if !root.is_invalid() {
-                            let _ = SendMessageW(
-                                root,
-                                WM_APP_TAB_SELECTED,
-                                Some(WPARAM(hwnd.0 as usize)),
-                                Some(LPARAM(idx as isize)),
-                            );
-                        }
+                    (*state).selected_index = idx;
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    // Notify root window: WPARAM = our HWND, LPARAM = selected index.
+                    // Use GetAncestor(GA_ROOT) so the message reaches the main window's
+                    // WndProc even when the tab bar is a grandchild (panel nesting).
+                    let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)); // GA_ROOT
+                    if !root.is_invalid() {
+                        let _ = SendMessageW(
+                            root,
+                            WM_APP_TAB_SELECTED,
+                            Some(WPARAM(hwnd.0 as usize)),
+                            Some(LPARAM(idx as isize)),
+                        );
+                    }
                 }
             }
             LRESULT(0)
@@ -315,7 +333,11 @@ unsafe fn paint_tab_bar(hwnd: HWND, hdc: HDC) {
     // Select font (saves the old one for restoration).
     let stock_font: HGDIOBJ = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
     let font_hgdiobj: HGDIOBJ = if let Some(hf) = state.font {
-        if hf.is_invalid() { stock_font } else { hf.into() }
+        if hf.is_invalid() {
+            stock_font
+        } else {
+            hf.into()
+        }
     } else {
         stock_font
     };
@@ -340,7 +362,12 @@ unsafe fn paint_tab_bar(hwnd: HWND, hdc: HDC) {
         tab_widths.push(sz.cx + h_pad * 2);
     }
     for &tw in &tab_widths {
-        new_rects.push(RECT { left: x_cursor, top: 0, right: x_cursor + tw, bottom: h });
+        new_rects.push(RECT {
+            left: x_cursor,
+            top: 0,
+            right: x_cursor + tw,
+            bottom: h,
+        });
         x_cursor += tw;
     }
     state.item_rects = new_rects.clone();
@@ -398,7 +425,6 @@ unsafe fn paint_tab_bar(hwnd: HWND, hdc: HDC) {
 /// Creates an HFONT from a `FontDescription`.  Returns `Ok(None)` if `font_desc`
 /// is `None`.  Follows the same pattern as `Win32ApiInternalState::define_style`.
 fn create_hfont(font_desc: &FontDescription) -> PlatformResult<HFONT> {
-
     let hdc_screen = unsafe { GetDC(None) };
     if hdc_screen.is_invalid() {
         return Err(PlatformError::OperationFailed(
@@ -638,7 +664,7 @@ pub(crate) fn handle_set_tab_bar_style(
         let state = get_or_init_state(hwnd);
         // Drop old font if any.
         if let Some(old_font) = (*state).font.take().filter(|f| !f.is_invalid()) {
-                let _ = DeleteObject(old_font.into());
+            let _ = DeleteObject(old_font.into());
         }
         (*state).palette = TabBarPalette::new(background_color, text_color, accent_color);
         (*state).font = new_font;
@@ -655,9 +681,21 @@ mod tests {
 
     #[test]
     fn tab_bar_palette_derives_text_inactive_and_hover_fill() {
-        let bg = Color { r: 0x2E, g: 0x32, b: 0x39 };
-        let text = Color { r: 0xE0, g: 0xE5, b: 0xEC };
-        let accent = Color { r: 0x00, g: 0x80, b: 0xFF };
+        let bg = Color {
+            r: 0x2E,
+            g: 0x32,
+            b: 0x39,
+        };
+        let text = Color {
+            r: 0xE0,
+            g: 0xE5,
+            b: 0xEC,
+        };
+        let accent = Color {
+            r: 0x00,
+            g: 0x80,
+            b: 0xFF,
+        };
         let palette = TabBarPalette::new(bg.clone(), text.clone(), accent.clone());
 
         // text_inactive = 40% text + 60% background
@@ -691,9 +729,24 @@ mod tests {
     #[test]
     fn hit_test_returns_correct_index() {
         let rects = vec![
-            RECT { left: 0, top: 0, right: 60, bottom: 28 },
-            RECT { left: 60, top: 0, right: 130, bottom: 28 },
-            RECT { left: 130, top: 0, right: 190, bottom: 28 },
+            RECT {
+                left: 0,
+                top: 0,
+                right: 60,
+                bottom: 28,
+            },
+            RECT {
+                left: 60,
+                top: 0,
+                right: 130,
+                bottom: 28,
+            },
+            RECT {
+                left: 130,
+                top: 0,
+                right: 190,
+                bottom: 28,
+            },
         ];
         assert_eq!(hit_test(&rects, 10, 5), Some(0));
         assert_eq!(hit_test(&rects, 80, 14), Some(1));
