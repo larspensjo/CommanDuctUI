@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1 - 2026-02-26
+- **Bug fix**: `tab_bar_handler` now sends `WM_APP_TAB_SELECTED` to the root-ancestor window (`GetAncestor(hwnd, GA_ROOT)`) instead of the direct parent.
+  Previously, clicks on tab bars nested inside panels were silently dropped because the panel WndProc called `DefWindowProcW` for unrecognised messages.
+
 ## 0.7.0 - 2026-06-11
 - **BREAKING**: Add `TabBarSelectionChanged` variant to `AppEvent` enum.
 - **Add** `PlatformCommand::CreateTabBar`, `SetTabBarItems`, `SetTabBarSelection`, `SetTabBarStyle`.
