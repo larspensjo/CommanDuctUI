@@ -620,9 +620,11 @@ impl Win32ApiInternalState {
                 parent_control_id,
                 control_id,
             ),
-            PlatformCommand::SetChartData { window_id, control_id, data } => {
-                chart_handler::handle_set_chart_data_command(self, window_id, control_id, data)
-            }
+            PlatformCommand::SetChartData {
+                window_id,
+                control_id,
+                data,
+            } => chart_handler::handle_set_chart_data_command(self, window_id, control_id, data),
             PlatformCommand::CreateProgressBar {
                 window_id,
                 parent_control_id,

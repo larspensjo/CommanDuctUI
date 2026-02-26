@@ -22,15 +22,14 @@ use std::sync::{Arc, OnceLock};
 use windows::Win32::{
     Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Gdi::{
-        BeginPaint, CreatePen, CreateSolidBrush, DeleteObject, EndPaint, FillRect,
-        GetStockObject, InvalidateRect, LineTo, MoveToEx, PAINTSTRUCT, PS_DOT, PS_SOLID,
-        Polyline, SelectObject, SetBkMode, SetTextColor, TextOutW, BACKGROUND_MODE,
-        DEFAULT_GUI_FONT,
+        BACKGROUND_MODE, BeginPaint, CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject,
+        EndPaint, FillRect, GetStockObject, InvalidateRect, LineTo, MoveToEx, PAINTSTRUCT, PS_DOT,
+        PS_SOLID, Polyline, SelectObject, SetBkMode, SetTextColor, TextOutW,
     },
     UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, HMENU,
-        RegisterClassW, SetWindowLongPtrW, GWLP_USERDATA, WINDOW_EX_STYLE, WM_DESTROY,
-        WM_ERASEBKGND, WM_PAINT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE,
+        CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, HMENU,
+        RegisterClassW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND, WM_PAINT,
+        WM_SIZE, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE,
     },
 };
 use windows::core::{HSTRING, PCWSTR, w};
@@ -49,7 +48,11 @@ struct ChartWindowState {
 impl Default for ChartWindowState {
     fn default() -> Self {
         Self {
-            data: ChartDataPacket { lines: vec![], week_labels: vec![], is_loading: false },
+            data: ChartDataPacket {
+                lines: vec![],
+                week_labels: vec![],
+                is_loading: false,
+            },
         }
     }
 }
@@ -189,9 +192,7 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
         unsafe { SetBkMode(hdc, BACKGROUND_MODE(1)) }; // TRANSPARENT = 1
         let _ = unsafe { SetTextColor(hdc, COLORREF(0x0080_8080)) };
         let msg: Vec<u16> = "Loading\u{2026}".encode_utf16().collect();
-        let _ = unsafe {
-            TextOutW(hdc, margin_left, margin_top + plot_h / 2 - 8, &msg)
-        };
+        let _ = unsafe { TextOutW(hdc, margin_left, margin_top + plot_h / 2 - 8, &msg) };
         return;
     }
 

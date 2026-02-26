@@ -54,9 +54,8 @@ pub(crate) fn execute_define_layout(
         window_id
     );
 
-    internal_state.with_window_data_write(window_id, |window_data| {
-        window_data.define_layout(rules)
-    })?;
+    internal_state
+        .with_window_data_write(window_id, |window_data| window_data.define_layout(rules))?;
 
     // Now trigger the layout recalculation.
     internal_state.trigger_layout_recalculation(window_id);
