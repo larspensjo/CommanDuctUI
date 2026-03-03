@@ -279,13 +279,16 @@ impl NativeWindowData {
     }
 
     fn effective_native_height_for_control(&self, control_id: ControlId, base_height: i32) -> i32 {
-        if self.get_control_kind(control_id) == Some(ControlKind::ComboBox) {
-            match self.get_control_hwnd(control_id) {
+        match self.get_control_kind(control_id) {
+            Some(ControlKind::ComboBox) => match self.get_control_hwnd(control_id) {
                 Some(hwnd) => combobox_handler::compute_min_dropdown_height_px(hwnd, base_height),
                 None => base_height.max(combobox_handler::fallback_min_dropdown_height_px()),
-            }
-        } else {
-            base_height
+            },
+            Some(ControlKind::CheckBox) => match self.get_control_hwnd(control_id) {
+                Some(hwnd) => checkbox_handler::compute_min_checkbox_height_px(hwnd, base_height),
+                None => base_height.max(checkbox_handler::fallback_min_checkbox_height_px()),
+            },
+            _ => base_height,
         }
     }
 
@@ -752,6 +755,29 @@ impl NativeWindowData {
     fn validate_layout_rules(rules: &[LayoutRule]) -> PlatformResult<()> {
         let mut fill_by_parent: HashMap<Option<ControlId>, Vec<ControlId>> = HashMap::new();
         for rule in rules {
+            match rule.dock_style {
+                DockStyle::Top | DockStyle::Bottom | DockStyle::Left | DockStyle::Right => {
+                    if rule.fixed_size.is_none() {
+                        return Err(PlatformError::OperationFailed(format!(
+                            "DefineLayout rejected: control {} uses {:?} without fixed_size. Docked edges require explicit fixed_size.",
+                            rule.control_id.raw(),
+                            rule.dock_style
+                        )));
+                    }
+                    if let Some(size) = rule.fixed_size
+                        && size < 0
+                    {
+                        return Err(PlatformError::OperationFailed(format!(
+                            "DefineLayout rejected: control {} has negative fixed_size {} for {:?}.",
+                            rule.control_id.raw(),
+                            size,
+                            rule.dock_style
+                        )));
+                    }
+                }
+                _ => {}
+            }
+
             if rule.dock_style == DockStyle::Fill {
                 fill_by_parent
                     .entry(rule.parent_control_id)
@@ -2811,6 +2837,38 @@ mod tests {
     }
 
     #[test]
+    fn define_layout_validation_rejects_docked_rule_without_fixed_size() {
+        let rules = vec![LayoutRule {
+            control_id: ControlId::new(30),
+            parent_control_id: None,
+            dock_style: DockStyle::Top,
+            order: 0,
+            fixed_size: None,
+            margin: (0, 0, 0, 0),
+        }];
+
+        let err = NativeWindowData::validate_layout_rules(&rules)
+            .expect_err("Top dock without fixed_size should be rejected");
+        assert!(err.to_string().contains("without fixed_size"));
+    }
+
+    #[test]
+    fn define_layout_validation_rejects_negative_fixed_size() {
+        let rules = vec![LayoutRule {
+            control_id: ControlId::new(31),
+            parent_control_id: None,
+            dock_style: DockStyle::Left,
+            order: 0,
+            fixed_size: Some(-1),
+            margin: (0, 0, 0, 0),
+        }];
+
+        let err = NativeWindowData::validate_layout_rules(&rules)
+            .expect_err("Negative fixed_size should be rejected");
+        assert!(err.to_string().contains("negative fixed_size"));
+    }
+
+    #[test]
     // [CDU-LayoutSystemV1] Proportional fills divide available space using the declarative weights.
     fn test_calculate_layout_proportional_fill() {
         // Arrange
@@ -2904,6 +2962,51 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_layout_header_checkbox_and_fill_non_overlap() {
+        let rules = vec![
+            LayoutRule {
+                control_id: ControlId::new(40),
+                parent_control_id: None,
+                dock_style: DockStyle::Top,
+                order: 0,
+                fixed_size: Some(28),
+                margin: (0, 0, 4, 0),
+            },
+            LayoutRule {
+                control_id: ControlId::new(41),
+                parent_control_id: None,
+                dock_style: DockStyle::Top,
+                order: 1,
+                fixed_size: Some(24),
+                margin: (4, 0, 4, 4),
+            },
+            LayoutRule {
+                control_id: ControlId::new(42),
+                parent_control_id: None,
+                dock_style: DockStyle::Fill,
+                order: 2,
+                fixed_size: None,
+                margin: (0, 0, 0, 0),
+            },
+        ];
+        let parent_rect = RECT {
+            left: 0,
+            top: 0,
+            right: 600,
+            bottom: 400,
+        };
+
+        let map = NativeWindowData::calculate_layout(parent_rect, &rules);
+        let header_rect = map.get(&ControlId::new(40)).expect("header rect");
+        let checkbox_rect = map.get(&ControlId::new(41)).expect("checkbox rect");
+        let fill_rect = map.get(&ControlId::new(42)).expect("fill rect");
+
+        assert!(header_rect.bottom <= checkbox_rect.top);
+        assert!(checkbox_rect.bottom <= fill_rect.top);
+        assert!(fill_rect.bottom > fill_rect.top);
+    }
+
+    #[test]
     fn resolve_dark_mode_uxtheme_ordinals_detects_expected_ordinals() {
         let ordinals = resolve_dark_mode_uxtheme_ordinals(|ordinal| {
             matches!(
@@ -2938,5 +3041,17 @@ mod tests {
         let result = data.effective_native_height_for_control(combo_id, 26);
 
         assert!(result >= combobox_handler::fallback_min_dropdown_height_px());
+    }
+
+    #[test]
+    fn effective_native_height_for_checkbox_is_not_too_small() {
+        let mut data = NativeWindowData::new(WindowId::new(1));
+        let checkbox_id = ControlId::new(78);
+        data.register_control_kind(checkbox_id, ControlKind::CheckBox);
+        data.register_control_hwnd(checkbox_id, HWND(0x1234isize as *mut _));
+
+        let result = data.effective_native_height_for_control(checkbox_id, 16);
+
+        assert!(result >= checkbox_handler::fallback_min_checkbox_height_px());
     }
 }

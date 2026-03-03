@@ -12,7 +12,8 @@ use crate::types::WindowId;
 use crate::window_common::ControlKind;
 
 use std::sync::Arc;
-use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSY, ReleaseDC};
 use windows::Win32::UI::Controls::BST_CHECKED;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, CreateWindowExW, DestroyWindow, HMENU, SendMessageW,
@@ -21,6 +22,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, PCWSTR};
 
 const WC_BUTTON: PCWSTR = windows::core::w!("BUTTON");
+const DEFAULT_DPI: i32 = 96;
+const FALLBACK_CHECKBOX_HEIGHT_PX: i32 = 24;
 
 /*
  * Creates a native CheckBox (BS_AUTOCHECKBOX) and registers it.
@@ -208,6 +211,30 @@ fn win32_check_state(checked: bool) -> usize {
     if checked { 1 } else { 0 }
 }
 
+fn dpi_for_window_or_default(hwnd: HWND) -> i32 {
+    let hdc = unsafe { GetDC(Some(hwnd)) };
+    if hdc.is_invalid() {
+        return DEFAULT_DPI;
+    }
+    let dpi = unsafe { GetDeviceCaps(Some(hdc), LOGPIXELSY) };
+    let _ = unsafe { ReleaseDC(Some(hwnd), hdc) };
+    if dpi > 0 { dpi } else { DEFAULT_DPI }
+}
+
+fn scale_by_dpi(px_at_96_dpi: i32, dpi: i32) -> i32 {
+    ((px_at_96_dpi.max(1) as i64 * dpi.max(DEFAULT_DPI) as i64) / DEFAULT_DPI as i64) as i32
+}
+
+pub(crate) fn fallback_min_checkbox_height_px() -> i32 {
+    FALLBACK_CHECKBOX_HEIGHT_PX
+}
+
+pub(crate) fn compute_min_checkbox_height_px(hwnd_checkbox: HWND, base_height: i32) -> i32 {
+    let dpi = dpi_for_window_or_default(hwnd_checkbox);
+    let scaled_fallback = scale_by_dpi(FALLBACK_CHECKBOX_HEIGHT_PX, dpi);
+    base_height.max(scaled_fallback)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,5 +258,10 @@ mod tests {
     fn checked_state_maps_to_expected_win32_constant() {
         assert_eq!(win32_check_state(true), 1);
         assert_eq!(win32_check_state(false), 0);
+    }
+
+    #[test]
+    fn fallback_checkbox_height_is_positive() {
+        assert!(fallback_min_checkbox_height_px() > 0);
     }
 }

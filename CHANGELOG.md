@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2 - 2026-03-03
+- **Hardening**: `DefineLayout` validation now rejects docked edge rules (`Top/Bottom/Left/Right`) that omit `fixed_size` and rejects negative `fixed_size` values.
+- **Hardening**: Add DPI-aware checkbox minimum-height helpers and enforce minimum native checkbox height in layout application path.
+- **Tests**: Add layout regression coverage for header + checkbox + fill non-overlap and new validation failure cases.
+
 ## 0.7.1 - 2026-02-26
 - **Bug fix**: `tab_bar_handler` now sends `WM_APP_TAB_SELECTED` to the root-ancestor window (`GetAncestor(hwnd, GA_ROOT)`) instead of the direct parent.
   Previously, clicks on tab bars nested inside panels were silently dropped because the panel WndProc called `DefWindowProcW` for unrecognised messages.
