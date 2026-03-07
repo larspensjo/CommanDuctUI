@@ -319,6 +319,13 @@ pub enum AppEvent {
         control_id: ControlId,
         selected_index: usize,
     },
+    // Signals that a toggle switch was toggled by the user (click or keyboard).
+    // The `checked` field reflects the new state after the toggle.
+    ToggleSwitchToggled {
+        window_id: WindowId,
+        control_id: ControlId,
+        checked: bool,
+    },
 }
 
 // Defines the severity of a message to be displayed, e.g., in the status bar.
@@ -684,6 +691,30 @@ pub enum PlatformCommand {
         window_id: WindowId,
         control_id: ControlId,
         style_id: StyleId,
+    },
+    /// Creates a custom sliding toggle switch control (pill + knob, fully owner-drawn).
+    CreateToggleSwitch {
+        window_id: WindowId,
+        parent_control_id: Option<ControlId>,
+        control_id: ControlId,
+        label: String,
+        checked: bool,
+    },
+    /// Programmatically sets the checked state of a toggle switch and repaints it.
+    SetToggleSwitchState {
+        window_id: WindowId,
+        control_id: ControlId,
+        checked: bool,
+    },
+    /// Pushes resolved palette colors into a toggle switch control.
+    SetToggleSwitchStyle {
+        window_id: WindowId,
+        control_id: ControlId,
+        background: Color,
+        pill_off: Color,
+        pill_on: Color,
+        knob: Color,
+        text: Color,
     },
 }
 

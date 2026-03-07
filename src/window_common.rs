@@ -81,6 +81,8 @@ pub(crate) const WM_APP_SPLITTER_DRAGGING: u32 = WM_APP + 0x102;
 pub(crate) const WM_APP_SPLITTER_DRAG_ENDED: u32 = WM_APP + 0x103;
 // Custom application message sent by TabBar WndProc to parent on tab click.
 pub(crate) const WM_APP_TAB_SELECTED: u32 = WM_APP + 0x104;
+// Custom application message sent by ToggleSwitch WndProc to root on click/key-toggle.
+pub(crate) const WM_APP_TOGGLE_SWITCH_CLICKED: u32 = WM_APP + 0x105;
 
 // General UI constants
 /// Default debounce delay for edit controls in milliseconds.
@@ -112,6 +114,8 @@ pub(crate) enum ControlKind {
     Chart,
     /// Custom-WndProc tab bar with bottom accent line and hover effects.
     TabBar,
+    /// Fully owner-drawn sliding toggle switch (pill + knob).
+    ToggleSwitch,
 }
 
 /*
@@ -1654,6 +1658,10 @@ impl Win32ApiInternalState {
             WM_APP_TAB_SELECTED => {
                 event_to_send = self.handle_wm_app_tab_selected(hwnd, wparam, lparam, window_id);
             }
+            WM_APP_TOGGLE_SWITCH_CLICKED => {
+                event_to_send =
+                    self.handle_wm_app_toggle_switch_clicked(hwnd, wparam, lparam, window_id);
+            }
             WM_GETMINMAXINFO => {
                 lresult_override =
                     Some(self.handle_wm_getminmaxinfo(hwnd, wparam, lparam, window_id));
@@ -2232,6 +2240,40 @@ impl Win32ApiInternalState {
             window_id,
             control_id,
             selected_index,
+        })
+    }
+
+    /*
+     * Handles WM_APP_TOGGLE_SWITCH_CLICKED messages sent by the ToggleSwitch WndProc to its root.
+     * WPARAM = HWND of the toggle switch control.
+     * LPARAM = new checked state (non-zero = checked).
+     */
+    fn handle_wm_app_toggle_switch_clicked(
+        self: &Arc<Self>,
+        _hwnd_parent: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        window_id: WindowId,
+    ) -> Option<AppEvent> {
+        let hwnd_toggle = HWND(wparam.0 as *mut std::ffi::c_void);
+        let control_id_raw = unsafe { GetDlgCtrlID(hwnd_toggle) };
+        if control_id_raw == 0 {
+            log::warn!(
+                "[ToggleSwitch] WM_APP_TOGGLE_SWITCH_CLICKED from HWND {:?} without control ID",
+                hwnd_toggle
+            );
+            return None;
+        }
+        let control_id = ControlId::new(control_id_raw);
+        let checked = lparam.0 != 0;
+        log::debug!(
+            "[ToggleSwitch] Toggled: control_id={} checked={checked}",
+            control_id.raw()
+        );
+        Some(AppEvent::ToggleSwitchToggled {
+            window_id,
+            control_id,
+            checked,
         })
     }
 
