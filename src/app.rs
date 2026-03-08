@@ -3,8 +3,8 @@ use crate::{
     controls::{
         button_handler, chart_handler, checkbox_handler, combobox_handler, dialog_handler,
         label_handler, menu_handler, panel_handler, progress_handler, radiobutton_handler,
-        richedit_handler, splitter_handler, styling_handler, tab_bar_handler, toggle_switch_handler,
-        treeview_handler,
+        richedit_handler, splitter_handler, styling_handler, tab_bar_handler,
+        toggle_switch_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
@@ -837,10 +837,7 @@ impl Win32ApiInternalState {
                 control_id,
                 checked,
             } => toggle_switch_handler::handle_set_toggle_switch_state_command(
-                self,
-                window_id,
-                control_id,
-                checked,
+                self, window_id, control_id, checked,
             ),
             PlatformCommand::SetToggleSwitchStyle {
                 window_id,
@@ -854,11 +851,13 @@ impl Win32ApiInternalState {
                 self,
                 window_id,
                 control_id,
-                background,
-                pill_off,
-                pill_on,
-                knob,
-                text,
+                toggle_switch_handler::ToggleSwitchPalette {
+                    background,
+                    pill_off,
+                    pill_on,
+                    knob,
+                    text,
+                },
             ),
         }
     }

@@ -31,9 +31,9 @@ use windows::Win32::{
         WindowsAndMessaging::{
             CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GET_ANCESTOR_FLAGS,
             GWLP_USERDATA, GetAncestor, GetClientRect, GetWindowLongPtrW, HMENU, RegisterClassW,
-            SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DESTROY,
-            WM_ERASEBKGND, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONUP, WM_PAINT, WM_SETFOCUS,
-            WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+            SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND,
+            WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONUP, WM_PAINT, WM_SETFOCUS, WNDCLASSW, WS_CHILD,
+            WS_TABSTOP, WS_VISIBLE,
         },
     },
 };
@@ -53,11 +53,31 @@ pub(crate) struct ToggleSwitchPalette {
 impl Default for ToggleSwitchPalette {
     fn default() -> Self {
         Self {
-            background: Color { r: 0x2B, g: 0x2B, b: 0x2B },
-            pill_off:   Color { r: 0x4B, g: 0x4F, b: 0x57 },
-            pill_on:    Color { r: 0x00, g: 0x80, b: 0xFF },
-            knob:       Color { r: 0xF0, g: 0xF0, b: 0xF0 },
-            text:       Color { r: 0xCC, g: 0xCC, b: 0xCC },
+            background: Color {
+                r: 0x2B,
+                g: 0x2B,
+                b: 0x2B,
+            },
+            pill_off: Color {
+                r: 0x4B,
+                g: 0x4F,
+                b: 0x57,
+            },
+            pill_on: Color {
+                r: 0x00,
+                g: 0x80,
+                b: 0xFF,
+            },
+            knob: Color {
+                r: 0xF0,
+                g: 0xF0,
+                b: 0xF0,
+            },
+            text: Color {
+                r: 0xCC,
+                g: 0xCC,
+                b: 0xCC,
+            },
         }
     }
 }
@@ -260,7 +280,15 @@ unsafe fn paint_toggle_switch(hwnd: HWND, hdc: HDC) {
     let old_brush = unsafe { SelectObject(hdc, pill_brush.into()) };
     let corner = PILL_H; // diameter = height → fully rounded ends
     let _ = unsafe {
-        RoundRect(hdc, pill_left, pill_top, pill_right, pill_bottom, corner, corner)
+        RoundRect(
+            hdc,
+            pill_left,
+            pill_top,
+            pill_right,
+            pill_bottom,
+            corner,
+            corner,
+        )
     };
     unsafe { SelectObject(hdc, old_brush) };
     unsafe { SelectObject(hdc, old_pen) };
@@ -269,15 +297,9 @@ unsafe fn paint_toggle_switch(hwnd: HWND, hdc: HDC) {
     // Draw knob (circle, centered vertically inside pill).
     let knob_margin = (PILL_H - KNOB_D) / 2;
     let (knob_left, knob_right) = if state.checked {
-        (
-            pill_right - knob_margin - KNOB_D,
-            pill_right - knob_margin,
-        )
+        (pill_right - knob_margin - KNOB_D, pill_right - knob_margin)
     } else {
-        (
-            pill_left + knob_margin,
-            pill_left + knob_margin + KNOB_D,
-        )
+        (pill_left + knob_margin, pill_left + knob_margin + KNOB_D)
     };
     let knob_top = pill_top + knob_margin;
     let knob_bottom = knob_top + KNOB_D;
@@ -468,11 +490,7 @@ pub(crate) fn handle_set_toggle_switch_style_command(
     internal_state: &Arc<Win32ApiInternalState>,
     window_id: WindowId,
     control_id: ControlId,
-    background: Color,
-    pill_off: Color,
-    pill_on: Color,
-    knob: Color,
-    text: Color,
+    palette: ToggleSwitchPalette,
 ) -> PlatformResult<()> {
     let hwnd = internal_state.with_window_data_read(window_id, |window_data| {
         window_data.get_control_hwnd(control_id).ok_or_else(|| {
@@ -486,13 +504,7 @@ pub(crate) fn handle_set_toggle_switch_style_command(
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
         if ptr != 0 {
             let state = ptr as *mut ToggleSwitchState;
-            (*state).palette = ToggleSwitchPalette {
-                background,
-                pill_off,
-                pill_on,
-                knob,
-                text,
-            };
+            (*state).palette = palette;
             let _ = InvalidateRect(Some(hwnd), None, false);
         }
     }
