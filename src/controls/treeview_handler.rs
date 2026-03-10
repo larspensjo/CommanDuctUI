@@ -31,10 +31,10 @@ use windows::{
             CDRF_DODEFAULT, CDRF_NEWFONT, CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYPOSTPAINT, HTREEITEM,
             NMHDR, NMTVCUSTOMDRAW, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEMLABEL,
             TVHT_ONITEMSTATEICON, TVI_LAST, TVIF_CHILDREN, TVIF_PARAM, TVIF_STATE, TVIF_TEXT,
-            TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_STATEIMAGEMASK, TVITEMEXW,
-            TVITEMEXW_CHILDREN, TVM_DELETEITEM, TVM_GETITEMRECT, TVM_GETNEXTITEM, TVM_GETITEMW,
-            TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETITEMW, TVS_CHECKBOXES,
-            TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT, TVS_SHOWSELALWAYS, WC_TREEVIEWW,
+            TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_STATEIMAGEMASK, TVITEMEXW, TVITEMEXW_CHILDREN,
+            TVM_DELETEITEM, TVM_GETITEMRECT, TVM_GETITEMW, TVM_HITTEST, TVM_INSERTITEMW,
+            TVM_SELECTITEM, TVM_SETITEMW, TVS_CHECKBOXES, TVS_HASBUTTONS, TVS_HASLINES,
+            TVS_LINESATROOT, TVS_SHOWSELALWAYS, WC_TREEVIEWW,
         },
         UI::WindowsAndMessaging::*,
     },
@@ -1008,14 +1008,48 @@ fn resolve_item_colors(
         if let Some(c) = selection_bg {
             bg = Some(c.clone());
         }
-        if !has_item_text_override
-            && let Some(c) = selection_text
-        {
+        if !has_item_text_override && let Some(c) = selection_text {
             text = Some(c.clone());
         }
     }
 
     (text, bg)
+}
+
+fn treeview_tail_fill_rect(item_draw_rect: RECT, client_rect: RECT) -> Option<RECT> {
+    if item_draw_rect.bottom <= item_draw_rect.top || item_draw_rect.right >= client_rect.right {
+        return None;
+    }
+
+    Some(RECT {
+        left: item_draw_rect.right,
+        top: item_draw_rect.top,
+        right: client_rect.right,
+        bottom: item_draw_rect.bottom,
+    })
+}
+
+fn treeview_selection_accent_rect(item_draw_rect: RECT) -> Option<RECT> {
+    if item_draw_rect.bottom <= item_draw_rect.top {
+        return None;
+    }
+
+    Some(RECT {
+        left: 0,
+        top: item_draw_rect.top,
+        right: SELECTION_ACCENT_WIDTH,
+        bottom: item_draw_rect.bottom,
+    })
+}
+
+fn should_request_postpaint(
+    selected_font: Option<HFONT>,
+    marker_kind: TreeItemMarkerKind,
+    draws_selection_accent: bool,
+) -> bool {
+    selected_font.is_some()
+        || !matches!(marker_kind, TreeItemMarkerKind::None)
+        || draws_selection_accent
 }
 
 /*
@@ -1044,6 +1078,7 @@ pub(crate) fn handle_nm_customdraw(
         CDDS_ITEMPREPAINT => {
             let tree_item_id = TreeItemId(nmtvcd.nmcd.lItemlParam.0 as u64);
             let item_is_new = is_item_new_for_display(internal_state, window_id, tree_item_id);
+            let marker_kind = tree_item_marker_for_display(internal_state, window_id, tree_item_id);
 
             // Gather base style colors
             let base_style_id = internal_state
@@ -1055,7 +1090,13 @@ pub(crate) fn handle_nm_customdraw(
             let mut selected_font: Option<HFONT> = None;
             let (base_text, base_bg, base_font) = base_style_id
                 .and_then(|sid| internal_state.get_parsed_style(sid))
-                .map(|s| (s.text_color.clone(), s.background_color.clone(), s.font_handle))
+                .map(|s| {
+                    (
+                        s.text_color.clone(),
+                        s.background_color.clone(),
+                        s.font_handle,
+                    )
+                })
                 .unwrap_or((None, None, None));
             if let Some(f) = base_font {
                 selected_font = Some(f);
@@ -1072,7 +1113,13 @@ pub(crate) fn handle_nm_customdraw(
 
             let (override_text, override_bg, override_font) = style_override
                 .and_then(|sid| internal_state.get_parsed_style(sid))
-                .map(|s| (s.text_color.clone(), s.background_color.clone(), s.font_handle))
+                .map(|s| {
+                    (
+                        s.text_color.clone(),
+                        s.background_color.clone(),
+                        s.font_handle,
+                    )
+                })
                 .unwrap_or((None, None, None));
             if let Some(f) = override_font {
                 selected_font = Some(f);
@@ -1117,43 +1164,22 @@ pub(crate) fn handle_nm_customdraw(
                 nmtvcd.nmcd.uItemState.0 &= !CDIS_FOCUS.0;
             }
 
-            // Fill the strip from text_rect.right to client_rect.right so that
+            // Fill the strip from the draw rect to the client edge so that
             // the resolved background extends to the full row width. This is
             // needed for both selected rows (highlight) and deselected rows
             // (clearing previous highlight artifacts).
             if let Some(bg) = resolved_bg.as_ref() {
                 let hwnd_treeview = nmtvcd.nmcd.hdr.hwndFrom;
                 let hdc = nmtvcd.nmcd.hdc;
-                let h_item_native = HTREEITEM(nmtvcd.nmcd.dwItemSpec as isize);
-                let mut text_rect = RECT::default();
-                unsafe {
-                    *(((&mut text_rect) as *mut RECT) as *mut HTREEITEM) = h_item_native;
-                }
-                let got_rect = unsafe {
-                    SendMessageW(
-                        hwnd_treeview,
-                        TVM_GETITEMRECT,
-                        Some(WPARAM(1)),
-                        Some(LPARAM(&mut text_rect as *mut _ as isize)),
-                    )
-                };
-                if got_rect.0 != 0 {
-                    let mut client_rect = RECT::default();
-                    let _ = unsafe { GetClientRect(hwnd_treeview, &mut client_rect) };
-                    if text_rect.right < client_rect.right {
-                        let fill_rect = RECT {
-                            left: text_rect.right,
-                            top: text_rect.top,
-                            right: client_rect.right,
-                            bottom: text_rect.bottom,
-                        };
-                        let bg_brush =
-                            unsafe { CreateSolidBrush(styling_handler::color_to_colorref(bg)) };
-                        if !bg_brush.is_invalid() {
-                            unsafe {
-                                let _ = FillRect(hdc, &fill_rect, bg_brush);
-                                let _ = DeleteObject(HGDIOBJ(bg_brush.0));
-                            }
+                let mut client_rect = RECT::default();
+                let _ = unsafe { GetClientRect(hwnd_treeview, &mut client_rect) };
+                if let Some(fill_rect) = treeview_tail_fill_rect(nmtvcd.nmcd.rc, client_rect) {
+                    let bg_brush =
+                        unsafe { CreateSolidBrush(styling_handler::color_to_colorref(bg)) };
+                    if !bg_brush.is_invalid() {
+                        unsafe {
+                            let _ = FillRect(hdc, &fill_rect, bg_brush);
+                            let _ = DeleteObject(HGDIOBJ(bg_brush.0));
                         }
                     }
                 }
@@ -1178,17 +1204,23 @@ pub(crate) fn handle_nm_customdraw(
                 selected_font = indicator_font;
             }
 
+            let selection_accent_color = internal_state
+                .get_parsed_style(StyleId::TreeViewSelectionAccent)
+                .and_then(|style| style.background_color.clone());
+            let draws_selection_accent = is_selected && selection_accent_color.is_some();
+
             let mut result: isize = CDRF_DODEFAULT as isize;
             if let Some(font_handle) = selected_font {
                 unsafe {
                     SelectObject(nmtvcd.nmcd.hdc, HGDIOBJ(font_handle.0));
                 }
                 result |= CDRF_NEWFONT as isize;
-                result |= CDRF_NOTIFYPOSTPAINT as isize;
             } else if color_modified || (is_selected && has_selection_style) {
                 // Colors were modified but no font — still need CDRF_NEWFONT for Windows to apply
                 // the changed clrText/clrTextBk values.
                 result |= CDRF_NEWFONT as isize;
+            }
+            if should_request_postpaint(selected_font, marker_kind, draws_selection_accent) {
                 result |= CDRF_NOTIFYPOSTPAINT as isize;
             }
 
@@ -1254,49 +1286,20 @@ pub(crate) fn handle_nm_customdraw(
                 draw_tree_item_marker(hdc, hwnd_treeview, h_item_native, color);
             }
 
-            // Draw selection accent bar if this item is selected and accent style is defined
-            let h_item_native = HTREEITEM(nmtvcd.nmcd.dwItemSpec as isize);
-            let caret_lresult = unsafe {
-                SendMessageW(
-                    hwnd_treeview,
-                    TVM_GETNEXTITEM,
-                    Some(WPARAM(TVGN_CARET as usize)),
-                    Some(LPARAM(0)),
-                )
-            };
-            let caret_item = HTREEITEM(caret_lresult.0 as isize);
-            if caret_item == h_item_native
+            // Draw selection accent bar if this item is selected and accent style is defined.
+            let is_selected = (nmtvcd.nmcd.uItemState.0 & CDIS_SELECTED.0) != 0;
+            if is_selected
                 && let Some(accent_style) =
                     internal_state.get_parsed_style(StyleId::TreeViewSelectionAccent)
                 && let Some(accent_color) = accent_style.background_color.as_ref()
+                && let Some(accent_rect) = treeview_selection_accent_rect(nmtvcd.nmcd.rc)
             {
-                let mut item_rect = RECT::default();
-                unsafe {
-                    *(((&mut item_rect) as *mut RECT) as *mut HTREEITEM) = h_item_native;
-                }
-                let got_rect = unsafe {
-                    SendMessageW(
-                        hwnd_treeview,
-                        TVM_GETITEMRECT,
-                        Some(WPARAM(0)),
-                        Some(LPARAM(&mut item_rect as *mut _ as isize)),
-                    )
-                };
-                if got_rect.0 != 0 {
-                    let accent_rect = RECT {
-                        left: 0,
-                        top: item_rect.top,
-                        right: SELECTION_ACCENT_WIDTH,
-                        bottom: item_rect.bottom,
-                    };
-                    let accent_brush = unsafe {
-                        CreateSolidBrush(styling_handler::color_to_colorref(accent_color))
-                    };
-                    if !accent_brush.is_invalid() {
-                        unsafe {
-                            let _ = FillRect(hdc, &accent_rect, accent_brush);
-                            let _ = DeleteObject(HGDIOBJ(accent_brush.0));
-                        }
+                let accent_brush =
+                    unsafe { CreateSolidBrush(styling_handler::color_to_colorref(accent_color)) };
+                if !accent_brush.is_invalid() {
+                    unsafe {
+                        let _ = FillRect(hdc, &accent_rect, accent_brush);
+                        let _ = DeleteObject(HGDIOBJ(accent_brush.0));
                     }
                 }
             }
@@ -1518,8 +1521,15 @@ mod tests {
     fn resolve_item_colors_base_only() {
         let base_text = c(200, 200, 200);
         let base_bg = c(30, 30, 30);
-        let (text, bg) =
-            resolve_item_colors(Some(&base_text), Some(&base_bg), None, None, false, None, None);
+        let (text, bg) = resolve_item_colors(
+            Some(&base_text),
+            Some(&base_bg),
+            None,
+            None,
+            false,
+            None,
+            None,
+        );
         assert_eq!(text, Some(base_text));
         assert_eq!(bg, Some(base_bg));
     }
@@ -1528,8 +1538,15 @@ mod tests {
     fn resolve_item_colors_base_selected_no_selection_style() {
         let base_text = c(200, 200, 200);
         let base_bg = c(30, 30, 30);
-        let (text, bg) =
-            resolve_item_colors(Some(&base_text), Some(&base_bg), None, None, true, None, None);
+        let (text, bg) = resolve_item_colors(
+            Some(&base_text),
+            Some(&base_bg),
+            None,
+            None,
+            true,
+            None,
+            None,
+        );
         // No selection style — colors unchanged
         assert_eq!(text, Some(base_text));
         assert_eq!(bg, Some(base_bg));
@@ -1593,5 +1610,60 @@ mod tests {
         );
         assert_eq!(text, Some(override_text));
         assert_eq!(bg, Some(override_bg));
+    }
+
+    #[test]
+    fn treeview_tail_fill_rect_uses_draw_rect_edge() {
+        let item_rect = RECT {
+            left: 24,
+            top: 10,
+            right: 160,
+            bottom: 30,
+        };
+        let client_rect = RECT {
+            left: 0,
+            top: 0,
+            right: 320,
+            bottom: 400,
+        };
+
+        let fill_rect = treeview_tail_fill_rect(item_rect, client_rect);
+
+        assert_eq!(
+            fill_rect,
+            Some(RECT {
+                left: 160,
+                top: 10,
+                right: 320,
+                bottom: 30,
+            })
+        );
+    }
+
+    #[test]
+    fn should_request_postpaint_stays_false_for_color_only_rows() {
+        assert!(!should_request_postpaint(
+            None,
+            TreeItemMarkerKind::None,
+            false,
+        ));
+    }
+
+    #[test]
+    fn should_request_postpaint_when_selection_accent_is_drawn() {
+        assert!(should_request_postpaint(
+            None,
+            TreeItemMarkerKind::None,
+            true,
+        ));
+    }
+
+    #[test]
+    fn should_request_postpaint_when_marker_is_drawn() {
+        assert!(should_request_postpaint(
+            None,
+            TreeItemMarkerKind::Blue,
+            false,
+        ));
     }
 }

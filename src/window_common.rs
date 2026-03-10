@@ -36,7 +36,7 @@ use windows::{
             GetStockObject, GetWindowDC, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGFONTW,
             LOGPIXELSY, MapWindowPoints, OUT_DEFAULT_PRECIS, OffsetRect, PAINTSTRUCT,
             RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, ReleaseDC,
-            SetBkColor, SetBkMode, SetTextColor, TRANSPARENT, UpdateWindow,
+            SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
         },
         System::LibraryLoader::{GetProcAddress, LoadLibraryW},
         System::WindowsProgramming::MulDiv,
@@ -53,6 +53,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use log::warn;
 
@@ -96,6 +97,7 @@ const UXTHEME_ORD_REFRESH_IMMERSIVE_COLOR_POLICY_STATE: usize = 104;
 const UXTHEME_ORD_ALLOW_DARK_MODE_FOR_WINDOW: usize = 133;
 const UXTHEME_ORD_SET_PREFERRED_APP_MODE: usize = 135;
 const UXTHEME_ORD_FLUSH_MENU_THEMES: usize = 136;
+pub(crate) const SLOW_MESSAGE_THRESHOLD_MS: u128 = 50;
 
 /// Identifies the kind of a control so styles can be dispatched without Win32 class queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +193,7 @@ pub(crate) struct NativeWindowData {
     status_bar_font: Option<HFONT>,
     treeview_new_item_font: Option<HFONT>,
     suppress_erasebkgnd: bool,
+    treeview_redraw_suspended: bool,
     last_layout_rects: RefCell<HashMap<ControlId, RECT>>,
     combo_dropdown_heal_attempted: HashSet<ControlId>,
 }
@@ -211,6 +214,7 @@ impl NativeWindowData {
             status_bar_font: None,
             treeview_new_item_font: None,
             suppress_erasebkgnd: false,
+            treeview_redraw_suspended: false,
             last_layout_rects: RefCell::new(HashMap::new()),
             combo_dropdown_heal_attempted: HashSet::new(),
         }
@@ -316,6 +320,59 @@ impl NativeWindowData {
 
     pub(crate) fn suppresses_erasebkgnd(&self) -> bool {
         self.suppress_erasebkgnd
+    }
+
+    fn collect_control_hwnds_by_kind(&self, kind: ControlKind) -> Vec<(ControlId, HWND)> {
+        self.control_kinds
+            .iter()
+            .filter_map(|(control_id, control_kind)| {
+                (*control_kind == kind).then(|| {
+                    self.control_hwnd_map
+                        .get(control_id)
+                        .copied()
+                        .filter(|hwnd| *hwnd != HWND_INVALID)
+                        .map(|hwnd| (*control_id, hwnd))
+                })?
+            })
+            .collect()
+    }
+
+    pub(crate) fn set_treeview_redraw_suspended(&mut self, suspend: bool) {
+        if self.treeview_redraw_suspended == suspend {
+            return;
+        }
+
+        // TODO: Investigative breadcrumb for resize/splitter lag:
+        // Live window sizing became responsive only after suspending TreeView redraw for the
+        // drag session. That narrows the remaining pathological cost to TreeView WM_PAINT /
+        // custom-draw behavior under width changes, not to app-side event propagation.
+        // If we revisit this, start by profiling TreeView paint/custom-draw and row invalidation
+        // so this mitigation can potentially be replaced with a true live-redraw fix.
+        self.treeview_redraw_suspended = suspend;
+        for (control_id, hwnd) in self.collect_control_hwnds_by_kind(ControlKind::TreeView) {
+            unsafe {
+                _ = SendMessageW(
+                    hwnd,
+                    WM_SETREDRAW,
+                    Some(WPARAM(if suspend { 0 } else { 1 })),
+                    Some(LPARAM(0)),
+                );
+                if !suspend {
+                    _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+            log::info!(
+                "[TreeView] redraw_suspended={} window_id={:?} control_id={} hwnd={hwnd:?}",
+                suspend,
+                self.logical_window_id,
+                control_id.raw()
+            );
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn treeview_redraw_suspended(&self) -> bool {
+        self.treeview_redraw_suspended
     }
 
     fn generate_menu_item_id(&mut self) -> i32 {
@@ -459,6 +516,7 @@ impl NativeWindowData {
         parent_id_for_layout: Option<ControlId>,
         parent_rect: RECT,
     ) {
+        let layout_start = Instant::now();
         log::trace!(
             "Applying layout for parent_id {parent_id_for_layout:?}, rect: {parent_rect:?}"
         );
@@ -519,6 +577,9 @@ impl NativeWindowData {
             }
         }
 
+        let mut moved_count = 0usize;
+        let mut invalidated = 0usize;
+
         // Use deferred window positioning for flicker-free atomic updates
         unsafe {
             let hdwp_result = BeginDeferWindowPos(child_rules.len() as i32);
@@ -551,7 +612,6 @@ impl NativeWindowData {
                 }
             };
 
-            let mut moved_count = 0usize;
             for rule in &child_rules {
                 let rect = match layout_map.get(&rule.control_id) {
                     Some(r) => r,
@@ -623,7 +683,6 @@ impl NativeWindowData {
                 }
                 let hwnd = control_hwnd_opt.unwrap();
                 _ = InvalidateRect(Some(hwnd), None, true);
-                _ = UpdateWindow(hwnd);
                 log::debug!(
                     "[Layout] Invalidated panel control id={} kind={kind:?} erase=true hwnd={hwnd:?}",
                     rule.control_id.raw()
@@ -632,7 +691,6 @@ impl NativeWindowData {
 
             // Invalidate leaf content controls (TreeView/Edit/Splitter/Static) to refresh content
             // without triggering a full parent erase.
-            let mut invalidated = 0usize;
             for rule in &child_rules {
                 let has_children = all_window_rules
                     .iter()
@@ -676,19 +734,7 @@ impl NativeWindowData {
                             | Some(ControlKind::RichEdit)
                     )
                 };
-                if matches!(kind, Some(ControlKind::TreeView)) {
-                    _ = SetWindowPos(
-                        hwnd,
-                        None,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
-                    );
-                }
                 _ = InvalidateRect(Some(hwnd), None, erase);
-                _ = UpdateWindow(hwnd);
                 log::debug!(
                     "[Layout] Invalidated leaf control id={} kind={kind:?} erase={erase} hwnd={hwnd:?}",
                     rule.control_id.raw()
@@ -728,6 +774,17 @@ impl NativeWindowData {
                 };
                 self.apply_layout_rules_for_children(Some(rule.control_id), panel_client_rect);
             }
+        }
+
+        let elapsed_ms = layout_start.elapsed().as_millis();
+        if elapsed_ms >= 50 {
+            log::info!(
+                "[Layout] slow apply: parent_id={parent_id_for_layout:?} rules={} moved={} invalidated={} elapsed_ms={}",
+                child_rules.len(),
+                moved_count,
+                invalidated,
+                elapsed_ms
+            );
         }
     }
 
@@ -818,6 +875,10 @@ impl NativeWindowData {
      * client rectangle cannot be retrieved. It remains safe to call repeatedly because
      * it is effectively a no-op when the layout data or window handle is invalid.
      */
+    fn post_layout_redraw_uses_updatenow() -> bool {
+        false
+    }
+
     pub(crate) fn recalculate_and_apply_layout(&self) {
         if self.layout_rules.is_none() {
             return;
@@ -847,15 +908,17 @@ impl NativeWindowData {
         );
         self.apply_layout_rules_for_children(None, client_rect);
 
-        // Force a full post-layout redraw pass. Dynamic Prompt Lab mode/section toggles can
-        // otherwise leave stale pixels from previously larger control regions.
+        // Queue a full post-layout redraw pass without blocking the message loop.
+        // Dynamic Prompt Lab mode/section toggles can otherwise leave stale pixels from
+        // previously larger control regions, but `RDW_UPDATENOW` made resize/splitter
+        // interactions synchronous with heavy child repaints.
+        let redraw_flags = if Self::post_layout_redraw_uses_updatenow() {
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW
+        } else {
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN
+        };
         unsafe {
-            _ = RedrawWindow(
-                Some(self.this_window_hwnd),
-                None,
-                None,
-                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
-            );
+            _ = RedrawWindow(Some(self.this_window_hwnd), None, None, redraw_flags);
         }
     }
 
@@ -1574,6 +1637,41 @@ unsafe fn draw_dark_menu_nc_bottom_line(hwnd: HWND, bar_bg: COLORREF) {
 }
 
 impl Win32ApiInternalState {
+    pub(crate) fn message_name(msg: u32) -> &'static str {
+        match msg {
+            WM_SIZE => "WM_SIZE",
+            WM_SIZING => "WM_SIZING",
+            WM_WINDOWPOSCHANGED => "WM_WINDOWPOSCHANGED",
+            WM_WINDOWPOSCHANGING => "WM_WINDOWPOSCHANGING",
+            WM_PAINT => "WM_PAINT",
+            WM_ERASEBKGND => "WM_ERASEBKGND",
+            WM_NOTIFY => "WM_NOTIFY",
+            WM_TIMER => "WM_TIMER",
+            WM_ENTERSIZEMOVE => "WM_ENTERSIZEMOVE",
+            WM_EXITSIZEMOVE => "WM_EXITSIZEMOVE",
+            WM_APP_SPLITTER_DRAGGING => "WM_APP_SPLITTER_DRAGGING",
+            WM_APP_SPLITTER_DRAG_ENDED => "WM_APP_SPLITTER_DRAG_ENDED",
+            _ => "OTHER",
+        }
+    }
+
+    pub(crate) fn should_profile_message(msg: u32) -> bool {
+        matches!(
+            msg,
+            WM_SIZE
+                | WM_SIZING
+                | WM_WINDOWPOSCHANGED
+                | WM_WINDOWPOSCHANGING
+                | WM_PAINT
+                | WM_ERASEBKGND
+                | WM_NOTIFY
+                | WM_ENTERSIZEMOVE
+                | WM_EXITSIZEMOVE
+                | WM_APP_SPLITTER_DRAGGING
+                | WM_APP_SPLITTER_DRAG_ENDED
+        )
+    }
+
     /*
      * Handles window messages for a specific window instance.
      * This method is called by `facade_wnd_proc_router` and processes
@@ -1589,6 +1687,11 @@ impl Win32ApiInternalState {
         lparam: LPARAM,
         window_id: WindowId,
     ) -> LRESULT {
+        let message_start = if Self::should_profile_message(msg) {
+            Some(Instant::now())
+        } else {
+            None
+        };
         let mut event_to_send: Option<AppEvent> = None;
         let mut lresult_override: Option<LRESULT> = None;
 
@@ -1598,6 +1701,20 @@ impl Win32ApiInternalState {
             }
             WM_SIZE => {
                 event_to_send = self.handle_wm_size(hwnd, wparam, lparam, window_id);
+            }
+            WM_ENTERSIZEMOVE => {
+                let _ = self.with_window_data_write(window_id, |window_data| {
+                    window_data.set_treeview_redraw_suspended(true);
+                    Ok(())
+                });
+                log::info!("[UiMsg] entersizemove: window_id={window_id:?} hwnd={hwnd:?}");
+            }
+            WM_EXITSIZEMOVE => {
+                let _ = self.with_window_data_write(window_id, |window_data| {
+                    window_data.set_treeview_redraw_suspended(false);
+                    Ok(())
+                });
+                log::info!("[UiMsg] exitsizemove: window_id={window_id:?} hwnd={hwnd:?}");
             }
             WM_COMMAND => {
                 event_to_send = self.handle_wm_command(hwnd, wparam, lparam, window_id);
@@ -1723,14 +1840,35 @@ impl Win32ApiInternalState {
         }
 
         if let Some(event) = event_to_send {
+            let event_label = format!("{event:?}");
+            let send_start = Instant::now();
             self.send_event(event);
+            let send_elapsed_ms = send_start.elapsed().as_millis();
+            if send_elapsed_ms >= SLOW_MESSAGE_THRESHOLD_MS {
+                log::info!(
+                    "[UiMsg] slow send_event: window_id={window_id:?} msg={}({msg:#06x}) event={event_label} elapsed_ms={send_elapsed_ms}",
+                    Self::message_name(msg)
+                );
+            }
         }
 
-        if let Some(lresult) = lresult_override {
+        let result = if let Some(lresult) = lresult_override {
             lresult
         } else {
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        };
+
+        if let Some(start) = message_start {
+            let elapsed_ms = start.elapsed().as_millis();
+            if elapsed_ms >= SLOW_MESSAGE_THRESHOLD_MS {
+                log::info!(
+                    "[UiMsg] slow handle_window_message: window_id={window_id:?} hwnd={hwnd:?} msg={}({msg:#06x}) elapsed_ms={elapsed_ms}",
+                    Self::message_name(msg)
+                );
+            }
         }
+
+        result
     }
 
     /*
@@ -2174,6 +2312,7 @@ impl Win32ApiInternalState {
             WM_APP_SPLITTER_DRAGGING => {
                 let _ = self.with_window_data_write(window_id, |window_data| {
                     window_data.set_suppress_erasebkgnd(true);
+                    window_data.set_treeview_redraw_suspended(true);
                     Ok(())
                 });
                 log::trace!(
@@ -2190,6 +2329,7 @@ impl Win32ApiInternalState {
             WM_APP_SPLITTER_DRAG_ENDED => {
                 let _ = self.with_window_data_write(window_id, |window_data| {
                     window_data.set_suppress_erasebkgnd(false);
+                    window_data.set_treeview_redraw_suspended(false);
                     Ok(())
                 });
                 log::debug!(
@@ -2908,6 +3048,59 @@ mod tests {
         let err = NativeWindowData::validate_layout_rules(&rules)
             .expect_err("Negative fixed_size should be rejected");
         assert!(err.to_string().contains("negative fixed_size"));
+    }
+
+    #[test]
+    fn post_layout_redraw_skips_updatenow() {
+        assert!(!NativeWindowData::post_layout_redraw_uses_updatenow());
+    }
+
+    #[test]
+    fn should_profile_resize_and_splitter_messages() {
+        assert!(Win32ApiInternalState::should_profile_message(WM_SIZE));
+        assert!(Win32ApiInternalState::should_profile_message(WM_PAINT));
+        assert!(Win32ApiInternalState::should_profile_message(
+            WM_APP_SPLITTER_DRAGGING
+        ));
+        assert!(!Win32ApiInternalState::should_profile_message(WM_COMMAND));
+    }
+
+    #[test]
+    fn message_name_maps_profiled_messages() {
+        assert_eq!(Win32ApiInternalState::message_name(WM_SIZE), "WM_SIZE");
+        assert_eq!(
+            Win32ApiInternalState::message_name(WM_APP_SPLITTER_DRAG_ENDED),
+            "WM_APP_SPLITTER_DRAG_ENDED"
+        );
+        assert_eq!(Win32ApiInternalState::message_name(WM_COMMAND), "OTHER");
+    }
+
+    #[test]
+    fn collect_control_hwnds_by_kind_returns_only_treeviews() {
+        let mut data = NativeWindowData::new(WindowId(9));
+        let treeview_id = ControlId::new(10);
+        let label_id = ControlId::new(11);
+        let treeview_hwnd = HWND(0x1234usize as _);
+        let label_hwnd = HWND(0x5678usize as _);
+        data.register_control_hwnd(treeview_id, treeview_hwnd);
+        data.register_control_kind(treeview_id, ControlKind::TreeView);
+        data.register_control_hwnd(label_id, label_hwnd);
+        data.register_control_kind(label_id, ControlKind::Static);
+
+        let targets = data.collect_control_hwnds_by_kind(ControlKind::TreeView);
+
+        assert_eq!(targets, vec![(treeview_id, treeview_hwnd)]);
+    }
+
+    #[test]
+    fn set_treeview_redraw_suspended_updates_flag_without_treeview_targets() {
+        let mut data = NativeWindowData::new(WindowId(10));
+
+        data.set_treeview_redraw_suspended(true);
+        assert!(data.treeview_redraw_suspended());
+
+        data.set_treeview_redraw_suspended(false);
+        assert!(!data.treeview_redraw_suspended());
     }
 
     #[test]

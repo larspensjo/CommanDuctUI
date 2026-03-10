@@ -41,6 +41,7 @@ use std::sync::{
     Arc, Mutex, Once, RwLock, Weak,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Instant;
 
 static LOAD_RICHEDIT_DLL_ONCE: Once = Once::new();
 
@@ -371,6 +372,36 @@ impl Win32ApiInternalState {
             );
             unsafe { PostQuitMessage(0) };
         }
+    }
+
+    pub(crate) fn describe_hwnd(&self, hwnd: HWND) -> String {
+        let windows_map = match self.active_windows.read() {
+            Ok(guard) => guard,
+            Err(poisoned_err) => {
+                return format!(
+                    "hwnd={hwnd:?} resolve_error=poisoned_active_windows:{poisoned_err:?}"
+                );
+            }
+        };
+
+        for (window_id, window_data) in windows_map.iter() {
+            if window_data.get_hwnd() == hwnd {
+                return format!("hwnd={hwnd:?} target=window window_id={window_id:?}");
+            }
+
+            if let Some(control_id) = window_data.find_control_id_by_hwnd(hwnd) {
+                let control_kind = window_data
+                    .get_control_kind(control_id)
+                    .map(|kind| format!("{kind:?}"))
+                    .unwrap_or_else(|| "Unknown".to_string());
+                return format!(
+                    "hwnd={hwnd:?} target=control window_id={window_id:?} control_id={} kind={control_kind}",
+                    control_id.raw()
+                );
+            }
+        }
+
+        format!("hwnd={hwnd:?} target=unresolved")
     }
 
     /*
@@ -1330,7 +1361,26 @@ impl PlatformInterface {
                         break;
                     }
                     let _ = TranslateMessage(&msg);
+                    let dispatch_start =
+                        if Win32ApiInternalState::should_profile_message(msg.message) {
+                            Some(Instant::now())
+                        } else {
+                            None
+                        };
                     DispatchMessageW(&msg);
+                    if let Some(start) = dispatch_start {
+                        let elapsed_ms = start.elapsed().as_millis();
+                        if elapsed_ms >= window_common::SLOW_MESSAGE_THRESHOLD_MS {
+                            let target = self.internal_state.describe_hwnd(msg.hwnd);
+                            log::info!(
+                                "[UiLoop] slow DispatchMessageW: {} msg={}({:#06x}) elapsed_ms={}",
+                                target,
+                                Win32ApiInternalState::message_name(msg.message),
+                                msg.message,
+                                elapsed_ms
+                            );
+                        }
+                    }
                 } else {
                     std::thread::sleep(std::time::Duration::from_millis(15));
                 }
@@ -1570,5 +1620,27 @@ mod tests {
         let result = state.should_quit_on_last_window_close();
         // Assert
         assert!(result);
+    }
+
+    #[test]
+    fn describe_hwnd_resolves_registered_control() {
+        let (state, window_id, mut data) = setup_state();
+        let window_hwnd = HWND(0x1234usize as _);
+        let control_hwnd = HWND(0x5678usize as _);
+        let control_id = ControlId::new(42);
+        data.set_hwnd(window_hwnd);
+        data.register_control_hwnd(control_id, control_hwnd);
+        data.register_control_kind(control_id, window_common::ControlKind::RichEdit);
+        {
+            let mut guard = state.active_windows().write().unwrap();
+            guard.insert(window_id, data);
+        }
+
+        let description = state.describe_hwnd(control_hwnd);
+
+        assert!(description.contains("target=control"));
+        assert!(description.contains("window_id=WindowId(1)"));
+        assert!(description.contains("control_id=42"));
+        assert!(description.contains("kind=RichEdit"));
     }
 }

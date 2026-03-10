@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.1 - 2026-03-10
+- **Fix**: Suspend `TreeView` redraw during interactive window sizing and splitter drags, then re-enable and invalidate once on release. This avoids repeated slow `WM_PAINT` work in the sizing loop while preserving a final refreshed tree after the drag ends.
+
 ## 0.8.0 - 2026-03-10
 - **BREAKING**: Add `TreeViewSelectedRow` and `TreeViewSelectionAccent` variants to `StyleId`.
 - **Feature**: TreeView custom draw extended with opt-in selection styling. If `TreeViewSelectedRow` is defined, selected items render with a theme-matching background (suppressing the native blue highlight) and a full-width row fill. If `TreeViewSelectionAccent` is defined, a 3 px accent bar is drawn at x=0 of the panel for the selected row.
