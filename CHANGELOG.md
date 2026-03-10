@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0 - 2026-03-10
+- **BREAKING**: Add `TreeViewSelectedRow` and `TreeViewSelectionAccent` variants to `StyleId`.
+- **Feature**: TreeView custom draw extended with opt-in selection styling. If `TreeViewSelectedRow` is defined, selected items render with a theme-matching background (suppressing the native blue highlight) and a full-width row fill. If `TreeViewSelectionAccent` is defined, a 3 px accent bar is drawn at x=0 of the panel for the selected row.
+- **Fix**: `CDRF_NEWFONT` is now returned whenever any color (`clrText`/`clrTextBk`) is modified, not only when a custom font handle is present. Without this, Windows silently ignored color changes.
+- Add `resolve_item_colors` pure helper (unit-testable, no Win32 dependency) for color precedence logic (base → per-item override → selection).
+
 ## 0.7.2 - 2026-03-03
 - **Hardening**: `DefineLayout` validation now rejects docked edge rules (`Top/Bottom/Left/Right`) that omit `fixed_size` and rejects negative `fixed_size` values.
 - **Hardening**: Add DPI-aware checkbox minimum-height helpers and enforce minimum native checkbox height in layout application path.
