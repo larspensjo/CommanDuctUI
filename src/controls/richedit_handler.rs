@@ -173,13 +173,20 @@ pub(crate) fn handle_set_rich_edit_content_command(
     control_id: ControlId,
     rtf_text: String,
 ) -> PlatformResult<()> {
-    let hwnd = internal_state.with_window_data_read(window_id, |window_data| {
-        window_data.get_control_hwnd(control_id).ok_or_else(|| {
+    let (hwnd, style_colors) = internal_state.with_window_data_read(window_id, |window_data| {
+        let hwnd = window_data.get_control_hwnd(control_id).ok_or_else(|| {
             PlatformError::InvalidHandle(format!(
                 "RichEdit control ID {} not found in WinID {window_id:?}",
                 control_id.raw()
             ))
-        })
+        })?;
+        // Capture the style's colors now so we can re-apply them after EM_STREAMIN,
+        // which resets the background color set by EM_SETBKGNDCOLOR.
+        let colors = window_data
+            .get_style_for_control(control_id)
+            .and_then(|style_id| internal_state.get_parsed_style(style_id))
+            .map(|style| style_colors_for_rich_edit(&style));
+        Ok((hwnd, colors))
     })?;
 
     let mut context = RtfStreamContext {
@@ -206,6 +213,12 @@ pub(crate) fn handle_set_rich_edit_content_command(
             "EM_STREAMIN failed with error code {}",
             edit_stream.dwError
         )));
+    }
+
+    // Re-apply background/foreground colors: EM_STREAMIN resets the background
+    // color that was previously set via EM_SETBKGNDCOLOR.
+    if let Some((background, foreground)) = style_colors {
+        apply_rich_edit_colors(hwnd, background, foreground);
     }
 
     Ok(())

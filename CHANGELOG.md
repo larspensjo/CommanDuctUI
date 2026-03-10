@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2 - 2026-03-10
+- **Fix**: `show_window` now calls `RedrawWindow(RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW)` immediately after `ShowWindow(SW_SHOW)`, forcing a synchronous repaint of the window and all child controls. This eliminates the white-background flash visible between `ShowWindow` and the first message-loop paint cycle.
+- **Fix**: `handle_set_rich_edit_content_command` re-applies the control's configured background and foreground colors (via `EM_SETBKGNDCOLOR` / `EM_SETCHARFORMAT`) after `EM_STREAMIN`, because streaming RTF content resets the background color previously set by `EM_SETBKGNDCOLOR`.
+
 ## 0.8.1 - 2026-03-10
 - **Fix**: Suspend `TreeView` redraw during interactive window sizing and splitter drags, then re-enable and invalidate once on release. This avoids repeated slow `WM_PAINT` work in the sizing loop while preserving a final refreshed tree after the drag ends.
 

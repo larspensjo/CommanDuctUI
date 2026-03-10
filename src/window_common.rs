@@ -2759,7 +2759,20 @@ pub(crate) fn show_window(
             )));
         }
         let cmd = if show { SW_SHOW } else { SW_HIDE };
-        unsafe { _ = ShowWindow(hwnd, cmd) };
+        unsafe {
+            _ = ShowWindow(hwnd, cmd);
+            // Force an immediate synchronous repaint of the window and all child
+            // controls after showing it, so the dark theme is fully applied before
+            // the window becomes visible to the user (avoids a white flash).
+            if show {
+                _ = RedrawWindow(
+                    Some(hwnd),
+                    None,
+                    None,
+                    RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+                );
+            }
+        }
         Ok(())
     })
 }
