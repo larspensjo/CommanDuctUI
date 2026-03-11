@@ -322,6 +322,87 @@ impl NativeWindowData {
         self.suppress_erasebkgnd
     }
 
+    fn should_erase_leaf_control(&self, control_id: ControlId, kind: ControlKind) -> bool {
+        if kind == ControlKind::TreeView && self.treeview_redraw_suspended {
+            return false;
+        }
+
+        let is_header_label = matches!(
+            (kind, self.get_style_for_control(control_id)),
+            (ControlKind::Static, Some(StyleId::HeaderLabel))
+        );
+        if self.suppresses_erasebkgnd() && is_header_label {
+            return false;
+        }
+
+        matches!(
+            kind,
+            ControlKind::TreeView | ControlKind::Edit | ControlKind::Static | ControlKind::RichEdit
+        )
+    }
+
+    fn should_erase_post_layout_redraw(&self) -> bool {
+        !self.treeview_redraw_suspended
+    }
+
+    fn frozen_treeview_layout_controls(&self) -> HashSet<ControlId> {
+        if !self.is_live_drag_freeze_active() {
+            return HashSet::new();
+        }
+
+        let Some(rules) = &self.layout_rules else {
+            return HashSet::new();
+        };
+
+        let parent_by_control: HashMap<ControlId, Option<ControlId>> = rules
+            .iter()
+            .map(|rule| (rule.control_id, rule.parent_control_id))
+            .collect();
+        let mut frozen = HashSet::new();
+
+        for (control_id, kind) in &self.control_kinds {
+            if *kind != ControlKind::TreeView {
+                continue;
+            }
+
+            let mut current = Some(*control_id);
+            while let Some(control_id) = current {
+                if !frozen.insert(control_id) {
+                    break;
+                }
+                current = parent_by_control.get(&control_id).copied().flatten();
+            }
+        }
+
+        frozen
+    }
+
+    fn should_freeze_control_layout(&self, control_id: ControlId, kind: ControlKind) -> bool {
+        if kind == ControlKind::TreeView && self.treeview_redraw_suspended {
+            return true;
+        }
+
+        self.frozen_treeview_layout_controls().contains(&control_id)
+    }
+
+    fn is_live_drag_freeze_active(&self) -> bool {
+        self.suppress_erasebkgnd && self.treeview_redraw_suspended
+    }
+
+    fn log_frozen_treeview_layout_skip(
+        &self,
+        phase: &str,
+        control_id: ControlId,
+        old_rect: Option<RECT>,
+        new_rect: RECT,
+    ) {
+        log::info!(
+            "[TreeViewFreeze] phase={phase} window_id={:?} control_id={} old_rect={old_rect:?} new_rect={new_rect:?}",
+            self.logical_window_id,
+            control_id.raw(),
+        );
+    }
+
     fn collect_control_hwnds_by_kind(&self, kind: ControlKind) -> Vec<(ControlId, HWND)> {
         self.control_kinds
             .iter()
@@ -368,6 +449,22 @@ impl NativeWindowData {
                 control_id.raw()
             );
         }
+    }
+
+    pub(crate) fn begin_live_drag_interaction(&mut self) {
+        self.set_suppress_erasebkgnd(true);
+        // Live-drag correctness takes priority over the earlier redraw suspension
+        // mitigation. Keep TreeView repaint enabled while resizing.
+        self.set_treeview_redraw_suspended(false);
+    }
+
+    pub(crate) fn end_live_drag_interaction(&mut self) {
+        self.set_suppress_erasebkgnd(false);
+        self.set_treeview_redraw_suspended(false);
+    }
+
+    pub(crate) fn is_treeview_redraw_suspended(&self) -> bool {
+        self.treeview_redraw_suspended
     }
 
     #[cfg(test)]
@@ -563,10 +660,22 @@ impl NativeWindowData {
         if let Some(hwnd_parent) = parent_hwnd {
             let last_rects = self.last_layout_rects.borrow();
             for rule in &child_rules {
+                let Some(kind) = self.control_kinds.get(&rule.control_id).copied() else {
+                    continue;
+                };
                 let new_rect = match layout_map.get(&rule.control_id) {
                     Some(r) => r,
                     None => continue,
                 };
+                if self.should_freeze_control_layout(rule.control_id, kind) {
+                    self.log_frozen_treeview_layout_skip(
+                        "parent-invalidate-skip",
+                        rule.control_id,
+                        last_rects.get(&rule.control_id).copied(),
+                        *new_rect,
+                    );
+                    continue;
+                }
                 if let Some(old_rect) = last_rects.get(&rule.control_id)
                     && old_rect != new_rect
                 {
@@ -597,6 +706,18 @@ impl NativeWindowData {
                             Some(r) => r,
                             None => continue,
                         };
+                        let kind = self.control_kinds.get(&rule.control_id).copied();
+                        if kind.is_some_and(|kind| {
+                            self.should_freeze_control_layout(rule.control_id, kind)
+                        }) {
+                            self.log_frozen_treeview_layout_skip(
+                                "movewindow-skip",
+                                rule.control_id,
+                                self.last_layout_rects.borrow().get(&rule.control_id).copied(),
+                                *rect,
+                            );
+                            continue;
+                        }
                         let control_hwnd_opt = self.control_hwnd_map.get(&rule.control_id).copied();
                         if control_hwnd_opt.is_none() || control_hwnd_opt == Some(HWND_INVALID) {
                             continue;
@@ -617,6 +738,18 @@ impl NativeWindowData {
                     Some(r) => r,
                     None => continue,
                 };
+                let kind = self.control_kinds.get(&rule.control_id).copied();
+                if kind
+                    .is_some_and(|kind| self.should_freeze_control_layout(rule.control_id, kind))
+                {
+                    self.log_frozen_treeview_layout_skip(
+                        "deferwindowpos-skip",
+                        rule.control_id,
+                        self.last_layout_rects.borrow().get(&rule.control_id).copied(),
+                        *rect,
+                    );
+                    continue;
+                }
                 let control_hwnd_opt = self.control_hwnd_map.get(&rule.control_id).copied();
                 if control_hwnd_opt.is_none() || control_hwnd_opt == Some(HWND_INVALID) {
                     log::warn!(
@@ -720,20 +853,9 @@ impl NativeWindowData {
                     continue;
                 }
                 let hwnd = control_hwnd_opt.unwrap();
-                let is_header_label = matches!(
-                    (kind, self.get_style_for_control(rule.control_id)),
-                    (Some(ControlKind::Static), Some(StyleId::HeaderLabel))
-                );
-                let suppress_header_erase = self.suppresses_erasebkgnd() && is_header_label;
-                let erase = if suppress_header_erase {
-                    false
-                } else {
-                    matches!(
-                        kind,
-                        Some(ControlKind::TreeView | ControlKind::Edit | ControlKind::Static)
-                            | Some(ControlKind::RichEdit)
-                    )
-                };
+                let erase = kind
+                    .map(|kind| self.should_erase_leaf_control(rule.control_id, kind))
+                    .unwrap_or(false);
                 _ = InvalidateRect(Some(hwnd), None, erase);
                 log::debug!(
                     "[Layout] Invalidated leaf control id={} kind={kind:?} erase={erase} hwnd={hwnd:?}",
@@ -750,12 +872,20 @@ impl NativeWindowData {
         {
             let mut last_rects = self.last_layout_rects.borrow_mut();
             for (control_id, rect) in &layout_map {
+                let kind = self.control_kinds.get(control_id).copied();
+                if kind.is_some_and(|kind| self.should_freeze_control_layout(*control_id, kind)) {
+                    continue;
+                }
                 last_rects.insert(*control_id, *rect);
             }
         }
 
         // Recursively apply layout to children after all moves are complete
         for rule in &child_rules {
+            let kind = self.control_kinds.get(&rule.control_id).copied();
+            if kind.is_some_and(|kind| self.should_freeze_control_layout(rule.control_id, kind)) {
+                continue;
+            }
             if all_window_rules
                 .iter()
                 .any(|r_child| r_child.parent_control_id == Some(rule.control_id))
@@ -912,11 +1042,13 @@ impl NativeWindowData {
         // Dynamic Prompt Lab mode/section toggles can otherwise leave stale pixels from
         // previously larger control regions, but `RDW_UPDATENOW` made resize/splitter
         // interactions synchronous with heavy child repaints.
-        let redraw_flags = if Self::post_layout_redraw_uses_updatenow() {
-            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW
-        } else {
-            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN
-        };
+        let mut redraw_flags = RDW_INVALIDATE | RDW_ALLCHILDREN;
+        if self.should_erase_post_layout_redraw() {
+            redraw_flags |= RDW_ERASE;
+        }
+        if Self::post_layout_redraw_uses_updatenow() {
+            redraw_flags |= RDW_UPDATENOW;
+        }
         unsafe {
             _ = RedrawWindow(Some(self.this_window_hwnd), None, None, redraw_flags);
         }
@@ -1704,16 +1836,17 @@ impl Win32ApiInternalState {
             }
             WM_ENTERSIZEMOVE => {
                 let _ = self.with_window_data_write(window_id, |window_data| {
-                    window_data.set_treeview_redraw_suspended(true);
+                    window_data.begin_live_drag_interaction();
                     Ok(())
                 });
                 log::info!("[UiMsg] entersizemove: window_id={window_id:?} hwnd={hwnd:?}");
             }
             WM_EXITSIZEMOVE => {
                 let _ = self.with_window_data_write(window_id, |window_data| {
-                    window_data.set_treeview_redraw_suspended(false);
+                    window_data.end_live_drag_interaction();
                     Ok(())
                 });
+                self.trigger_layout_recalculation(window_id);
                 log::info!("[UiMsg] exitsizemove: window_id={window_id:?} hwnd={hwnd:?}");
             }
             WM_COMMAND => {
@@ -2311,8 +2444,7 @@ impl Win32ApiInternalState {
         match msg {
             WM_APP_SPLITTER_DRAGGING => {
                 let _ = self.with_window_data_write(window_id, |window_data| {
-                    window_data.set_suppress_erasebkgnd(true);
-                    window_data.set_treeview_redraw_suspended(true);
+                    window_data.begin_live_drag_interaction();
                     Ok(())
                 });
                 log::trace!(
@@ -2328,10 +2460,10 @@ impl Win32ApiInternalState {
             }
             WM_APP_SPLITTER_DRAG_ENDED => {
                 let _ = self.with_window_data_write(window_id, |window_data| {
-                    window_data.set_suppress_erasebkgnd(false);
-                    window_data.set_treeview_redraw_suspended(false);
+                    window_data.end_live_drag_interaction();
                     Ok(())
                 });
+                self.trigger_layout_recalculation(window_id);
                 log::debug!(
                     "SplitterHandler: Drag ended for splitter ID {} - final desired_left_width_px: {}",
                     control_id.raw(),
@@ -2575,14 +2707,23 @@ impl Win32ApiInternalState {
         hwnd: HWND,
         wparam: WPARAM,
         lparam: LPARAM,
-        _window_id: WindowId,
+        window_id: WindowId,
     ) -> LRESULT {
         log::debug!("[Paint] WM_ERASEBKGND hwnd={hwnd:?}");
-        let suppress = self
-            .with_window_data_read(_window_id, |window_data| {
-                Ok(window_data.suppresses_erasebkgnd())
+        let (suppress, treeview_redraw_suspended, live_drag_freeze) = self
+            .with_window_data_read(window_id, |window_data| {
+                Ok((
+                    window_data.suppresses_erasebkgnd(),
+                    window_data.is_treeview_redraw_suspended(),
+                    window_data.is_live_drag_freeze_active(),
+                ))
             })
-            .unwrap_or(false);
+            .unwrap_or((false, false, false));
+        if treeview_redraw_suspended {
+            log::info!(
+                "[PaintWhileFrozen] msg=WM_ERASEBKGND window_id={window_id:?} hwnd={hwnd:?} suppress={suppress} live_drag_freeze={live_drag_freeze}"
+            );
+        }
         if suppress {
             return LRESULT(1);
         }
@@ -2609,13 +2750,30 @@ impl Win32ApiInternalState {
         hwnd: HWND,
         _wparam: WPARAM,
         _lparam: LPARAM,
-        _window_id: WindowId,
+        window_id: WindowId,
     ) -> LRESULT {
         log::debug!("[Paint] WM_PAINT hwnd={hwnd:?}");
+        let (treeview_redraw_suspended, live_drag_freeze) = self
+            .with_window_data_read(window_id, |window_data| {
+                Ok((
+                    window_data.is_treeview_redraw_suspended(),
+                    window_data.is_live_drag_freeze_active(),
+                ))
+            })
+            .unwrap_or((false, false));
+        if treeview_redraw_suspended {
+            log::info!(
+                "[PaintWhileFrozen] msg=WM_PAINT window_id={window_id:?} hwnd={hwnd:?} live_drag_freeze={live_drag_freeze}"
+            );
+        }
         unsafe {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if !hdc.is_invalid() {
+                if live_drag_freeze {
+                    _ = EndPaint(hwnd, &ps);
+                    return SUCCESS_CODE;
+                }
                 let background_brush = self
                     .get_parsed_style(StyleId::MainWindowBackground)
                     .and_then(|style| style.background_brush)
@@ -3114,6 +3272,94 @@ mod tests {
 
         data.set_treeview_redraw_suspended(false);
         assert!(!data.treeview_redraw_suspended());
+    }
+
+    #[test]
+    fn suspended_treeview_redraw_skips_leaf_erase() {
+        let mut data = NativeWindowData::new(WindowId(11));
+        let treeview_id = ControlId::new(12);
+
+        assert!(data.should_erase_leaf_control(treeview_id, ControlKind::TreeView));
+
+        data.set_treeview_redraw_suspended(true);
+        assert!(!data.should_erase_leaf_control(treeview_id, ControlKind::TreeView));
+        assert!(data.should_erase_leaf_control(treeview_id, ControlKind::Edit));
+    }
+
+    #[test]
+    fn suspended_treeview_redraw_skips_post_layout_erase() {
+        let mut data = NativeWindowData::new(WindowId(12));
+
+        assert!(data.should_erase_post_layout_redraw());
+
+        data.set_treeview_redraw_suspended(true);
+        assert!(!data.should_erase_post_layout_redraw());
+    }
+
+    #[test]
+    fn suspended_treeview_redraw_freezes_treeview_layout_only() {
+        let mut data = NativeWindowData::new(WindowId(13));
+        let treeview_id = ControlId::new(100);
+        let panel_id = ControlId::new(101);
+        data.layout_rules = Some(vec![
+            LayoutRule {
+                control_id: panel_id,
+                parent_control_id: None,
+                dock_style: DockStyle::Fill,
+                order: 0,
+                fixed_size: None,
+                margin: (0, 0, 0, 0),
+            },
+            LayoutRule {
+                control_id: treeview_id,
+                parent_control_id: Some(panel_id),
+                dock_style: DockStyle::Fill,
+                order: 0,
+                fixed_size: None,
+                margin: (0, 0, 0, 0),
+            },
+        ]);
+        data.register_control_kind(panel_id, ControlKind::Static);
+        data.register_control_kind(treeview_id, ControlKind::TreeView);
+
+        assert!(!data.should_freeze_control_layout(treeview_id, ControlKind::TreeView));
+        assert!(!data.should_freeze_control_layout(panel_id, ControlKind::Static));
+        assert!(!data.should_freeze_control_layout(ControlId::new(102), ControlKind::Edit));
+
+        data.set_treeview_redraw_suspended(true);
+        data.set_suppress_erasebkgnd(true);
+        assert!(data.should_freeze_control_layout(treeview_id, ControlKind::TreeView));
+        assert!(data.should_freeze_control_layout(panel_id, ControlKind::Static));
+        assert!(!data.should_freeze_control_layout(ControlId::new(102), ControlKind::Edit));
+    }
+
+    #[test]
+    fn live_drag_freeze_requires_both_erase_suppression_and_treeview_freeze() {
+        let mut data = NativeWindowData::new(WindowId(14));
+
+        assert!(!data.is_live_drag_freeze_active());
+
+        data.set_suppress_erasebkgnd(true);
+        assert!(!data.is_live_drag_freeze_active());
+
+        data.set_treeview_redraw_suspended(true);
+        assert!(data.is_live_drag_freeze_active());
+
+        data.set_suppress_erasebkgnd(false);
+        assert!(!data.is_live_drag_freeze_active());
+    }
+
+    #[test]
+    fn live_drag_interaction_keeps_treeview_redraw_enabled() {
+        let mut data = NativeWindowData::new(WindowId(15));
+
+        data.begin_live_drag_interaction();
+        assert!(data.suppresses_erasebkgnd());
+        assert!(!data.is_treeview_redraw_suspended());
+
+        data.end_live_drag_interaction();
+        assert!(!data.suppresses_erasebkgnd());
+        assert!(!data.is_treeview_redraw_suspended());
     }
 
     #[test]
