@@ -713,7 +713,10 @@ impl NativeWindowData {
                             self.log_frozen_treeview_layout_skip(
                                 "movewindow-skip",
                                 rule.control_id,
-                                self.last_layout_rects.borrow().get(&rule.control_id).copied(),
+                                self.last_layout_rects
+                                    .borrow()
+                                    .get(&rule.control_id)
+                                    .copied(),
                                 *rect,
                             );
                             continue;
@@ -739,13 +742,15 @@ impl NativeWindowData {
                     None => continue,
                 };
                 let kind = self.control_kinds.get(&rule.control_id).copied();
-                if kind
-                    .is_some_and(|kind| self.should_freeze_control_layout(rule.control_id, kind))
+                if kind.is_some_and(|kind| self.should_freeze_control_layout(rule.control_id, kind))
                 {
                     self.log_frozen_treeview_layout_skip(
                         "deferwindowpos-skip",
                         rule.control_id,
-                        self.last_layout_rects.borrow().get(&rule.control_id).copied(),
+                        self.last_layout_rects
+                            .borrow()
+                            .get(&rule.control_id)
+                            .copied(),
                         *rect,
                     );
                     continue;
