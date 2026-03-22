@@ -34,6 +34,8 @@ pub use app::PlatformInterface;
 pub use error::Result as PlatformResult;
 pub use styling_primitives::{Color, ControlStyle, FontDescription, FontWeight, StyleId};
 pub use types::{
-    AppEvent, ChartDataPacket, ChartLineData, CheckState, MessageSeverity, PlatformCommand,
-    PlatformEventHandler, TreeItemDescriptor, TreeItemId, UiStateProvider, WindowConfig, WindowId,
+    AppEvent, ChartDataPacket, ChartLineData, CheckState, FormButtons, FormDialogDescriptor,
+    FormField, FormFieldValue, FormFileExistsWarning, FormRow, FormTextValidation, MessageSeverity,
+    PlatformCommand, PlatformEventHandler, TreeItemDescriptor, TreeItemId, UiStateProvider,
+    WindowConfig, WindowId,
 };

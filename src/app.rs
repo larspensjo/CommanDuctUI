@@ -501,6 +501,9 @@ impl Win32ApiInternalState {
             } => dialog_handler::handle_show_exclude_patterns_dialog_command(
                 self, window_id, title, patterns,
             ),
+            PlatformCommand::ShowFormDialog { window_id, form } => {
+                dialog_handler::handle_show_form_dialog_command(self, window_id, form)
+            }
             PlatformCommand::ShowMessageBox {
                 window_id,
                 title,

@@ -253,6 +253,12 @@ pub enum AppEvent {
         text: Option<String>,
         context_tag: Option<String>,
     },
+    FormDialogCompleted {
+        window_id: WindowId,
+        context_tag: String,
+        confirmed: bool,
+        field_values: Vec<FormFieldValue>,
+    },
     ExcludePatternsDialogCompleted {
         window_id: WindowId,
         saved: bool,
@@ -386,6 +392,70 @@ pub struct ChartDataPacket {
     pub is_loading: bool,
 }
 
+/// Generic rows that can appear in a modal form dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormRow {
+    ReadOnlyText { label: String, value: String },
+    Note { text: String, severity: MessageSeverity },
+}
+
+/// Validation rules for a single-line text input in a generic form dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormTextValidation {
+    Any,
+    NonEmpty,
+    PathSegment,
+}
+
+/// Optional live warning attached to a text input field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormFileExistsWarning {
+    pub base_dir: PathBuf,
+    pub message: String,
+}
+
+/// Generic editable fields supported by the modal form dialog primitive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormField {
+    TextInput {
+        field_id: String,
+        label: String,
+        value: String,
+        validation: FormTextValidation,
+        live_warning: Option<FormFileExistsWarning>,
+    },
+    CheckBox {
+        field_id: String,
+        label: String,
+        checked: bool,
+    },
+}
+
+/// Generic button labels and initial confirm-enabled state for a modal form dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormButtons {
+    pub confirm_label: String,
+    pub cancel_label: String,
+    pub confirm_enabled: bool,
+}
+
+/// Descriptor for a generic modal form dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormDialogDescriptor {
+    pub title: String,
+    pub context_tag: String,
+    pub rows: Vec<FormRow>,
+    pub fields: Vec<FormField>,
+    pub buttons: FormButtons,
+}
+
+/// Result payload returned by a generic modal form dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormFieldValue {
+    Text { field_id: String, value: String },
+    CheckBox { field_id: String, checked: bool },
+}
+
 // Represents platform-agnostic commands sent from the application logic to the platform layer.
 //
 // These commands instruct the platform layer to perform specific actions on
@@ -451,6 +521,10 @@ pub enum PlatformCommand {
         window_id: WindowId,
         title: String,
         patterns: String,
+    },
+    ShowFormDialog {
+        window_id: WindowId,
+        form: FormDialogDescriptor,
     },
     /*
      * Shows a simple modal message box from the platform layer.

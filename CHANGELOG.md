@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.9 - 2026-03-22
+- **Feature**: Add a reusable modal form dialog primitive with read-only rows, text inputs, checkboxes, and generic completion results. The primitive supports dark-theme-safe rendering plus live text-field validation and file-exists warnings for hosted applications.
+
 ## 0.8.8 - 2026-03-11
 - **Fix**: Refine live resize and splitter-drag behavior for `TreeView`-heavy windows. The final interaction keeps background erase suppression during drag while leaving `TreeView` redraw enabled, preserving correct live updates without the blank-pane artifact from the abandoned freeze-based mitigation.
 

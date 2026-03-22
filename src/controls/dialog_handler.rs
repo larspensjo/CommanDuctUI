@@ -8,20 +8,30 @@
 
 use crate::app::Win32ApiInternalState;
 use crate::error::{PlatformError, Result as PlatformResult};
-use crate::types::{AppEvent, MessageSeverity, WindowId};
+use crate::types::{
+    AppEvent, FormButtons, FormDialogDescriptor, FormField, FormFieldValue, FormFileExistsWarning,
+    FormRow, FormTextValidation, MessageSeverity, WindowId,
+};
 use crate::window_common;
 
 use std::ffi::{OsString, c_void};
+use std::collections::HashMap;
 use std::mem::{align_of, size_of};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use windows::{
     Win32::{
-        Foundation::{FALSE, HWND, LPARAM, TRUE, WPARAM},
+        Foundation::{COLORREF, FALSE, HWND, LPARAM, TRUE, WPARAM},
+        Graphics::Gdi::{
+            CreateSolidBrush, HBRUSH, HDC, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
+        },
         System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree},
         UI::Controls::Dialogs::*,
+        UI::Controls::BST_CHECKED,
+        UI::WindowsAndMessaging::{BM_GETCHECK, EN_CHANGE},
+        UI::Input::KeyboardAndMouse::EnableWindow,
         UI::Shell::{
             FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
             SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
@@ -35,6 +45,19 @@ use windows::{
 const ID_DIALOG_PROFILE_LISTBOX: i32 = 4001;
 const ID_DIALOG_PROFILE_PROMPT: i32 = 4002;
 const ID_DIALOG_PROFILE_CREATE_NEW_BUTTON: i32 = 4003;
+
+// --- Control IDs for the generic form dialog ---
+const ID_DIALOG_FORM_FIRST_ROW: i32 = 5001;
+const ID_DIALOG_FORM_FIRST_FIELD_LABEL: i32 = 5100;
+const ID_DIALOG_FORM_FIRST_FIELD_EDIT: i32 = 5200;
+const ID_DIALOG_FORM_FIRST_FIELD_CHECKBOX: i32 = 5300;
+const ID_DIALOG_FORM_FIRST_WARNING: i32 = 5400;
+const ID_DIALOG_FORM_OK: i32 = 5500;
+const ID_DIALOG_FORM_CANCEL: i32 = 5501;
+
+const COLOR_DIALOG_BG: COLORREF = COLORREF(0x0028_221E); // #1E2228
+const COLOR_DIALOG_TEXT: COLORREF = COLORREF(0x00E0_E0E0);
+const COLOR_DIALOG_WARNING: COLORREF = COLORREF(0x0000_C8FF);
 
 /*
  * Creates a `PathBuf` from a null-terminated or unterminated slice of UTF-16 code units.
@@ -559,9 +582,152 @@ struct ExcludePatternsDialogData {
     saved: bool,
 }
 
+enum FormFieldRuntime {
+    TextInput {
+        field_id: String,
+        edit_control_id: i32,
+        warning_control_id: Option<i32>,
+        validation: FormTextValidation,
+        live_warning: Option<FormFileExistsWarning>,
+    },
+    CheckBox {
+        field_id: String,
+        control_id: i32,
+    },
+}
+
+struct FormDialogData {
+    context_tag: String,
+    fields: Vec<FormFieldRuntime>,
+    note_severities: HashMap<i32, MessageSeverity>,
+    buttons: FormButtons,
+    confirmed: bool,
+    field_values: Vec<FormFieldValue>,
+}
+
 // Helper to extract the low word from WPARAM.
 fn loword_from_wparam(wparam: WPARAM) -> u16 {
     (wparam.0 & 0xFFFF) as u16
+}
+
+fn form_background_brush() -> HBRUSH {
+    static BRUSH: OnceLock<usize> = OnceLock::new();
+    let raw = *BRUSH.get_or_init(|| unsafe { CreateSolidBrush(COLOR_DIALOG_BG).0 as usize });
+    HBRUSH(raw as *mut c_void)
+}
+
+fn form_validation_is_valid(validation: &FormTextValidation, value: &str) -> bool {
+    match validation {
+        FormTextValidation::Any => true,
+        FormTextValidation::NonEmpty => !value.trim().is_empty(),
+        FormTextValidation::PathSegment => is_safe_path_segment(value),
+    }
+}
+
+fn is_safe_path_segment(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        return false;
+    }
+    if trimmed.contains(['/', '\\', '\0']) {
+        return false;
+    }
+    !std::path::Path::new(trimmed).is_absolute()
+}
+
+fn set_dialog_item_text(hdlg: HWND, control_id: i32, text: &str) {
+    let h_text = HSTRING::from(text);
+    unsafe {
+        SetDlgItemTextW(hdlg, control_id, &h_text).unwrap_or_default();
+    }
+}
+
+fn read_control_text(hwnd: HWND) -> String {
+    match window_common::read_edit_control_text(hwnd) {
+        Ok(text) => text,
+        Err(err) => {
+            log::warn!("DialogHandler: failed to read edit control text: {err}");
+            String::new()
+        }
+    }
+}
+
+fn update_form_dialog_live_state(hdlg: HWND) {
+    let data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
+    if data_ptr.is_null() {
+        return;
+    }
+    let data = unsafe { &mut *data_ptr };
+    let mut any_invalid = false;
+    for field in &data.fields {
+        if let FormFieldRuntime::TextInput {
+            edit_control_id,
+            warning_control_id,
+            validation,
+            live_warning,
+            ..
+        } = field
+        {
+            let Ok(hwnd_edit) = (unsafe { GetDlgItem(Some(hdlg), *edit_control_id) }) else {
+                any_invalid = true;
+                continue;
+            };
+            let current_text = read_control_text(hwnd_edit);
+            let valid = form_validation_is_valid(validation, &current_text);
+            any_invalid |= !valid;
+            if let Some(warning) = live_warning
+                && let Some(warning_control_id) = warning_control_id
+            {
+                let exists = warning.base_dir.join(current_text.trim()).exists();
+                set_dialog_item_text(
+                    hdlg,
+                    *warning_control_id,
+                    if exists { &warning.message } else { "" },
+                );
+            }
+        }
+    }
+    let enabled = data.buttons.confirm_enabled && !any_invalid;
+    if let Ok(hwnd_ok) = unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_FORM_OK) } {
+        unsafe {
+            let _ = EnableWindow(hwnd_ok, enabled);
+        }
+    }
+}
+
+fn collect_form_field_values(hdlg: HWND, data: &mut FormDialogData) -> Vec<FormFieldValue> {
+    let mut values = Vec::new();
+    for field in &data.fields {
+        match field {
+            FormFieldRuntime::TextInput {
+                field_id,
+                edit_control_id,
+                ..
+            } => {
+                if let Ok(hwnd_edit) = unsafe { GetDlgItem(Some(hdlg), *edit_control_id) } {
+                    values.push(FormFieldValue::Text {
+                        field_id: field_id.clone(),
+                        value: read_control_text(hwnd_edit),
+                    });
+                }
+            }
+            FormFieldRuntime::CheckBox {
+                field_id,
+                control_id,
+            } => {
+                if let Ok(hwnd_check) = unsafe { GetDlgItem(Some(hdlg), *control_id) } {
+                    let checked =
+                        unsafe { SendMessageW(hwnd_check, BM_GETCHECK, None, None) }.0 as u32
+                            == BST_CHECKED.0;
+                    values.push(FormFieldValue::CheckBox {
+                        field_id: field_id.clone(),
+                        checked,
+                    });
+                }
+            }
+        }
+    }
+    values
 }
 
 /*
@@ -729,6 +895,545 @@ unsafe extern "system" fn exclude_patterns_dialog_proc(
         }
         _ => FALSE.0 as isize,
     }
+}
+
+fn form_dialog_control_id(base: i32, index: usize) -> i32 {
+    base + index as i32
+}
+
+fn form_dialog_content_height(form: &FormDialogDescriptor) -> i32 {
+    let mut height = 14;
+    height += (form.rows.len() as i32) * 18;
+    for field in &form.fields {
+        match field {
+            FormField::TextInput { live_warning, .. } => {
+                height += 18;
+                height += 24;
+                if live_warning.is_some() {
+                    height += 16;
+                }
+            }
+            FormField::CheckBox { .. } => {
+                height += 18;
+            }
+        }
+    }
+    height + 36
+}
+
+fn build_form_dialog_template(
+    template_bytes: &mut Vec<u8>,
+    form: &FormDialogDescriptor,
+) -> PlatformResult<()> {
+    let mut cdit: u16 = 0;
+    cdit = cdit.saturating_add(form.rows.len() as u16);
+    for field in &form.fields {
+        cdit = cdit.saturating_add(match field {
+            FormField::TextInput { live_warning, .. } => {
+                2 + if live_warning.is_some() { 1 } else { 0 }
+            }
+            FormField::CheckBox { .. } => 1,
+        });
+    }
+    cdit = cdit.saturating_add(2);
+
+    let dlg_template = DLGTEMPLATE {
+        style: DS_CENTER as u32 | DS_MODALFRAME as u32 | DS_SETFONT as u32 | WS_CAPTION.0 | WS_SYSMENU.0 | WS_POPUP.0,
+        dwExtendedStyle: 0,
+        cdit,
+        x: 0,
+        y: 0,
+        cx: 420,
+        cy: form_dialog_content_height(form) as i16,
+    };
+    template_bytes.extend_from_slice(unsafe {
+        &*(std::ptr::addr_of!(dlg_template) as *const [u8; size_of::<DLGTEMPLATE>()])
+    });
+    push_word(template_bytes, 0);
+    push_word(template_bytes, 0);
+    push_str_utf16(template_bytes, &form.title);
+    push_word(template_bytes, 8);
+    push_str_utf16(template_bytes, "MS Shell Dlg");
+
+    let mut y = 10;
+    for (index, row) in form.rows.iter().enumerate() {
+        align_to_dword(template_bytes);
+        let row_id = form_dialog_control_id(ID_DIALOG_FORM_FIRST_ROW, index);
+        let row_text = match row {
+            FormRow::ReadOnlyText { label, value } => {
+                if label.is_empty() {
+                    value.clone()
+                } else {
+                    format!("{label}: {value}")
+                }
+            }
+            FormRow::Note { text, .. } => text.clone(),
+        };
+        let row_item = DLGITEMTEMPLATE {
+            style: WS_CHILD.0 | WS_VISIBLE.0 | window_common::SS_LEFT.0,
+            id: row_id as u16,
+            x: 10,
+            y,
+            cx: 390,
+            cy: 14,
+            ..Default::default()
+        };
+        template_bytes.extend_from_slice(unsafe {
+            &*(std::ptr::addr_of!(row_item) as *const [u8; size_of::<DLGITEMTEMPLATE>()])
+        });
+        push_str_utf16(template_bytes, "Static");
+        push_str_utf16(template_bytes, &row_text);
+        push_word(template_bytes, 0);
+        y += 18;
+    }
+
+    for (index, field) in form.fields.iter().enumerate() {
+        match field {
+            FormField::TextInput {
+                label,
+                value: _,
+                live_warning,
+                ..
+            } => {
+                align_to_dword(template_bytes);
+                let label_id = form_dialog_control_id(ID_DIALOG_FORM_FIRST_FIELD_LABEL, index);
+                let label_item = DLGITEMTEMPLATE {
+                    style: WS_CHILD.0 | WS_VISIBLE.0 | window_common::SS_LEFT.0,
+                    id: label_id as u16,
+                    x: 10,
+                    y,
+                    cx: 390,
+                    cy: 14,
+                    ..Default::default()
+                };
+                template_bytes.extend_from_slice(unsafe {
+                    &*(std::ptr::addr_of!(label_item) as *const [u8; size_of::<DLGITEMTEMPLATE>()])
+                });
+                push_str_utf16(template_bytes, "Static");
+                push_str_utf16(template_bytes, label);
+                push_word(template_bytes, 0);
+                y += 16;
+
+                align_to_dword(template_bytes);
+                let edit_id = form_dialog_control_id(ID_DIALOG_FORM_FIRST_FIELD_EDIT, index);
+                let edit_item = DLGITEMTEMPLATE {
+                    style: WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | WS_TABSTOP.0 | ES_AUTOHSCROLL as u32,
+                    id: edit_id as u16,
+                    x: 10,
+                    y,
+                    cx: 390,
+                    cy: 14,
+                    ..Default::default()
+                };
+                template_bytes.extend_from_slice(unsafe {
+                    &*(std::ptr::addr_of!(edit_item) as *const [u8; size_of::<DLGITEMTEMPLATE>()])
+                });
+                push_str_utf16(template_bytes, "Edit");
+                push_word(template_bytes, 0);
+                push_word(template_bytes, 0);
+                y += 18;
+
+                if live_warning.is_some() {
+                    align_to_dword(template_bytes);
+                    let warning_id =
+                        form_dialog_control_id(ID_DIALOG_FORM_FIRST_WARNING, index);
+                    let warning_item = DLGITEMTEMPLATE {
+                        style: WS_CHILD.0 | WS_VISIBLE.0 | window_common::SS_LEFT.0,
+                        id: warning_id as u16,
+                        x: 10,
+                        y,
+                        cx: 390,
+                        cy: 14,
+                        ..Default::default()
+                    };
+                    template_bytes.extend_from_slice(unsafe {
+                        &*(std::ptr::addr_of!(warning_item)
+                            as *const [u8; size_of::<DLGITEMTEMPLATE>()])
+                    });
+                    push_str_utf16(template_bytes, "Static");
+                    push_word(template_bytes, 0);
+                    push_word(template_bytes, 0);
+                    y += 16;
+                }
+            }
+            FormField::CheckBox { label, .. } => {
+                align_to_dword(template_bytes);
+                let checkbox_id =
+                    form_dialog_control_id(ID_DIALOG_FORM_FIRST_FIELD_CHECKBOX, index);
+                let checkbox_item = DLGITEMTEMPLATE {
+                    style: WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32,
+                    id: checkbox_id as u16,
+                    x: 10,
+                    y,
+                    cx: 390,
+                    cy: 16,
+                    ..Default::default()
+                };
+                template_bytes.extend_from_slice(unsafe {
+                    &*(std::ptr::addr_of!(checkbox_item)
+                        as *const [u8; size_of::<DLGITEMTEMPLATE>()])
+                });
+                push_str_utf16(template_bytes, "Button");
+                push_str_utf16(template_bytes, label);
+                push_word(template_bytes, 0);
+                y += 18;
+            }
+        }
+    }
+
+    align_to_dword(template_bytes);
+    let ok_button_item = DLGITEMTEMPLATE {
+        style: WS_CHILD.0 | WS_VISIBLE.0 | BS_DEFPUSHBUTTON as u32,
+        id: ID_DIALOG_FORM_OK as u16,
+        x: 240,
+        y,
+        cx: 70,
+        cy: 16,
+        ..Default::default()
+    };
+    template_bytes.extend_from_slice(unsafe {
+        &*(std::ptr::addr_of!(ok_button_item) as *const [u8; size_of::<DLGITEMTEMPLATE>()])
+    });
+    push_str_utf16(template_bytes, "Button");
+    push_str_utf16(template_bytes, &form.buttons.confirm_label);
+    push_word(template_bytes, 0);
+
+    align_to_dword(template_bytes);
+    let cancel_button_item = DLGITEMTEMPLATE {
+        style: WS_CHILD.0 | WS_VISIBLE.0 | BS_PUSHBUTTON as u32,
+        id: ID_DIALOG_FORM_CANCEL as u16,
+        x: 320,
+        y,
+        cx: 80,
+        cy: 16,
+        ..Default::default()
+    };
+    template_bytes.extend_from_slice(unsafe {
+        &*(std::ptr::addr_of!(cancel_button_item) as *const [u8; size_of::<DLGITEMTEMPLATE>()])
+    });
+    push_str_utf16(template_bytes, "Button");
+    push_str_utf16(template_bytes, &form.buttons.cancel_label);
+    push_word(template_bytes, 0);
+
+    Ok(())
+}
+
+unsafe extern "system" fn form_dialog_proc(
+    hdlg: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> isize {
+    match msg {
+        WM_INITDIALOG => {
+            unsafe {
+                SetWindowLongPtrW(hdlg, GWLP_USERDATA, lparam.0);
+            }
+            let dialog_data = unsafe { &*(lparam.0 as *const FormDialogData) };
+            window_common::try_enable_dark_mode(hdlg);
+
+            for field in &dialog_data.fields {
+                match field {
+                    FormFieldRuntime::TextInput {
+                        field_id: runtime_field_id,
+                        edit_control_id,
+                        warning_control_id,
+                        live_warning,
+                        validation: _,
+                        ..
+                    } => {
+                        if let Ok(hwnd_edit) = unsafe { GetDlgItem(Some(hdlg), *edit_control_id) } {
+                            let initial_text = dialog_data
+                                .field_values
+                                .iter()
+                                .find_map(|value| match value {
+                                    FormFieldValue::Text { field_id, value }
+                                        if field_id == runtime_field_id =>
+                                    {
+                                        Some(value.clone())
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
+                            if !initial_text.is_empty() {
+                                set_dialog_item_text(hdlg, *edit_control_id, &initial_text);
+                            }
+                            window_common::try_enable_dark_mode(hwnd_edit);
+                        }
+                        if let Some(warning_control_id) = warning_control_id
+                            && let Ok(hwnd_warning) =
+                                unsafe { GetDlgItem(Some(hdlg), *warning_control_id) }
+                        {
+                            window_common::try_enable_dark_mode(hwnd_warning);
+                            if let Some(warning) = live_warning {
+                                set_dialog_item_text(hdlg, *warning_control_id, &warning.message);
+                            }
+                        }
+                    }
+                    FormFieldRuntime::CheckBox {
+                        field_id: runtime_field_id,
+                        control_id,
+                    } => {
+                        if let Ok(hwnd_check) = unsafe { GetDlgItem(Some(hdlg), *control_id) } {
+                            if let Some(initial_checked) =
+                                dialog_data
+                                    .field_values
+                                    .iter()
+                                    .find_map(|value| match value {
+                                        FormFieldValue::CheckBox { field_id, checked }
+                                            if field_id == runtime_field_id =>
+                                        {
+                                            Some(*checked)
+                                        }
+                                        _ => None,
+                                    })
+                            {
+                                unsafe {
+                                    SendMessageW(
+                                        hwnd_check,
+                                        BM_SETCHECK,
+                                        Some(WPARAM(if initial_checked { 1 } else { 0 })),
+                                        Some(LPARAM(0)),
+                                    );
+                                }
+                            }
+                            window_common::apply_button_dark_mode_classic_render(hwnd_check);
+                        }
+                    }
+                }
+            }
+
+            if let Ok(hwnd_ok) = unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_FORM_OK) } {
+                window_common::apply_button_dark_mode_classic_render(hwnd_ok);
+                unsafe {
+                    let _ = EnableWindow(hwnd_ok, dialog_data.buttons.confirm_enabled);
+                }
+            }
+            if let Ok(hwnd_cancel) = unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_FORM_CANCEL) } {
+                window_common::apply_button_dark_mode_classic_render(hwnd_cancel);
+            }
+
+            update_form_dialog_live_state(hdlg);
+            TRUE.0 as isize
+        }
+        WM_COMMAND => {
+            let command_id = window_common::loword_from_wparam(wparam);
+            let notification_code = window_common::highord_from_wparam(wparam);
+            match command_id {
+                x if x == ID_DIALOG_FORM_OK => {
+                    let dialog_data_ptr =
+                        unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
+                    if !dialog_data_ptr.is_null() {
+                        let dialog_data = unsafe { &mut *dialog_data_ptr };
+                        dialog_data.confirmed = true;
+                        dialog_data.field_values = collect_form_field_values(hdlg, dialog_data);
+                    }
+                    unsafe {
+                        EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default();
+                    }
+                    TRUE.0 as isize
+                }
+                x if x == ID_DIALOG_FORM_CANCEL => {
+                    let dialog_data_ptr =
+                        unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
+                    if !dialog_data_ptr.is_null() {
+                        unsafe { (*dialog_data_ptr).confirmed = false };
+                    }
+                    unsafe {
+                        EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default();
+                    }
+                    TRUE.0 as isize
+                }
+                _ => {
+                    let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
+                        as *mut FormDialogData;
+                    if dialog_data_ptr.is_null() {
+                        return FALSE.0 as isize;
+                    }
+                    let dialog_data = unsafe { &mut *dialog_data_ptr };
+                    let mut needs_refresh = false;
+                    for field in &dialog_data.fields {
+                        match field {
+                            FormFieldRuntime::TextInput { edit_control_id, .. }
+                                if command_id == *edit_control_id
+                                    && notification_code == EN_CHANGE as i32 =>
+                            {
+                                needs_refresh = true;
+                            }
+                            FormFieldRuntime::CheckBox { control_id, .. }
+                                if command_id == *control_id && notification_code == 0 =>
+                            {
+                                needs_refresh = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if needs_refresh {
+                        update_form_dialog_live_state(hdlg);
+                        return TRUE.0 as isize;
+                    }
+                    FALSE.0 as isize
+                }
+            }
+        }
+        WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORBTN => {
+            let hdc = HDC(wparam.0 as *mut c_void);
+            let hwnd_control = HWND(lparam.0 as *mut c_void);
+            let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
+                as *mut FormDialogData;
+            if !dialog_data_ptr.is_null() {
+                let dialog_data = unsafe { &mut *dialog_data_ptr };
+                unsafe {
+                    SetBkColor(hdc, COLOR_DIALOG_BG);
+                    SetTextColor(hdc, COLOR_DIALOG_TEXT);
+                    SetBkMode(hdc, TRANSPARENT);
+                }
+                let control_id_raw = unsafe { GetDlgCtrlID(hwnd_control) };
+                if let Some(severity) = dialog_data.note_severities.get(&control_id_raw) {
+                    unsafe {
+                        SetTextColor(
+                            hdc,
+                            match severity {
+                                MessageSeverity::Warning => COLOR_DIALOG_WARNING,
+                                MessageSeverity::Error => COLORREF(0x0000_66FF),
+                                _ => COLOR_DIALOG_TEXT,
+                            },
+                        );
+                    }
+                }
+            } else {
+                unsafe {
+                    SetBkColor(hdc, COLOR_DIALOG_BG);
+                    SetTextColor(hdc, COLOR_DIALOG_TEXT);
+                    SetBkMode(hdc, TRANSPARENT);
+                }
+            }
+            let _ = hwnd_control;
+            form_background_brush().0 as isize
+        }
+        WM_CLOSE => {
+            unsafe {
+                EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default();
+            }
+            TRUE.0 as isize
+        }
+        _ => FALSE.0 as isize,
+    }
+}
+
+pub(crate) fn handle_show_form_dialog_command(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    form: FormDialogDescriptor,
+) -> PlatformResult<()> {
+    log::debug!(
+        "DialogHandler: Showing generic form dialog. Title: '{}' Context: '{}'",
+        form.title,
+        form.context_tag
+    );
+    let hwnd_owner = get_hwnd_owner(internal_state, window_id)?;
+
+    let mut fields = Vec::new();
+    let mut note_severities = HashMap::new();
+    for (index, field) in form.fields.iter().enumerate() {
+        match field {
+            FormField::TextInput {
+                field_id,
+                value,
+                validation,
+                live_warning,
+                ..
+            } => {
+                let edit_control_id = form_dialog_control_id(ID_DIALOG_FORM_FIRST_FIELD_EDIT, index);
+                let warning_control_id = live_warning.as_ref().map(|_| {
+                    form_dialog_control_id(ID_DIALOG_FORM_FIRST_WARNING, index)
+                });
+                if let Some(control_id) = warning_control_id {
+                    note_severities.insert(control_id, MessageSeverity::Warning);
+                }
+                fields.push(FormFieldRuntime::TextInput {
+                    field_id: field_id.clone(),
+                    edit_control_id,
+                    warning_control_id,
+                    validation: validation.clone(),
+                    live_warning: live_warning.clone(),
+                });
+                let _ = value;
+            }
+            FormField::CheckBox {
+                field_id, checked, ..
+            } => {
+                fields.push(FormFieldRuntime::CheckBox {
+                    field_id: field_id.clone(),
+                    control_id: form_dialog_control_id(
+                        ID_DIALOG_FORM_FIRST_FIELD_CHECKBOX,
+                        index,
+                    ),
+                });
+                let _ = checked;
+            }
+        }
+    }
+    for (index, row) in form.rows.iter().enumerate() {
+        if let FormRow::Note { severity, .. } = row {
+            note_severities.insert(
+                form_dialog_control_id(ID_DIALOG_FORM_FIRST_ROW, index),
+                *severity,
+            );
+        }
+    }
+
+    let mut dialog_data = FormDialogData {
+        context_tag: form.context_tag.clone(),
+        fields,
+        note_severities,
+        buttons: form.buttons.clone(),
+        confirmed: false,
+        field_values: form
+            .fields
+            .iter()
+            .map(|field| match field {
+                FormField::TextInput { field_id, value, .. } => FormFieldValue::Text {
+                    field_id: field_id.clone(),
+                    value: value.clone(),
+                },
+                FormField::CheckBox {
+                    field_id, checked, ..
+                } => FormFieldValue::CheckBox {
+                    field_id: field_id.clone(),
+                    checked: *checked,
+                },
+            })
+            .collect(),
+    };
+
+    let mut template_bytes = Vec::<u8>::new();
+    build_form_dialog_template(&mut template_bytes, &form)?;
+    let dialog_result = unsafe {
+        DialogBoxIndirectParamW(
+            Some(internal_state.h_instance()),
+            template_bytes.as_ptr() as *const DLGTEMPLATE,
+            Some(hwnd_owner),
+            Some(form_dialog_proc),
+            LPARAM(&mut dialog_data as *mut _ as isize),
+        )
+    };
+
+    let confirmed = dialog_result == IDOK.0 as isize && dialog_data.confirmed;
+    let field_values = if confirmed {
+        dialog_data.field_values.clone()
+    } else {
+        Vec::new()
+    };
+
+    internal_state.send_event(AppEvent::FormDialogCompleted {
+        window_id,
+        context_tag: dialog_data.context_tag,
+        confirmed,
+        field_values,
+    });
+
+    Ok(())
 }
 
 // Helper to push a u16 word to a byte vector.
