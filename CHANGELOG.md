@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.9.0 - 2026-03-24
+- **Feature**: Add `AppEvent::WindowResizeCompleted { window_id, outer_width, outer_height }`. Emitted from the `WM_EXITSIZEMOVE` handler via `GetWindowRect`, giving subscribers the final outer window dimensions (frame + title bar included) after the user finishes a resize or move drag.
+
 ## 0.8.9 - 2026-03-22
 - **Feature**: Add a reusable modal form dialog primitive with read-only rows, text inputs, checkboxes, and generic completion results. The primitive supports dark-theme-safe rendering plus live text-field validation and file-exists warnings for hosted applications.
 

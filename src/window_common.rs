@@ -1853,6 +1853,16 @@ impl Win32ApiInternalState {
                 });
                 self.trigger_layout_recalculation(window_id);
                 log::info!("[UiMsg] exitsizemove: window_id={window_id:?} hwnd={hwnd:?}");
+                let mut rect = RECT::default();
+                if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+                    let outer_width = rect.right - rect.left;
+                    let outer_height = rect.bottom - rect.top;
+                    event_to_send = Some(AppEvent::WindowResizeCompleted {
+                        window_id,
+                        outer_width,
+                        outer_height,
+                    });
+                }
             }
             WM_COMMAND => {
                 event_to_send = self.handle_wm_command(hwnd, wparam, lparam, window_id);

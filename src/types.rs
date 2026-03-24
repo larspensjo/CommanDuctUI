@@ -210,6 +210,13 @@ pub enum AppEvent {
         width: i32,
         height: i32,
     },
+    /// Signals that a window resize drag has completed.
+    /// Dimensions are outer window dimensions (including frame/title bar).
+    WindowResizeCompleted {
+        window_id: WindowId,
+        outer_width: i32,
+        outer_height: i32,
+    },
     // Signals that a window and its native resources have been destroyed.
     // The `WindowId` should be considered invalid after this event.
     WindowDestroyed {
