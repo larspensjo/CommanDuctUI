@@ -1,5 +1,5 @@
 /*
- * Owner-drawn GDI line chart control for the Trends tab.
+ * Owner-drawn GDI line chart control.
  *
  * Uses a custom registered window class ("HarvesterChartControl") with its own
  * WndProc so it can respond to WM_PAINT, WM_ERASEBKGND, and WM_SIZE independently
@@ -215,7 +215,7 @@ fn place_end_labels(
         }
         // Clamp x so the label doesn't exceed the right edge.
         let lw = label_width_fn(&text);
-        let clamped_x = x.min(right_edge - lw);
+        let clamped_x = x.min(right_edge - lw).max(0);
         result.push(PlacedLabel {
             x: clamped_x,
             y,
@@ -298,14 +298,13 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
     } else {
         130
     };
-    let estimated_end_label_width: i32 = if show_end_labels
-        && lines.iter().any(|l| l.end_label.is_some())
-    {
-        80
+    // When end labels are shown the plot extends to near-full width; labels draw
+    // into the reserved space between plot_w and right_edge (w - 16).
+    let margin_right: i32 = if show_end_labels && lines.iter().any(|l| l.end_label.is_some()) {
+        16 // plot extends to near-full width; labels draw beyond plot_w into right_edge space
     } else {
-        0
+        16 + legend_w
     };
-    let margin_right: i32 = 16 + legend_w + estimated_end_label_width;
     let margin_top: i32 = 16;
     let margin_bottom: i32 = if show_x_axis_labels { 20 } else { 16 };
 
@@ -454,7 +453,7 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
 
     if show_end_labels {
         // Resolve overlap and draw end labels.
-        let right_edge = margin_left + plot_w;
+        let right_edge = w - 16; // full client width minus minimal right edge gap
         let label_width_fn = |text: &str| -> i32 {
             let wide: Vec<u16> = text.encode_utf16().collect();
             let mut sz = SIZE::default();
@@ -468,7 +467,8 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
         for pl in &placed {
             let wide: Vec<u16> = pl.text.encode_utf16().collect();
             let _ = unsafe { SetTextColor(hdc, COLORREF(pl.color)) };
-            let _ = unsafe { TextOutW(hdc, pl.x, pl.y, &wide) };
+            let draw_y = pl.y.min(margin_top + plot_h - 16).max(margin_top);
+            let _ = unsafe { TextOutW(hdc, pl.x, draw_y, &wide) };
         }
     } else {
         // Legend (top-right column).
