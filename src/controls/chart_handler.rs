@@ -262,16 +262,16 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
         let _ = unsafe { MoveToEx(hdc, margin_left, y, None) };
         let _ = unsafe { LineTo(hdc, margin_left + plot_w, y) };
 
-        if show_y_axis_labels && !ticks.is_empty() {
+        let tick_idx = 4 - i as usize;
+        if show_y_axis_labels && tick_idx < ticks.len() {
             // i=0 is the top gridline → highest tick value; i=4 is 0.
-            let tick_idx = 4 - i as usize;
             let tick_val = ticks[tick_idx];
             let label = format!("{tick_val}");
             let wide: Vec<u16> = label.encode_utf16().collect();
             let mut sz = SIZE::default();
             let _ = unsafe { GetTextExtentPoint32W(hdc, &wide, &mut sz) };
             // Right-align to margin_left - 4.
-            let text_x = margin_left - 4 - sz.cx;
+            let text_x = (margin_left - 4 - sz.cx).max(0);
             let text_y = y - sz.cy / 2;
             let _ = unsafe { SetTextColor(hdc, COLORREF(0x0080_8080)) };
             let _ = unsafe { TextOutW(hdc, text_x, text_y, &wide) };
