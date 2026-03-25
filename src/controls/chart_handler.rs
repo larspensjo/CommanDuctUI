@@ -15,7 +15,7 @@
 
 use crate::app::Win32ApiInternalState;
 use crate::error::{PlatformError, Result as PlatformResult};
-use crate::types::{ChartDataPacket, ControlId, WindowId};
+use crate::types::{ChartDataPacket, ChartLineEmphasis, ControlId, WindowId};
 use crate::window_common::ControlKind;
 
 use std::sync::{Arc, OnceLock};
@@ -23,8 +23,9 @@ use windows::Win32::{
     Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM},
     Graphics::Gdi::{
         BACKGROUND_MODE, BeginPaint, CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject,
-        EndPaint, FillRect, GetStockObject, GetTextExtentPoint32W, InvalidateRect, LineTo, MoveToEx,
-        PAINTSTRUCT, PS_DOT, PS_SOLID, Polyline, SelectObject, SetBkMode, SetTextColor, TextOutW,
+        Ellipse, EndPaint, FillRect, GetStockObject, GetTextExtentPoint32W, InvalidateRect, LineTo,
+        MoveToEx, PAINTSTRUCT, PS_DOT, PS_SOLID, Polyline, SelectObject, SetBkMode, SetTextColor,
+        TextOutW,
     },
     UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, HMENU,
@@ -178,6 +179,61 @@ fn resolve_x_label_stride(plot_width: i32, label_count: usize) -> usize {
     (((label_count as i32 - 1) / max_labels) + 1).max(1) as usize
 }
 
+// ── Pure helpers ─ end labels ─────────────────────────────────────────────────
+
+struct PlacedLabel {
+    x: i32,
+    y: i32,
+    text: String,
+    color: u32,
+}
+
+/// Lays out end-of-line labels with deterministic downward overlap resolution.
+///
+/// `last_points` – `(x, y, text, color)` tuples, one per line.
+/// `min_label_spacing` – minimum pixel gap between consecutive label tops.
+/// `right_edge` – the right boundary of the plot area (labels are clamped to this).
+/// `label_width_fn` – callback that returns the rendered pixel width of a string.
+fn place_end_labels(
+    last_points: &[(i32, i32, String, u32)],
+    min_label_spacing: i32,
+    right_edge: i32,
+    label_width_fn: impl Fn(&str) -> i32,
+) -> Vec<PlacedLabel> {
+    // Sort by y ascending (top label first).
+    let mut sorted: Vec<(i32, i32, String, u32)> = last_points.to_vec();
+    sorted.sort_by_key(|&(_, y, _, _)| y);
+
+    let mut result: Vec<PlacedLabel> = Vec::with_capacity(sorted.len());
+    for (x, mut y, text, color) in sorted {
+        // Push down if overlapping the previous label.
+        if let Some(prev) = result.last() {
+            let gap = y - prev.y;
+            if gap < min_label_spacing {
+                y = prev.y + min_label_spacing;
+            }
+        }
+        // Clamp x so the label doesn't exceed the right edge.
+        let lw = label_width_fn(&text);
+        let clamped_x = x.min(right_edge - lw);
+        result.push(PlacedLabel {
+            x: clamped_x,
+            y,
+            text,
+            color,
+        });
+    }
+    result
+}
+
+/// Dims a COLORREF toward the dark background `0x0028_221E`.
+fn mute_color(color: u32) -> u32 {
+    let r = ((color & 0xFF) / 2 + 0x1E / 2) & 0xFF;
+    let g = (((color >> 8) & 0xFF) / 2 + 0x22 / 2) & 0xFF;
+    let b = (((color >> 16) & 0xFF) / 2 + 0x28 / 2) & 0xFF;
+    r | (g << 8) | (b << 16)
+}
+
 // ── Paint ─────────────────────────────────────────────────────────────────────
 
 unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
@@ -204,6 +260,7 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
     let is_loading = state.data.is_loading;
     let show_x_axis_labels = state.data.show_x_axis_labels;
     let show_y_axis_labels = state.data.show_y_axis_labels;
+    let show_end_labels = state.data.show_end_labels;
     let week_labels = state.data.week_labels.clone();
 
     // Compute max_val for y-axis before layout (needed for margin_left).
@@ -236,8 +293,19 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
     } else {
         16
     };
-    let legend_w: i32 = if lines.is_empty() { 0 } else { 130 };
-    let margin_right: i32 = 16 + legend_w;
+    let legend_w: i32 = if show_end_labels || lines.is_empty() {
+        0
+    } else {
+        130
+    };
+    let estimated_end_label_width: i32 = if show_end_labels
+        && lines.iter().any(|l| l.end_label.is_some())
+    {
+        80
+    } else {
+        0
+    };
+    let margin_right: i32 = 16 + legend_w + estimated_end_label_width;
     let margin_top: i32 = 16;
     let margin_bottom: i32 = if show_x_axis_labels { 20 } else { 16 };
 
@@ -290,33 +358,73 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
     }
 
     // 4. Draw entity lines.
-    let n_points = lines.first().map(|l| l.weekly_counts.len()).unwrap_or(0);
-    if n_points < 2 {
+    // Skip only if every line has 0 points.
+    let any_points = lines.iter().any(|l| !l.weekly_counts.is_empty());
+    if !any_points {
         unsafe { SelectObject(hdc, old_font) };
         return;
     }
 
     let max_val = (max_val_u32 as i32).max(1);
 
+    // Collect end-label data while drawing lines.
+    let mut end_label_points: Vec<(i32, i32, String, u32)> = Vec::new();
+
     for line in lines {
         let n = line.weekly_counts.len();
-        if n < 2 {
+        if n == 0 {
             continue;
         }
-        let points: Vec<windows::Win32::Foundation::POINT> = (0..n)
-            .map(|i| {
-                let x = margin_left + plot_w * i as i32 / (n as i32 - 1).max(1);
-                let y = margin_top + plot_h
-                    - (plot_h * line.weekly_counts[i] as i32 / max_val).min(plot_h);
-                windows::Win32::Foundation::POINT { x, y }
-            })
-            .collect();
 
-        let pen = unsafe { CreatePen(PS_SOLID, 2, COLORREF(line.color)) };
-        let old_pen = unsafe { SelectObject(hdc, pen.into()) };
-        let _ = unsafe { Polyline(hdc, &points) };
-        unsafe { SelectObject(hdc, old_pen) };
-        let _ = unsafe { DeleteObject(pen.into()) };
+        let effective_color = match line.emphasis {
+            ChartLineEmphasis::Primary => line.color,
+            ChartLineEmphasis::Secondary => mute_color(line.color),
+        };
+        let pen_width = match line.emphasis {
+            ChartLineEmphasis::Primary => 2,
+            ChartLineEmphasis::Secondary => 1,
+        };
+
+        if n == 1 {
+            // Single-point series: draw a filled dot.
+            let x = margin_left + plot_w / 2;
+            let y = margin_top + plot_h
+                - (plot_h * line.weekly_counts[0] as i32 / max_val).min(plot_h);
+            const R: i32 = 4;
+            let brush = unsafe { CreateSolidBrush(COLORREF(effective_color)) };
+            let pen = unsafe { CreatePen(PS_SOLID, 1, COLORREF(effective_color)) };
+            let old_pen = unsafe { SelectObject(hdc, pen.into()) };
+            let old_brush = unsafe { SelectObject(hdc, brush.into()) };
+            let _ = unsafe { Ellipse(hdc, x - R, y - R, x + R, y + R) };
+            unsafe { SelectObject(hdc, old_brush) };
+            unsafe { SelectObject(hdc, old_pen) };
+            let _ = unsafe { DeleteObject(pen.into()) };
+            let _ = unsafe { DeleteObject(brush.into()) };
+
+            if show_end_labels && let Some(lbl) = &line.end_label {
+                end_label_points.push((x + 6, y, lbl.clone(), effective_color));
+            }
+        } else {
+            let points: Vec<windows::Win32::Foundation::POINT> = (0..n)
+                .map(|i| {
+                    let x = margin_left + plot_w * i as i32 / (n as i32 - 1).max(1);
+                    let y = margin_top + plot_h
+                        - (plot_h * line.weekly_counts[i] as i32 / max_val).min(plot_h);
+                    windows::Win32::Foundation::POINT { x, y }
+                })
+                .collect();
+
+            let pen = unsafe { CreatePen(PS_SOLID, pen_width, COLORREF(effective_color)) };
+            let old_pen = unsafe { SelectObject(hdc, pen.into()) };
+            let _ = unsafe { Polyline(hdc, &points) };
+            unsafe { SelectObject(hdc, old_pen) };
+            let _ = unsafe { DeleteObject(pen.into()) };
+
+            if show_end_labels && let Some(lbl) = &line.end_label {
+                let last = points.last().unwrap();
+                end_label_points.push((last.x + 6, last.y, lbl.clone(), effective_color));
+            }
+        }
     }
 
     // 5. X-axis week labels.
@@ -338,28 +446,49 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
         }
     }
 
-    // 6. Legend (top-right column).
+    // 6. End labels OR legend.
     if lines.is_empty() {
         unsafe { SelectObject(hdc, old_font) };
         return;
     }
-    let legend_x = margin_left + plot_w + 8;
 
-    for (i, line) in lines.iter().enumerate() {
-        let y = margin_top + i as i32 * 18;
+    if show_end_labels {
+        // Resolve overlap and draw end labels.
+        let right_edge = margin_left + plot_w;
+        let label_width_fn = |text: &str| -> i32 {
+            let wide: Vec<u16> = text.encode_utf16().collect();
+            let mut sz = SIZE::default();
+            if !wide.is_empty() {
+                let _ = unsafe { GetTextExtentPoint32W(hdc, &wide, &mut sz) };
+            }
+            sz.cx
+        };
+        let placed = place_end_labels(&end_label_points, 14, right_edge, label_width_fn);
+        unsafe { SetBkMode(hdc, BACKGROUND_MODE(1)) }; // TRANSPARENT
+        for pl in &placed {
+            let wide: Vec<u16> = pl.text.encode_utf16().collect();
+            let _ = unsafe { SetTextColor(hdc, COLORREF(pl.color)) };
+            let _ = unsafe { TextOutW(hdc, pl.x, pl.y, &wide) };
+        }
+    } else {
+        // Legend (top-right column).
+        let legend_x = margin_left + plot_w + 8;
+        for (i, line) in lines.iter().enumerate() {
+            let y = margin_top + i as i32 * 18;
 
-        // Colored swatch: a short horizontal line.
-        let swatch_pen = unsafe { CreatePen(PS_SOLID, 2, COLORREF(line.color)) };
-        let old_swatch_pen = unsafe { SelectObject(hdc, swatch_pen.into()) };
-        let _ = unsafe { MoveToEx(hdc, legend_x, y + 7, None) };
-        let _ = unsafe { LineTo(hdc, legend_x + 15, y + 7) };
-        unsafe { SelectObject(hdc, old_swatch_pen) };
-        let _ = unsafe { DeleteObject(swatch_pen.into()) };
+            // Colored swatch: a short horizontal line.
+            let swatch_pen = unsafe { CreatePen(PS_SOLID, 2, COLORREF(line.color)) };
+            let old_swatch_pen = unsafe { SelectObject(hdc, swatch_pen.into()) };
+            let _ = unsafe { MoveToEx(hdc, legend_x, y + 7, None) };
+            let _ = unsafe { LineTo(hdc, legend_x + 15, y + 7) };
+            unsafe { SelectObject(hdc, old_swatch_pen) };
+            let _ = unsafe { DeleteObject(swatch_pen.into()) };
 
-        // Label text.
-        let _ = unsafe { SetTextColor(hdc, COLORREF(line.color)) };
-        let label_wide: Vec<u16> = line.label.encode_utf16().collect();
-        let _ = unsafe { TextOutW(hdc, legend_x + 19, y, &label_wide) };
+            // Label text.
+            let _ = unsafe { SetTextColor(hdc, COLORREF(line.color)) };
+            let label_wide: Vec<u16> = line.label.encode_utf16().collect();
+            let _ = unsafe { TextOutW(hdc, legend_x + 19, y, &label_wide) };
+        }
     }
 
     unsafe { SelectObject(hdc, old_font) };
@@ -497,7 +626,7 @@ pub(crate) fn handle_set_chart_data_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_y_axis_ticks, resolve_x_label_stride};
+    use super::{build_y_axis_ticks, mute_color, place_end_labels, resolve_x_label_stride};
 
     // ── build_y_axis_ticks ────────────────────────────────────────────────────
 
@@ -561,5 +690,69 @@ mod tests {
     fn stride_is_seven_for_very_tight_width() {
         // max_labels = 100/40 = 2; ceil(13/2) = 7
         assert_eq!(resolve_x_label_stride(100, 13), 7);
+    }
+
+    // ── place_end_labels ──────────────────────────────────────────────────────
+
+    #[test]
+    fn place_end_labels_no_overlap_unchanged() {
+        // Labels 20 px apart with min_spacing = 14 → no adjustment needed.
+        let pts = vec![
+            (100, 10, "A".to_string(), 0xFF0000u32),
+            (100, 30, "B".to_string(), 0x00FF00u32),
+            (100, 50, "C".to_string(), 0x0000FFu32),
+        ];
+        let result = place_end_labels(&pts, 14, 200, |_| 20);
+        assert_eq!(result[0].y, 10);
+        assert_eq!(result[1].y, 30);
+        assert_eq!(result[2].y, 50);
+    }
+
+    #[test]
+    fn place_end_labels_two_at_same_y_pushed_down() {
+        // Two labels both at y=100 → second pushed to y=114.
+        let pts = vec![
+            (100, 100, "A".to_string(), 0xFF0000u32),
+            (100, 100, "B".to_string(), 0x00FF00u32),
+        ];
+        let result = place_end_labels(&pts, 14, 200, |_| 20);
+        assert_eq!(result[0].y, 100);
+        assert_eq!(result[1].y, 114);
+    }
+
+    #[test]
+    fn place_end_labels_three_stacked() {
+        // Three labels all at y=100 → 100, 114, 128.
+        let pts = vec![
+            (100, 100, "A".to_string(), 0xFF0000u32),
+            (100, 100, "B".to_string(), 0x00FF00u32),
+            (100, 100, "C".to_string(), 0x0000FFu32),
+        ];
+        let result = place_end_labels(&pts, 14, 200, |_| 20);
+        assert_eq!(result[0].y, 100);
+        assert_eq!(result[1].y, 114);
+        assert_eq!(result[2].y, 128);
+    }
+
+    #[test]
+    fn place_end_labels_clamp_to_right_edge() {
+        // Label width = 60, x = 160, right_edge = 200 → clamped to 200-60=140.
+        let pts = vec![(160, 100, "LongLabel".to_string(), 0xFF0000u32)];
+        let result = place_end_labels(&pts, 14, 200, |_| 60);
+        assert_eq!(result[0].x, 140);
+    }
+
+    // ── mute_color ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn mute_color_bright_white_toward_bg() {
+        // Pure white 0x00FFFFFF: each channel 255.
+        // r = 255/2 + 0x1E/2 = 127 + 15 = 142 = 0x8E
+        // g = 255/2 + 0x22/2 = 127 + 17 = 144 = 0x90
+        // b = 255/2 + 0x28/2 = 127 + 20 = 147 = 0x93
+        let muted = mute_color(0x00FF_FFFF);
+        assert_eq!(muted & 0xFF, 0x8E, "red channel");
+        assert_eq!((muted >> 8) & 0xFF, 0x90, "green channel");
+        assert_eq!((muted >> 16) & 0xFF, 0x93, "blue channel");
     }
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.1
+
+- `chart_handler`: endpoint labels with deterministic overlap resolution (`place_end_labels`)
+- `chart_handler`: `ChartLineEmphasis::Secondary` lines rendered with muted color and 1 px pen
+- `chart_handler`: single-point series rendered as dot instead of skipped
+- `chart_handler`: legend suppressed when `show_end_labels` is true
+
 ## 0.10.0
 
 - `ChartLineData`: added `end_label: Option<String>` and `emphasis: ChartLineEmphasis`
