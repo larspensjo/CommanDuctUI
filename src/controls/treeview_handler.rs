@@ -31,10 +31,10 @@ use windows::{
             CDRF_DODEFAULT, CDRF_NEWFONT, CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYPOSTPAINT, HTREEITEM,
             NMHDR, NMTVCUSTOMDRAW, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEMLABEL,
             TVHT_ONITEMSTATEICON, TVI_LAST, TVIF_CHILDREN, TVIF_PARAM, TVIF_STATE, TVIF_TEXT,
-            TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_STATEIMAGEMASK, TVITEMEXW, TVITEMEXW_CHILDREN,
-            TVM_DELETEITEM, TVM_GETITEMRECT, TVM_GETITEMW, TVM_HITTEST, TVM_INSERTITEMW,
-            TVM_SELECTITEM, TVM_SETITEMW, TVS_CHECKBOXES, TVS_HASBUTTONS, TVS_HASLINES,
-            TVS_LINESATROOT, TVS_SHOWSELALWAYS, WC_TREEVIEWW,
+            TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_STATEIMAGEMASK, TVITEMEXW,
+            TVITEMEXW_CHILDREN, TVM_DELETEITEM, TVM_GETITEMRECT, TVM_GETITEMW, TVM_GETNEXTITEM,
+            TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETITEMW, TVS_CHECKBOXES,
+            TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT, TVS_SHOWSELALWAYS, WC_TREEVIEWW,
         },
         UI::WindowsAndMessaging::*,
     },
@@ -1052,6 +1052,13 @@ fn should_request_postpaint(
         || draws_selection_accent
 }
 
+fn should_draw_selection_accent(
+    was_selected_before_custom_draw: bool,
+    has_selection_accent_style: bool,
+) -> bool {
+    was_selected_before_custom_draw && has_selection_accent_style
+}
+
 /*
  * Handles the NM_CUSTOMDRAW notification for a TreeView control.
  * Applies a bold/italic font to "New" items via NM_CUSTOMDRAW, replacing the former
@@ -1207,7 +1214,8 @@ pub(crate) fn handle_nm_customdraw(
             let selection_accent_color = internal_state
                 .get_parsed_style(StyleId::TreeViewSelectionAccent)
                 .and_then(|style| style.background_color.clone());
-            let draws_selection_accent = is_selected && selection_accent_color.is_some();
+            let draws_selection_accent =
+                should_draw_selection_accent(is_selected, selection_accent_color.is_some());
 
             let mut result: isize = CDRF_DODEFAULT as isize;
             if let Some(font_handle) = selected_font {
@@ -1287,8 +1295,23 @@ pub(crate) fn handle_nm_customdraw(
             }
 
             // Draw selection accent bar if this item is selected and accent style is defined.
-            let is_selected = (nmtvcd.nmcd.uItemState.0 & CDIS_SELECTED.0) != 0;
-            if is_selected
+            let h_item_native = HTREEITEM(nmtvcd.nmcd.dwItemSpec as isize);
+            let caret_lresult = unsafe {
+                SendMessageW(
+                    hwnd_treeview,
+                    TVM_GETNEXTITEM,
+                    Some(WPARAM(TVGN_CARET as usize)),
+                    Some(LPARAM(0)),
+                )
+            };
+            let caret_item = HTREEITEM(caret_lresult.0 as isize);
+            if should_draw_selection_accent(
+                caret_item == h_item_native,
+                internal_state
+                    .get_parsed_style(StyleId::TreeViewSelectionAccent)
+                    .and_then(|style| style.background_color.clone())
+                    .is_some(),
+            )
                 && let Some(accent_style) =
                     internal_state.get_parsed_style(StyleId::TreeViewSelectionAccent)
                 && let Some(accent_color) = accent_style.background_color.as_ref()
@@ -1665,5 +1688,15 @@ mod tests {
             TreeItemMarkerKind::Blue,
             false,
         ));
+    }
+
+    #[test]
+    fn should_draw_selection_accent_when_item_was_selected_and_style_exists() {
+        assert!(should_draw_selection_accent(true, true));
+    }
+
+    #[test]
+    fn should_not_draw_selection_accent_when_selected_flag_was_not_present() {
+        assert!(!should_draw_selection_accent(false, true));
     }
 }
