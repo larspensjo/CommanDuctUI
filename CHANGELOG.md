@@ -2,6 +2,7 @@
 
 ## 0.9.1 - 2026-03-25
 - **Fix**: Restore the `TreeViewSelectionAccent` bar for selected rows when `TreeViewSelectedRow` styling is active. Custom draw suppresses the native selected state during pre-paint, so post-paint now resolves the selected row from the TreeView caret item before drawing the accent.
+- **Fix**: Route TreeView selection updates through `TVN_SELCHANGEDW` for user mouse/keyboard actions. This restores `TreeViewItemSelectionChanged` events for arrow-key navigation and keeps mouse and keyboard selection behavior aligned.
 
 ## 0.9.0 - 2026-03-24
 - **Feature**: Add `AppEvent::WindowResizeCompleted { window_id, outer_width, outer_height }`. Emitted from the `WM_EXITSIZEMOVE` handler via `GetWindowRect`, giving subscribers the final outer window dimensions (frame + title bar included) after the user finishes a resize or move drag.

@@ -42,7 +42,7 @@ use windows::{
         System::WindowsProgramming::MulDiv,
         UI::Controls::{
             DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, ODS_HOTLIGHT, ODS_NOACCEL,
-            ODS_SELECTED, SetWindowTheme, TVN_ITEMCHANGEDW,
+            ODS_SELECTED, SetWindowTheme, TVN_ITEMCHANGEDW, TVN_SELCHANGEDW,
         },
         UI::WindowsAndMessaging::*, // This list is massive, just import all of them.
     },
@@ -2079,6 +2079,19 @@ impl Win32ApiInternalState {
                         control_id_from_notify.raw()
                     );
                     let event = treeview_handler::handle_treeview_itemchanged_notification(
+                        self,
+                        window_id,
+                        lparam_original,
+                        control_id_from_notify,
+                    );
+                    return (event, None);
+                }
+                TVN_SELCHANGEDW => {
+                    log::trace!(
+                        "Routing TVN_SELCHANGEDW from ControlID {} to treeview_handler.",
+                        control_id_from_notify.raw()
+                    );
+                    let event = treeview_handler::handle_treeview_selection_changed_notification(
                         self,
                         window_id,
                         lparam_original,

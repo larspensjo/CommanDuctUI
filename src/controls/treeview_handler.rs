@@ -29,9 +29,9 @@ use windows::{
         UI::Controls::{
             CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDIS_FOCUS, CDIS_SELECTED,
             CDRF_DODEFAULT, CDRF_NEWFONT, CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYPOSTPAINT, HTREEITEM,
-            NMHDR, NMTVCUSTOMDRAW, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEMLABEL,
-            TVHT_ONITEMSTATEICON, TVI_LAST, TVIF_CHILDREN, TVIF_PARAM, TVIF_STATE, TVIF_TEXT,
-            TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_STATEIMAGEMASK, TVITEMEXW,
+            NMHDR, NMTVCUSTOMDRAW, NMTREEVIEWW, TVC_BYKEYBOARD, TVC_BYMOUSE, TVGN_CARET,
+            TVHITTESTINFO, TVHT_ONITEMSTATEICON, TVI_LAST, TVIF_CHILDREN,
+            TVIF_PARAM, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_STATEIMAGEMASK, TVITEMEXW,
             TVITEMEXW_CHILDREN, TVM_DELETEITEM, TVM_GETITEMRECT, TVM_GETITEMW, TVM_GETNEXTITEM,
             TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETITEMW, TVS_CHECKBOXES,
             TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT, TVS_SHOWSELALWAYS, WC_TREEVIEWW,
@@ -552,6 +552,60 @@ pub(crate) fn handle_treeview_itemchanged_notification(
     // `lparam` could be used here to get more details if needed.
     // let nmtv = unsafe { &*(lparam.0 as *const NMTREEVIEWW) };
     None // No AppEvent generated from this notification directly for now
+}
+
+fn is_user_treeview_selection_action(action: windows::Win32::UI::Controls::NM_TREEVIEW_ACTION) -> bool {
+    action == TVC_BYMOUSE || action == TVC_BYKEYBOARD
+}
+
+pub(crate) fn handle_treeview_selection_changed_notification(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    lparam: LPARAM,
+    control_id_from_notify: ControlId,
+) -> Option<AppEvent> {
+    log::trace!(
+        "TreeViewHandler: TVN_SELCHANGEDW received for WinID {window_id:?}, ControlID {}",
+        control_id_from_notify.raw()
+    );
+
+    let nmtv = unsafe { &*(lparam.0 as *const NMTREEVIEWW) };
+    if !is_user_treeview_selection_action(nmtv.action) {
+        return None;
+    }
+
+    let h_item = nmtv.itemNew.hItem;
+    if h_item.0 == 0 {
+        return None;
+    }
+
+    let result = internal_state.with_window_data_read(window_id, |window_data| {
+        let tv_state = window_data.get_treeview_state().ok_or_else(|| {
+            PlatformError::OperationFailed(format!(
+                "TreeView state not found while resolving selection change in WinID {window_id:?}"
+            ))
+        })?;
+
+        tv_state
+            .htreeitem_to_item_id
+            .get(&(h_item.0))
+            .copied()
+            .ok_or_else(|| {
+                PlatformError::InvalidHandle(format!(
+                    "HTREEITEM {h_item:?} missing in map during selection change"
+                ))
+            })
+    });
+
+    match result {
+        Ok(item_id) => Some(AppEvent::TreeViewItemSelectionChanged { window_id, item_id }),
+        Err(err) => {
+            log::error!(
+                "Failed to resolve TreeView selection change in WinID {window_id:?}: {err:?}"
+            );
+            None
+        }
+    }
 }
 
 /*
@@ -1420,12 +1474,14 @@ pub(crate) fn handle_wm_app_treeview_checkbox_clicked(
 /*
  * Handles general NM_CLICK notifications for a TreeView.
  * This function's primary purpose is to detect clicks on a TreeView item's state
- * icon (checkbox) and post a custom message for deferred processing.
+ * icon (checkbox) and post a custom message for deferred processing. Selection
+ * changes are handled through TVN_SELCHANGEDW so mouse and keyboard navigation
+ * share the same path.
  */
 pub(crate) fn handle_nm_click(
-    internal_state: &Arc<Win32ApiInternalState>,
+    _internal_state: &Arc<Win32ApiInternalState>,
     parent_hwnd: HWND,
-    window_id: WindowId,
+    _window_id: WindowId,
     nmhdr: &NMHDR,
 ) -> Option<AppEvent> {
     let hwnd_tv_from_notify = nmhdr.hwndFrom;
@@ -1483,46 +1539,7 @@ pub(crate) fn handle_nm_click(
         return None;
     }
 
-    if h_item_hit.0 == 0 {
-        return None;
-    }
-
-    if (tvht_info.flags.0 & TVHT_ONITEMLABEL.0) == 0 {
-        return None;
-    }
-
-    let result = internal_state.with_window_data_read(window_id, |window_data| {
-        let tv_state = window_data.get_treeview_state().ok_or_else(|| {
-            PlatformError::OperationFailed(format!(
-                "TreeView state not found while resolving label click in WinID {window_id:?}"
-            ))
-        })?;
-
-        tv_state
-            .htreeitem_to_item_id
-            .get(&(h_item_hit.0))
-            .copied()
-            .ok_or_else(|| {
-                PlatformError::InvalidHandle(format!(
-                    "HTREEITEM {h_item_hit:?} missing in map during label click"
-                ))
-            })
-    });
-
-    match result {
-        Ok(item_id) => {
-            log::debug!(
-                "TreeView label click resolved to TreeItemId {item_id:?} for WinID {window_id:?}."
-            );
-            Some(AppEvent::TreeViewItemSelectionChanged { window_id, item_id })
-        }
-        Err(err) => {
-            log::error!(
-                "Failed to resolve TreeView label click to item ID in WinID {window_id:?}: {err:?}"
-            );
-            None
-        }
-    }
+    None
 }
 
 #[cfg(test)]
@@ -1698,5 +1715,11 @@ mod tests {
     #[test]
     fn should_not_draw_selection_accent_when_selected_flag_was_not_present() {
         assert!(!should_draw_selection_accent(false, true));
+    }
+
+    #[test]
+    fn user_treeview_selection_action_accepts_mouse_and_keyboard() {
+        assert!(is_user_treeview_selection_action(TVC_BYMOUSE));
+        assert!(is_user_treeview_selection_action(TVC_BYKEYBOARD));
     }
 }
