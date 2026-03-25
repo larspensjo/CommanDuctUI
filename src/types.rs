@@ -377,6 +377,13 @@ pub enum SplitterOrientation {
     Horizontal, // Divides top/bottom (future extension)
 }
 
+/// Visual emphasis level for a chart line.
+#[derive(Debug, Clone)]
+pub enum ChartLineEmphasis {
+    Primary,
+    Secondary,
+}
+
 /// A single entity trend line sent to the chart control.
 #[derive(Debug, Clone)]
 pub struct ChartLineData {
@@ -386,6 +393,10 @@ pub struct ChartLineData {
     pub weekly_counts: Vec<u32>,
     /// COLORREF (0x00BBGGRR) for this line's pen.
     pub color: u32,
+    /// Optional short label drawn at the right end of the line.
+    pub end_label: Option<String>,
+    /// Visual emphasis level for this line.
+    pub emphasis: ChartLineEmphasis,
 }
 
 /// Full data payload for a `SetChartData` command.
@@ -397,6 +408,12 @@ pub struct ChartDataPacket {
     pub week_labels: Vec<String>,
     /// When true the chart renders an empty "Loading…" state.
     pub is_loading: bool,
+    /// When true the chart renders x-axis week labels below the plot area.
+    pub show_x_axis_labels: bool,
+    /// When true the chart renders y-axis tick values left of the plot area.
+    pub show_y_axis_labels: bool,
+    /// When true the chart renders an end label at the right of each line.
+    pub show_end_labels: bool,
 }
 
 /// Generic rows that can appear in a modal form dialog.

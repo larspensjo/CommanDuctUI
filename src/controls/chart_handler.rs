@@ -20,11 +20,11 @@ use crate::window_common::ControlKind;
 
 use std::sync::{Arc, OnceLock};
 use windows::Win32::{
-    Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+    Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM},
     Graphics::Gdi::{
         BACKGROUND_MODE, BeginPaint, CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject,
-        EndPaint, FillRect, GetStockObject, InvalidateRect, LineTo, MoveToEx, PAINTSTRUCT, PS_DOT,
-        PS_SOLID, Polyline, SelectObject, SetBkMode, SetTextColor, TextOutW,
+        EndPaint, FillRect, GetStockObject, GetTextExtentPoint32W, InvalidateRect, LineTo, MoveToEx,
+        PAINTSTRUCT, PS_DOT, PS_SOLID, Polyline, SelectObject, SetBkMode, SetTextColor, TextOutW,
     },
     UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, HMENU,
@@ -52,6 +52,9 @@ impl Default for ChartWindowState {
                 lines: vec![],
                 week_labels: vec![],
                 is_loading: false,
+                show_x_axis_labels: false,
+                show_y_axis_labels: false,
+                show_end_labels: false,
             },
         }
     }
@@ -136,6 +139,45 @@ unsafe extern "system" fn chart_wnd_proc(
     }
 }
 
+// ── Pure helpers ──────────────────────────────────────────────────────────────
+
+/// Returns `tick_count` "nice" rounded tick values starting at 0.
+///
+/// If `max_val == 0` all ticks are 0. Otherwise finds the smallest value in a
+/// fixed nice-number list such that `step * (tick_count - 1) >= max_val` and
+/// returns `[0, step, 2*step, ..., (tick_count-1)*step]`.
+fn build_y_axis_ticks(max_val: u32, tick_count: usize) -> Vec<u32> {
+    if tick_count == 0 {
+        return vec![];
+    }
+    if max_val == 0 {
+        return vec![0; tick_count];
+    }
+    const NICE: [u32; 13] = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+    let intervals = (tick_count - 1).max(1) as u32;
+    let step = NICE
+        .iter()
+        .copied()
+        .find(|&s| s * intervals >= max_val)
+        .unwrap_or_else(|| {
+            // Fallback: round up max_val / intervals to nearest nice magnitude
+            max_val.div_ceil(intervals) * intervals
+        });
+    (0..tick_count).map(|i| i as u32 * step).collect()
+}
+
+/// Returns the stride (every Nth label to show) so that labels don't overlap.
+///
+/// Uses a label width estimate of 40 px. Returns 1 when `label_count == 0`.
+fn resolve_x_label_stride(plot_width: i32, label_count: usize) -> usize {
+    if label_count == 0 {
+        return 1;
+    }
+    let label_width_px: i32 = 40;
+    let max_labels = (plot_width / label_width_px).max(1);
+    (((label_count as i32 - 1) / max_labels) + 1).max(1) as usize
+}
+
 // ── Paint ─────────────────────────────────────────────────────────────────────
 
 unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
@@ -160,13 +202,44 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
     };
     let lines = &state.data.lines;
     let is_loading = state.data.is_loading;
+    let show_x_axis_labels = state.data.show_x_axis_labels;
+    let show_y_axis_labels = state.data.show_y_axis_labels;
+    let week_labels = state.data.week_labels.clone();
 
-    // Plot layout.
+    // Compute max_val for y-axis before layout (needed for margin_left).
+    let max_val_u32: u32 = lines
+        .iter()
+        .flat_map(|l| &l.weekly_counts)
+        .copied()
+        .max()
+        .unwrap_or(0);
+
+    // Select default GUI font early so text measurements are accurate.
+    let hfont = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+    let old_font = unsafe { SelectObject(hdc, hfont) };
+    unsafe { SetBkMode(hdc, BACKGROUND_MODE(1)) }; // TRANSPARENT
+
+    // Plot layout — derive margin_left from measured y-axis label width.
+    let margin_left: i32 = if show_y_axis_labels {
+        let ticks = build_y_axis_ticks(max_val_u32, 5);
+        let widest_label = ticks
+            .iter()
+            .map(|&t| format!("{t}"))
+            .max_by_key(|s| s.len())
+            .unwrap_or_default();
+        let wide: Vec<u16> = widest_label.encode_utf16().collect();
+        let mut sz = SIZE::default();
+        if !wide.is_empty() {
+            let _ = unsafe { GetTextExtentPoint32W(hdc, &wide, &mut sz) };
+        }
+        sz.cx + 8
+    } else {
+        16
+    };
     let legend_w: i32 = if lines.is_empty() { 0 } else { 130 };
-    let margin_left: i32 = 16;
     let margin_right: i32 = 16 + legend_w;
     let margin_top: i32 = 16;
-    let margin_bottom: i32 = 16;
+    let margin_bottom: i32 = if show_x_axis_labels { 20 } else { 16 };
 
     let plot_w = (w - margin_left - margin_right).max(1);
     let plot_h = (h - margin_top - margin_bottom).max(1);
@@ -176,39 +249,54 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
     let _ = unsafe { FillRect(hdc, &rect, bg_brush) };
     let _ = unsafe { DeleteObject(bg_brush.into()) };
 
-    // 2. Draw five dashed horizontal gridlines.
+    // 2. Draw five dashed horizontal gridlines and optional y-axis labels.
+    let ticks = if show_y_axis_labels {
+        build_y_axis_ticks(max_val_u32, 5)
+    } else {
+        vec![]
+    };
     let grid_pen = unsafe { CreatePen(PS_DOT, 1, COLOR_GRID) };
     let old_pen = unsafe { SelectObject(hdc, grid_pen.into()) };
     for i in 0i32..=4 {
         let y = margin_top + plot_h * i / 4;
         let _ = unsafe { MoveToEx(hdc, margin_left, y, None) };
         let _ = unsafe { LineTo(hdc, margin_left + plot_w, y) };
+
+        if show_y_axis_labels && !ticks.is_empty() {
+            // i=0 is the top gridline → highest tick value; i=4 is 0.
+            let tick_idx = 4 - i as usize;
+            let tick_val = ticks[tick_idx];
+            let label = format!("{tick_val}");
+            let wide: Vec<u16> = label.encode_utf16().collect();
+            let mut sz = SIZE::default();
+            let _ = unsafe { GetTextExtentPoint32W(hdc, &wide, &mut sz) };
+            // Right-align to margin_left - 4.
+            let text_x = margin_left - 4 - sz.cx;
+            let text_y = y - sz.cy / 2;
+            let _ = unsafe { SetTextColor(hdc, COLORREF(0x0080_8080)) };
+            let _ = unsafe { TextOutW(hdc, text_x, text_y, &wide) };
+        }
     }
     unsafe { SelectObject(hdc, old_pen) };
     let _ = unsafe { DeleteObject(grid_pen.into()) };
 
     // 3. Loading placeholder.
     if is_loading {
-        unsafe { SetBkMode(hdc, BACKGROUND_MODE(1)) }; // TRANSPARENT = 1
-        let _ = unsafe { SetTextColor(hdc, COLORREF(0x0080_8080)) };
         let msg: Vec<u16> = "Loading\u{2026}".encode_utf16().collect();
+        let _ = unsafe { SetTextColor(hdc, COLORREF(0x0080_8080)) };
         let _ = unsafe { TextOutW(hdc, margin_left, margin_top + plot_h / 2 - 8, &msg) };
+        unsafe { SelectObject(hdc, old_font) };
         return;
     }
 
     // 4. Draw entity lines.
     let n_points = lines.first().map(|l| l.weekly_counts.len()).unwrap_or(0);
     if n_points < 2 {
+        unsafe { SelectObject(hdc, old_font) };
         return;
     }
 
-    let max_val = lines
-        .iter()
-        .flat_map(|l| &l.weekly_counts)
-        .copied()
-        .max()
-        .unwrap_or(1)
-        .max(1) as i32;
+    let max_val = (max_val_u32 as i32).max(1);
 
     for line in lines {
         let n = line.weekly_counts.len();
@@ -231,16 +319,31 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
         let _ = unsafe { DeleteObject(pen.into()) };
     }
 
-    // 5. Legend (top-right column).
+    // 5. X-axis week labels.
+    if show_x_axis_labels && !week_labels.is_empty() {
+        let stride = resolve_x_label_stride(plot_w, week_labels.len());
+        let n = week_labels.len();
+        let _ = unsafe { SetTextColor(hdc, COLORREF(0x0080_8080)) };
+        for (j, label) in week_labels.iter().enumerate() {
+            if j % stride != 0 {
+                continue;
+            }
+            let x_center = margin_left + plot_w * j as i32 / (n as i32 - 1).max(1);
+            let wide: Vec<u16> = label.encode_utf16().collect();
+            let mut sz = SIZE::default();
+            let _ = unsafe { GetTextExtentPoint32W(hdc, &wide, &mut sz) };
+            let text_x = x_center - sz.cx / 2;
+            let text_y = margin_top + plot_h + 3;
+            let _ = unsafe { TextOutW(hdc, text_x, text_y, &wide) };
+        }
+    }
+
+    // 6. Legend (top-right column).
     if lines.is_empty() {
+        unsafe { SelectObject(hdc, old_font) };
         return;
     }
     let legend_x = margin_left + plot_w + 8;
-
-    // Select the default GUI font for legend text.
-    let hfont = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
-    let old_font = unsafe { SelectObject(hdc, hfont) };
-    unsafe { SetBkMode(hdc, BACKGROUND_MODE(1)) }; // TRANSPARENT
 
     for (i, line) in lines.iter().enumerate() {
         let y = margin_top + i as i32 * 18;
@@ -390,4 +493,73 @@ pub(crate) fn handle_set_chart_data_command(
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_y_axis_ticks, resolve_x_label_stride};
+
+    // ── build_y_axis_ticks ────────────────────────────────────────────────────
+
+    #[test]
+    fn y_ticks_all_zero_when_max_val_is_zero() {
+        let ticks = build_y_axis_ticks(0, 5);
+        assert_eq!(ticks, vec![0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn y_ticks_step_one_for_max_val_one() {
+        // step must satisfy step * 4 >= 1 → step=1; ticks = [0,1,2,3,4]
+        let ticks = build_y_axis_ticks(1, 5);
+        assert_eq!(ticks, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn y_ticks_step_five_for_max_val_ten() {
+        // ceil(10/4)=2.5 → first nice number >= 2.5 is 5 (since 2*4=8 < 10)
+        // ticks = [0, 5, 10, 15, 20]
+        let ticks = build_y_axis_ticks(10, 5);
+        assert_eq!(ticks, vec![0, 5, 10, 15, 20]);
+    }
+
+    #[test]
+    fn y_ticks_step_fifty_for_max_val_hundred() {
+        // ceil(100/4)=25 → first nice number >= 25 is 50
+        // ticks = [0, 50, 100, 150, 200]
+        let ticks = build_y_axis_ticks(100, 5);
+        assert_eq!(ticks, vec![0, 50, 100, 150, 200]);
+    }
+
+    #[test]
+    fn y_ticks_step_two_for_max_val_seven() {
+        // ceil(7/4)=1.75 → first nice number >= 1.75 is 2
+        // ticks = [0, 2, 4, 6, 8]
+        let ticks = build_y_axis_ticks(7, 5);
+        assert_eq!(ticks, vec![0, 2, 4, 6, 8]);
+    }
+
+    // ── resolve_x_label_stride ────────────────────────────────────────────────
+
+    #[test]
+    fn stride_is_one_for_zero_labels() {
+        assert_eq!(resolve_x_label_stride(400, 0), 1);
+    }
+
+    #[test]
+    fn stride_is_one_when_labels_fit() {
+        // max_labels = 400/40 = 10; ceil(10/10) = 1
+        assert_eq!(resolve_x_label_stride(400, 10), 1);
+    }
+
+    #[test]
+    fn stride_is_three_for_tight_width() {
+        // max_labels = 200/40 = 5; ceil(13/5) = 3
+        assert_eq!(resolve_x_label_stride(200, 13), 3);
+    }
+
+    #[test]
+    fn stride_is_seven_for_very_tight_width() {
+        // max_labels = 100/40 = 2; ceil(13/2) = 7
+        assert_eq!(resolve_x_label_stride(100, 13), 7);
+    }
 }

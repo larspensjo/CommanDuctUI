@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- `ChartLineData`: added `end_label: Option<String>` and `emphasis: ChartLineEmphasis`
+- `ChartDataPacket`: added `show_x_axis_labels`, `show_y_axis_labels`, `show_end_labels` flags
+- `chart_handler`: renders x-axis week labels and y-axis tick values when flags are set
+- Left margin is now derived from measured y-axis label width instead of hard-coded value
+
 ## 0.9.1 - 2026-03-25
 - **Fix**: Restore the `TreeViewSelectionAccent` bar for selected rows when `TreeViewSelectedRow` styling is active. Custom draw suppresses the native selected state during pre-paint, so post-paint now resolves the selected row from the TreeView caret item before drawing the accent.
 - **Fix**: Route TreeView selection updates through `TVN_SELCHANGEDW` for user mouse/keyboard actions. This restores `TreeViewItemSelectionChanged` events for arrow-key navigation and keeps mouse and keyboard selection behavior aligned.
