@@ -387,8 +387,8 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
         if n == 1 {
             // Single-point series: draw a filled dot.
             let x = margin_left + plot_w / 2;
-            let y = margin_top + plot_h
-                - (plot_h * line.weekly_counts[0] as i32 / max_val).min(plot_h);
+            let y =
+                margin_top + plot_h - (plot_h * line.weekly_counts[0] as i32 / max_val).min(plot_h);
             const R: i32 = 4;
             let brush = unsafe { CreateSolidBrush(COLORREF(effective_color)) };
             let pen = unsafe { CreatePen(PS_SOLID, 1, COLORREF(effective_color)) };

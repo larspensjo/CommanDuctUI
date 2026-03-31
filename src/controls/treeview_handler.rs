@@ -29,9 +29,9 @@ use windows::{
         UI::Controls::{
             CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDIS_FOCUS, CDIS_SELECTED,
             CDRF_DODEFAULT, CDRF_NEWFONT, CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYPOSTPAINT, HTREEITEM,
-            NMHDR, NMTVCUSTOMDRAW, NMTREEVIEWW, TVC_BYKEYBOARD, TVC_BYMOUSE, TVGN_CARET,
-            TVHITTESTINFO, TVHT_ONITEMSTATEICON, TVI_LAST, TVIF_CHILDREN,
-            TVIF_PARAM, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_STATEIMAGEMASK, TVITEMEXW,
+            NMHDR, NMTREEVIEWW, NMTVCUSTOMDRAW, TVC_BYKEYBOARD, TVC_BYMOUSE, TVGN_CARET,
+            TVHITTESTINFO, TVHT_ONITEMSTATEICON, TVI_LAST, TVIF_CHILDREN, TVIF_PARAM, TVIF_STATE,
+            TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_STATEIMAGEMASK, TVITEMEXW,
             TVITEMEXW_CHILDREN, TVM_DELETEITEM, TVM_GETITEMRECT, TVM_GETITEMW, TVM_GETNEXTITEM,
             TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETITEMW, TVS_CHECKBOXES,
             TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT, TVS_SHOWSELALWAYS, WC_TREEVIEWW,
@@ -554,7 +554,9 @@ pub(crate) fn handle_treeview_itemchanged_notification(
     None // No AppEvent generated from this notification directly for now
 }
 
-fn is_user_treeview_selection_action(action: windows::Win32::UI::Controls::NM_TREEVIEW_ACTION) -> bool {
+fn is_user_treeview_selection_action(
+    action: windows::Win32::UI::Controls::NM_TREEVIEW_ACTION,
+) -> bool {
     action == TVC_BYMOUSE || action == TVC_BYKEYBOARD
 }
 
@@ -1365,9 +1367,8 @@ pub(crate) fn handle_nm_customdraw(
                     .get_parsed_style(StyleId::TreeViewSelectionAccent)
                     .and_then(|style| style.background_color.clone())
                     .is_some(),
-            )
-                && let Some(accent_style) =
-                    internal_state.get_parsed_style(StyleId::TreeViewSelectionAccent)
+            ) && let Some(accent_style) =
+                internal_state.get_parsed_style(StyleId::TreeViewSelectionAccent)
                 && let Some(accent_color) = accent_style.background_color.as_ref()
                 && let Some(accent_rect) = treeview_selection_accent_rect(nmtvcd.nmcd.rc)
             {

@@ -419,8 +419,14 @@ pub struct ChartDataPacket {
 /// Generic rows that can appear in a modal form dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormRow {
-    ReadOnlyText { label: String, value: String },
-    Note { text: String, severity: MessageSeverity },
+    ReadOnlyText {
+        label: String,
+        value: String,
+    },
+    Note {
+        text: String,
+        severity: MessageSeverity,
+    },
 }
 
 /// Validation rules for a single-line text input in a generic form dialog.

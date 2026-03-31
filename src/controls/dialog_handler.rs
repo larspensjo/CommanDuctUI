@@ -14,8 +14,8 @@ use crate::types::{
 };
 use crate::window_common;
 
-use std::ffi::{OsString, c_void};
 use std::collections::HashMap;
+use std::ffi::{OsString, c_void};
 use std::mem::{align_of, size_of};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
@@ -28,15 +28,15 @@ use windows::{
             CreateSolidBrush, HBRUSH, HDC, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
         },
         System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree},
-        UI::Controls::Dialogs::*,
         UI::Controls::BST_CHECKED,
-        UI::WindowsAndMessaging::{BM_GETCHECK, EN_CHANGE},
+        UI::Controls::Dialogs::*,
         UI::Input::KeyboardAndMouse::EnableWindow,
         UI::Shell::{
             FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
             SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
         },
         UI::WindowsAndMessaging::*,
+        UI::WindowsAndMessaging::{BM_GETCHECK, EN_CHANGE},
     },
     core::{HSTRING, PCWSTR},
 };
@@ -716,9 +716,9 @@ fn collect_form_field_values(hdlg: HWND, data: &mut FormDialogData) -> Vec<FormF
                 control_id,
             } => {
                 if let Ok(hwnd_check) = unsafe { GetDlgItem(Some(hdlg), *control_id) } {
-                    let checked =
-                        unsafe { SendMessageW(hwnd_check, BM_GETCHECK, None, None) }.0 as u32
-                            == BST_CHECKED.0;
+                    let checked = unsafe { SendMessageW(hwnd_check, BM_GETCHECK, None, None) }.0
+                        as u32
+                        == BST_CHECKED.0;
                     values.push(FormFieldValue::CheckBox {
                         field_id: field_id.clone(),
                         checked,
@@ -938,7 +938,12 @@ fn build_form_dialog_template(
     cdit = cdit.saturating_add(2);
 
     let dlg_template = DLGTEMPLATE {
-        style: DS_CENTER as u32 | DS_MODALFRAME as u32 | DS_SETFONT as u32 | WS_CAPTION.0 | WS_SYSMENU.0 | WS_POPUP.0,
+        style: DS_CENTER as u32
+            | DS_MODALFRAME as u32
+            | DS_SETFONT as u32
+            | WS_CAPTION.0
+            | WS_SYSMENU.0
+            | WS_POPUP.0,
         dwExtendedStyle: 0,
         cdit,
         x: 0,
@@ -1017,7 +1022,11 @@ fn build_form_dialog_template(
                 align_to_dword(template_bytes);
                 let edit_id = form_dialog_control_id(ID_DIALOG_FORM_FIRST_FIELD_EDIT, index);
                 let edit_item = DLGITEMTEMPLATE {
-                    style: WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | WS_TABSTOP.0 | ES_AUTOHSCROLL as u32,
+                    style: WS_CHILD.0
+                        | WS_VISIBLE.0
+                        | WS_BORDER.0
+                        | WS_TABSTOP.0
+                        | ES_AUTOHSCROLL as u32,
                     id: edit_id as u16,
                     x: 10,
                     y,
@@ -1035,8 +1044,7 @@ fn build_form_dialog_template(
 
                 if live_warning.is_some() {
                     align_to_dword(template_bytes);
-                    let warning_id =
-                        form_dialog_control_id(ID_DIALOG_FORM_FIRST_WARNING, index);
+                    let warning_id = form_dialog_control_id(ID_DIALOG_FORM_FIRST_WARNING, index);
                     let warning_item = DLGITEMTEMPLATE {
                         style: WS_CHILD.0 | WS_VISIBLE.0 | window_common::SS_LEFT.0,
                         id: warning_id as u16,
@@ -1245,8 +1253,8 @@ unsafe extern "system" fn form_dialog_proc(
                     TRUE.0 as isize
                 }
                 _ => {
-                    let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
-                        as *mut FormDialogData;
+                    let dialog_data_ptr =
+                        unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
                     if dialog_data_ptr.is_null() {
                         return FALSE.0 as isize;
                     }
@@ -1254,9 +1262,10 @@ unsafe extern "system" fn form_dialog_proc(
                     let mut needs_refresh = false;
                     for field in &dialog_data.fields {
                         match field {
-                            FormFieldRuntime::TextInput { edit_control_id, .. }
-                                if command_id == *edit_control_id
-                                    && notification_code == EN_CHANGE as i32 =>
+                            FormFieldRuntime::TextInput {
+                                edit_control_id, ..
+                            } if command_id == *edit_control_id
+                                && notification_code == EN_CHANGE as i32 =>
                             {
                                 needs_refresh = true;
                             }
@@ -1279,8 +1288,8 @@ unsafe extern "system" fn form_dialog_proc(
         WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORBTN => {
             let hdc = HDC(wparam.0 as *mut c_void);
             let hwnd_control = HWND(lparam.0 as *mut c_void);
-            let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
-                as *mut FormDialogData;
+            let dialog_data_ptr =
+                unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
             if !dialog_data_ptr.is_null() {
                 let dialog_data = unsafe { &mut *dialog_data_ptr };
                 unsafe {
@@ -1344,10 +1353,11 @@ pub(crate) fn handle_show_form_dialog_command(
                 live_warning,
                 ..
             } => {
-                let edit_control_id = form_dialog_control_id(ID_DIALOG_FORM_FIRST_FIELD_EDIT, index);
-                let warning_control_id = live_warning.as_ref().map(|_| {
-                    form_dialog_control_id(ID_DIALOG_FORM_FIRST_WARNING, index)
-                });
+                let edit_control_id =
+                    form_dialog_control_id(ID_DIALOG_FORM_FIRST_FIELD_EDIT, index);
+                let warning_control_id = live_warning
+                    .as_ref()
+                    .map(|_| form_dialog_control_id(ID_DIALOG_FORM_FIRST_WARNING, index));
                 if let Some(control_id) = warning_control_id {
                     note_severities.insert(control_id, MessageSeverity::Warning);
                 }
@@ -1365,10 +1375,7 @@ pub(crate) fn handle_show_form_dialog_command(
             } => {
                 fields.push(FormFieldRuntime::CheckBox {
                     field_id: field_id.clone(),
-                    control_id: form_dialog_control_id(
-                        ID_DIALOG_FORM_FIRST_FIELD_CHECKBOX,
-                        index,
-                    ),
+                    control_id: form_dialog_control_id(ID_DIALOG_FORM_FIRST_FIELD_CHECKBOX, index),
                 });
                 let _ = checked;
             }
@@ -1393,7 +1400,9 @@ pub(crate) fn handle_show_form_dialog_command(
             .fields
             .iter()
             .map(|field| match field {
-                FormField::TextInput { field_id, value, .. } => FormFieldValue::Text {
+                FormField::TextInput {
+                    field_id, value, ..
+                } => FormFieldValue::Text {
                     field_id: field_id.clone(),
                     value: value.clone(),
                 },
