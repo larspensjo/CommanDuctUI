@@ -1642,7 +1642,6 @@ mod tests {
         let description = state.describe_hwnd(control_hwnd);
 
         assert!(description.contains("target=control"));
-        assert!(description.contains("window_id=WindowId(1)"));
         assert!(description.contains("control_id=42"));
         assert!(description.contains("kind=RichEdit"));
     }

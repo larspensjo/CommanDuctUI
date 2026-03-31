@@ -182,9 +182,9 @@ mod tests {
         UI::WindowsAndMessaging::{CreateMenu, DestroyMenu},
     };
 
-    const LOAD_PROFILE_ID: MenuActionId = MenuActionId(1);
-    const SAVE_PROFILE_AS_ID: MenuActionId = MenuActionId(2);
-    const REFRESH_FILE_LIST_ID: MenuActionId = MenuActionId(3);
+    const PRIMARY_ACTION_ID: MenuActionId = MenuActionId(1);
+    const NESTED_ACTION_ID: MenuActionId = MenuActionId(2);
+    const TERTIARY_ACTION_ID: MenuActionId = MenuActionId(3);
 
     // Arrange common environment for menu tests
     fn setup_test_env() -> (Arc<Win32ApiInternalState>, WindowId, NativeWindowData) {
@@ -200,22 +200,22 @@ mod tests {
         let (_state, _window_id, mut native_data) = setup_test_env();
         let menu_items = vec![
             MenuItemConfig {
-                action: Some(LOAD_PROFILE_ID),
-                text: "Load".into(),
+                action: Some(PRIMARY_ACTION_ID),
+                text: "Primary".into(),
                 children: vec![],
             },
             MenuItemConfig {
                 action: None,
-                text: "File".into(),
+                text: "Group".into(),
                 children: vec![MenuItemConfig {
-                    action: Some(SAVE_PROFILE_AS_ID),
-                    text: "Save As".into(),
+                    action: Some(NESTED_ACTION_ID),
+                    text: "Nested".into(),
                     children: vec![],
                 }],
             },
             MenuItemConfig {
-                action: Some(REFRESH_FILE_LIST_ID),
-                text: "Refresh".into(),
+                action: Some(TERTIARY_ACTION_ID),
+                text: "Tertiary".into(),
                 children: vec![],
             },
         ];
@@ -233,16 +233,16 @@ mod tests {
         assert_eq!(native_data.menu_action_count(), 3);
         assert_eq!(native_data.get_next_menu_item_id_counter(), 30003);
         let actions: Vec<MenuActionId> = native_data.iter_menu_actions().map(|(_, a)| *a).collect();
-        assert!(actions.contains(&LOAD_PROFILE_ID));
-        assert!(actions.contains(&SAVE_PROFILE_AS_ID));
-        assert!(actions.contains(&REFRESH_FILE_LIST_ID));
+        assert!(actions.contains(&PRIMARY_ACTION_ID));
+        assert!(actions.contains(&NESTED_ACTION_ID));
+        assert!(actions.contains(&TERTIARY_ACTION_ID));
     }
 
     #[test]
     // [CDU-CmdEventPatternV1] Menu WM_COMMAND notifications are converted back into semantic `AppEvent::MenuActionClicked` values.
     fn test_handle_wm_command_for_menu_returns_event() {
         let (internal_state, window_id, mut native_data) = setup_test_env();
-        let command_id = native_data.register_menu_action(REFRESH_FILE_LIST_ID);
+        let command_id = native_data.register_menu_action(TERTIARY_ACTION_ID);
         {
             let mut guard = internal_state.active_windows().write().unwrap();
             guard.insert(window_id, native_data);
@@ -254,7 +254,7 @@ mod tests {
 
         match event {
             AppEvent::MenuActionClicked { action_id } => {
-                assert_eq!(action_id, REFRESH_FILE_LIST_ID);
+                assert_eq!(action_id, TERTIARY_ACTION_ID);
             }
             other => panic!("Unexpected event: {other:?}"),
         }

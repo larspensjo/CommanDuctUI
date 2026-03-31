@@ -721,9 +721,28 @@ mod tests {
     #[test]
     fn tab_bar_palette_default_uses_dark_theme_colors() {
         let palette = TabBarPalette::default();
-        assert_eq!(palette.background.r, 0x2E);
-        assert_eq!(palette.text_active.r, 0xE0);
-        assert_eq!(palette.accent.b, 0xFF);
+        assert!(palette.background.r < 0x80);
+        assert!(palette.background.g < 0x80);
+        assert!(palette.background.b < 0x80);
+
+        assert!(palette.text_active.r > palette.background.r);
+        assert!(palette.text_active.g > palette.background.g);
+        assert!(palette.text_active.b > palette.background.b);
+
+        assert!(palette.text_inactive.r > palette.background.r);
+        assert!(palette.text_inactive.g > palette.background.g);
+        assert!(palette.text_inactive.b > palette.background.b);
+        assert!(palette.text_inactive.r < palette.text_active.r);
+        assert!(palette.text_inactive.g < palette.text_active.g);
+        assert!(palette.text_inactive.b < palette.text_active.b);
+
+        assert!(palette.hover_fill.r > palette.background.r);
+        assert!(palette.hover_fill.g > palette.background.g);
+        assert!(palette.hover_fill.b > palette.background.b);
+
+        assert!(palette.accent.b > palette.accent.r);
+        assert!(palette.accent.b > palette.accent.g);
+        assert!(palette.accent.b > palette.background.b);
     }
 
     #[test]

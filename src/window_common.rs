@@ -3030,12 +3030,27 @@ pub(crate) fn destroy_native_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::PlatformError;
     use windows::Win32::Foundation::HWND;
 
     /*
      * Unit tests for NativeWindowData. These tests verify basic state
      * management without invoking Win32 APIs, using dummy HWND values.
      */
+
+    fn assert_layout_operation_failed(err: PlatformError, expected_fragments: &[&str]) {
+        match err {
+            PlatformError::OperationFailed(message) => {
+                for fragment in expected_fragments {
+                    assert!(
+                        message.contains(fragment),
+                        "expected layout validation message to contain {fragment:?}, got {message:?}"
+                    );
+                }
+            }
+            other => panic!("expected OperationFailed, got {other:?}"),
+        }
+    }
 
     #[test]
     // [CDU-ControlLogicalIdsV1][CDU-ControlEnableDisableV1][CDU-Tech-WindowsRsV1]
@@ -3178,10 +3193,7 @@ mod tests {
 
         let err = NativeWindowData::validate_layout_rules(&rules)
             .expect_err("multiple Fill siblings should be rejected");
-        let message = err.to_string();
-        assert!(message.contains("multiple DockStyle::Fill children"));
-        assert!(message.contains("10"));
-        assert!(message.contains("11"));
+        assert_layout_operation_failed(err, &["Fill", "10", "11"]);
     }
 
     #[test]
@@ -3230,7 +3242,7 @@ mod tests {
 
         let err = NativeWindowData::validate_layout_rules(&rules)
             .expect_err("Top dock without fixed_size should be rejected");
-        assert!(err.to_string().contains("without fixed_size"));
+        assert_layout_operation_failed(err, &["30", "Top", "fixed_size"]);
     }
 
     #[test]
@@ -3246,7 +3258,7 @@ mod tests {
 
         let err = NativeWindowData::validate_layout_rules(&rules)
             .expect_err("Negative fixed_size should be rejected");
-        assert!(err.to_string().contains("negative fixed_size"));
+        assert_layout_operation_failed(err, &["31", "-1", "Left", "fixed_size"]);
     }
 
     #[test]

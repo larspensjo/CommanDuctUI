@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.2
+
+- Tests: rewrite generic infrastructure tests to use neutral menu fixtures and invariant-level assertions for layout validation, control description, and default tab-bar dark-theme behavior
+
 ## 0.10.1
 
 - `chart_handler`: endpoint labels with deterministic overlap resolution (`place_end_labels`)
