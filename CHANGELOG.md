@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.4
+
+- TreeView markers now anchor to the text lane instead of a fixed offset, which keeps the dot placement stable across checkbox and selection states
+- Warmed the TreeView marker palette so shared download and priority markers better fit the dark neutral system
+
 ## 0.10.3
 
 - Add `StyleId::StatusMeter`, `StyleId::SectionTitle`, `StyleId::PrimaryButton`, and `StyleId::DestructiveButton`

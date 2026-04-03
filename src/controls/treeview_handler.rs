@@ -43,6 +43,7 @@ use windows::{
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::ptr;
 use std::sync::Arc;
 
 /*
@@ -56,8 +57,9 @@ use std::sync::Arc;
  *     windows::Win32::Foundation::COLORREF(0x00FF0000); // BGR format for Blue
  */
 
-const MARKER_DIAMETER: i32 = 6;
-const MARKER_LEFT_OFFSET: i32 = 12;
+const MARKER_DIAMETER: i32 = 9;
+const MARKER_LANE_GAP: i32 = 4;
+const MARKER_LANE_PADDING: i32 = 4;
 const SELECTION_ACCENT_WIDTH: i32 = 3;
 const MARKER_BORDER: i32 = 1;
 const MARKER_OUTER_COLOR: Color = Color {
@@ -656,21 +658,7 @@ pub(crate) fn handle_redraw_tree_item_command(
         return Err(PlatformError::InvalidHandle("Invalid TreeView HWND".into()));
     }
 
-    let mut item_rect = RECT::default();
-    unsafe {
-        *((&mut item_rect as *mut RECT) as *mut HTREEITEM) = htreeitem;
-    }
-
-    let get_rect_success = unsafe {
-        SendMessageW(
-            hwnd_treeview,
-            TVM_GETITEMRECT,
-            Some(WPARAM(0)), // FALSE for whole item
-            Some(LPARAM(&mut item_rect as *mut _ as isize)),
-        )
-    };
-
-    if get_rect_success.0 != 0 {
+    if let Some(item_rect) = treeview_item_rect(hwnd_treeview, htreeitem, false) {
         unsafe {
             _ = InvalidateRect(Some(hwnd_treeview), Some(&item_rect), true);
         }
@@ -944,68 +932,116 @@ fn tree_item_marker_color(marker: TreeItemMarkerKind) -> Option<Color> {
     match marker {
         TreeItemMarkerKind::None => None,
         TreeItemMarkerKind::Blue => Some(Color {
-            r: 33,
-            g: 150,
-            b: 243,
-        }), // Material Blue 500
-        TreeItemMarkerKind::Green => Some(Color {
-            r: 46,
-            g: 204,
-            b: 113,
-        }), // Material Green 400
-        TreeItemMarkerKind::Yellow => Some(Color {
-            r: 255,
-            g: 193,
-            b: 7,
-        }), // Amber 500
-        TreeItemMarkerKind::Red => Some(Color {
-            r: 244,
-            g: 67,
-            b: 54,
-        }), // Material Red 500
-        TreeItemMarkerKind::Purple => Some(Color {
-            r: 156,
-            g: 39,
+            r: 92,
+            g: 129,
             b: 176,
-        }), // Material Purple 500
+        }), // muted blue slate
+        TreeItemMarkerKind::Green => Some(Color {
+            r: 83,
+            g: 171,
+            b: 109,
+        }), // calm green
+        TreeItemMarkerKind::Yellow => Some(Color {
+            r: 214,
+            g: 158,
+            b: 78,
+        }), // muted amber / clay
+        TreeItemMarkerKind::Red => Some(Color {
+            r: 196,
+            g: 101,
+            b: 76,
+        }), // warm terracotta alert
+        TreeItemMarkerKind::Purple => Some(Color {
+            r: 164,
+            g: 130,
+            b: 98,
+        }), // muted clay neutral
         TreeItemMarkerKind::Gray => Some(Color {
-            r: 117,
-            g: 117,
-            b: 117,
-        }), // Gray 600
+            r: 141,
+            g: 130,
+            b: 118,
+        }), // warm neutral
     }
 }
 
-fn draw_tree_item_marker(hdc: HDC, hwnd_treeview: HWND, h_item_native: HTREEITEM, color: Color) {
-    let mut item_rect = RECT::default();
+fn rect_seeded_for_treeview_item(h_item_native: HTREEITEM) -> RECT {
+    let mut rect = RECT::default();
     unsafe {
-        *(((&mut item_rect) as *mut RECT) as *mut HTREEITEM) = h_item_native;
+        ptr::write_unaligned((&mut rect as *mut RECT).cast::<HTREEITEM>(), h_item_native);
     }
-    let rect_success = unsafe {
+    rect
+}
+
+fn treeview_item_rect(
+    hwnd_treeview: HWND,
+    h_item_native: HTREEITEM,
+    text_only: bool,
+) -> Option<RECT> {
+    let mut rect = rect_seeded_for_treeview_item(h_item_native);
+    let success = unsafe {
         SendMessageW(
             hwnd_treeview,
             TVM_GETITEMRECT,
-            Some(WPARAM(1)),
-            Some(LPARAM(&mut item_rect as *mut _ as isize)),
+            Some(WPARAM(usize::from(text_only))),
+            Some(LPARAM(&mut rect as *mut _ as isize)),
         )
     };
+    if success.0 == 0 {
+        return None;
+    }
+    Some(rect)
+}
 
-    if rect_success.0 == 0 {
-        return;
+fn tree_item_marker_rect(item_rect: RECT, text_rect: RECT) -> Option<RECT> {
+    if item_rect.bottom <= item_rect.top
+        || item_rect.right <= item_rect.left
+        || text_rect.bottom <= text_rect.top
+        || text_rect.right <= text_rect.left
+    {
+        return None;
+    }
+
+    let available_right = text_rect.left.checked_sub(MARKER_LANE_GAP)?;
+    let left_limit = item_rect.left + MARKER_LANE_PADDING;
+    let left = available_right.checked_sub(MARKER_DIAMETER)?;
+    if left < left_limit {
+        return None;
     }
 
     let height = item_rect.bottom - item_rect.top;
     let top = item_rect.top + (height - MARKER_DIAMETER) / 2;
-    let left = item_rect.left + MARKER_LEFT_OFFSET;
-    let right = left + MARKER_DIAMETER;
-    let bottom = top + MARKER_DIAMETER;
+    Some(RECT {
+        left,
+        top,
+        right: left + MARKER_DIAMETER,
+        bottom: top + MARKER_DIAMETER,
+    })
+}
+
+fn draw_tree_item_marker(hdc: HDC, hwnd_treeview: HWND, h_item_native: HTREEITEM, color: Color) {
+    let Some(item_rect) = treeview_item_rect(hwnd_treeview, h_item_native, false) else {
+        return;
+    };
+    let Some(text_rect) = treeview_item_rect(hwnd_treeview, h_item_native, true) else {
+        return;
+    };
+
+    let Some(marker_rect) = tree_item_marker_rect(item_rect, text_rect) else {
+        return;
+    };
 
     let outer_color_ref = styling_handler::color_to_colorref(&MARKER_OUTER_COLOR);
     let outer_brush = unsafe { CreateSolidBrush(outer_color_ref) };
     if !outer_brush.is_invalid() {
         unsafe {
             let previous_brush = SelectObject(hdc, HGDIOBJ(outer_brush.0));
-            let _ = Ellipse(hdc, left, top, right, bottom);
+            let _ = Ellipse(
+                hdc,
+                marker_rect.left,
+                marker_rect.top,
+                marker_rect.right,
+                marker_rect.bottom,
+            );
             SelectObject(hdc, previous_brush);
             let _ = DeleteObject(HGDIOBJ(outer_brush.0));
         }
@@ -1019,10 +1055,10 @@ fn draw_tree_item_marker(hdc: HDC, hwnd_treeview: HWND, h_item_native: HTREEITEM
 
     unsafe {
         let previous_brush = SelectObject(hdc, HGDIOBJ(inner_brush.0));
-        let inner_left = left + MARKER_BORDER;
-        let inner_top = top + MARKER_BORDER;
-        let inner_right = right - MARKER_BORDER;
-        let inner_bottom = bottom - MARKER_BORDER;
+        let inner_left = marker_rect.left + MARKER_BORDER;
+        let inner_top = marker_rect.top + MARKER_BORDER;
+        let inner_right = marker_rect.right - MARKER_BORDER;
+        let inner_bottom = marker_rect.bottom - MARKER_BORDER;
         if inner_right > inner_left && inner_bottom > inner_top {
             let _ = Ellipse(hdc, inner_left, inner_top, inner_right, inner_bottom);
         }
@@ -1677,6 +1713,78 @@ mod tests {
                 top: 10,
                 right: 320,
                 bottom: 30,
+            })
+        );
+    }
+
+    #[test]
+    fn tree_item_marker_rect_anchors_before_text_lane() {
+        let item_rect = RECT {
+            left: 0,
+            top: 10,
+            right: 200,
+            bottom: 30,
+        };
+        let text_rect = RECT {
+            left: 40,
+            top: 10,
+            right: 160,
+            bottom: 30,
+        };
+
+        assert_eq!(
+            tree_item_marker_rect(item_rect, text_rect),
+            Some(RECT {
+                left: 27,
+                top: 15,
+                right: 36,
+                bottom: 24,
+            })
+        );
+    }
+
+    #[test]
+    fn tree_item_marker_rect_returns_none_when_lane_is_too_small() {
+        let item_rect = RECT {
+            left: 0,
+            top: 10,
+            right: 200,
+            bottom: 30,
+        };
+        let text_rect = RECT {
+            left: 14,
+            top: 10,
+            right: 160,
+            bottom: 30,
+        };
+
+        assert_eq!(tree_item_marker_rect(item_rect, text_rect), None);
+    }
+
+    #[test]
+    fn tree_item_marker_color_uses_warm_palette() {
+        assert_eq!(
+            tree_item_marker_color(TreeItemMarkerKind::Red),
+            Some(Color {
+                r: 196,
+                g: 101,
+                b: 76,
+            })
+        );
+        assert_eq!(
+            tree_item_marker_color(TreeItemMarkerKind::Yellow),
+            Some(Color {
+                r: 214,
+                g: 158,
+                b: 78,
+            })
+        );
+        assert_eq!(
+            tree_item_marker_color(TreeItemMarkerKind::Gray),
+            Some(Color {
+                r: 141,
+                g: 130,
+                b: 118,
             })
         );
     }
