@@ -90,4 +90,11 @@ pub enum StyleId {
     // TabBar custom control
     TabBar,
     TabBarAccent,
+    // Token and status meter
+    StatusMeter,
+    // Section title (subdued heading, not accent-colored)
+    SectionTitle,
+    // Button hierarchy
+    PrimaryButton,
+    DestructiveButton,
 }

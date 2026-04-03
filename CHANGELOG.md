@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.3
+
+- Add `StyleId::StatusMeter`, `StyleId::SectionTitle`, `StyleId::PrimaryButton`, and `StyleId::DestructiveButton`
+- Update chart and dialog hardcoded dark-theme colors to the warm neutral palette used by host applications
+
 ## 0.10.2
 
 - Tests: rewrite generic infrastructure tests to use neutral menu fixtures and invariant-level assertions for layout validation, control description, and default tab-bar dark-theme behavior

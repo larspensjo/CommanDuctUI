@@ -8,9 +8,9 @@
  * Chart data is stored in GWLP_USERDATA as a heap-allocated `ChartWindowState`.
  * The data is replaced by `handle_set_chart_data_command` and freed on WM_DESTROY.
  *
- * Dark theme palette (Win32 COLORREF = 0x00BBGGRR):
- *   Background  #1E2228  → 0x0028_221E
- *   Gridlines   #3A3F47  → 0x0047_3F3A
+ * Warm dark palette (Win32 COLORREF = 0x00BBGGRR):
+ *   Background  #1E1E1C  → 0x001C_1E1E
+ *   Gridlines   #2A2A28  → 0x0028_2A2A
  */
 
 use crate::app::Win32ApiInternalState;
@@ -37,8 +37,8 @@ use windows::core::{HSTRING, PCWSTR, w};
 
 // ── Dark theme colors ─────────────────────────────────────────────────────────
 
-const COLOR_BG: COLORREF = COLORREF(0x0028_221E); // #1E2228
-const COLOR_GRID: COLORREF = COLORREF(0x0047_3F3A); // #3A3F47
+const COLOR_BG: COLORREF = COLORREF(0x001C_1E1E); // #1E1E1C
+const COLOR_GRID: COLORREF = COLORREF(0x0028_2A2A); // #2A2A28
 
 // ── Per-window state stored in GWLP_USERDATA ─────────────────────────────────
 
@@ -226,11 +226,11 @@ fn place_end_labels(
     result
 }
 
-/// Dims a COLORREF toward the dark background `0x0028_221E`.
+/// Dims a COLORREF toward the dark background `#1E1E1C`.
 fn mute_color(color: u32) -> u32 {
     let r = ((color & 0xFF) / 2 + 0x1E / 2) & 0xFF;
-    let g = (((color >> 8) & 0xFF) / 2 + 0x22 / 2) & 0xFF;
-    let b = (((color >> 16) & 0xFF) / 2 + 0x28 / 2) & 0xFF;
+    let g = (((color >> 8) & 0xFF) / 2 + 0x1E / 2) & 0xFF;
+    let b = (((color >> 16) & 0xFF) / 2 + 0x1C / 2) & 0xFF;
     r | (g << 8) | (b << 16)
 }
 
@@ -748,11 +748,11 @@ mod tests {
     fn mute_color_bright_white_toward_bg() {
         // Pure white 0x00FFFFFF: each channel 255.
         // r = 255/2 + 0x1E/2 = 127 + 15 = 142 = 0x8E
-        // g = 255/2 + 0x22/2 = 127 + 17 = 144 = 0x90
-        // b = 255/2 + 0x28/2 = 127 + 20 = 147 = 0x93
+        // g = 255/2 + 0x1E/2 = 127 + 15 = 142 = 0x8E
+        // b = 255/2 + 0x1C/2 = 127 + 14 = 141 = 0x8D
         let muted = mute_color(0x00FF_FFFF);
         assert_eq!(muted & 0xFF, 0x8E, "red channel");
-        assert_eq!((muted >> 8) & 0xFF, 0x90, "green channel");
-        assert_eq!((muted >> 16) & 0xFF, 0x93, "blue channel");
+        assert_eq!((muted >> 8) & 0xFF, 0x8E, "green channel");
+        assert_eq!((muted >> 16) & 0xFF, 0x8D, "blue channel");
     }
 }
