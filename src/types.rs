@@ -94,9 +94,14 @@ pub struct WindowConfig<'a> {
     pub height: i32,
 }
 
-// Represents the visual check state of an item, typically a checkbox.
+// Represents the visual state-image lane of an item in a tree control.
+//
+// `Hidden` reserves the lane but leaves it blank, which is useful when the host
+// application wants consistent alignment without exposing a user-toggleable
+// checkbox for that row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckState {
+    Hidden,
     Checked,
     Unchecked,
 }

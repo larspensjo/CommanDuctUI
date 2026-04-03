@@ -265,6 +265,12 @@ impl NativeWindowData {
         self.treeview_state.as_ref()
     }
 
+    pub(crate) fn get_treeview_state_mut(
+        &mut self,
+    ) -> Option<&mut treeview_handler::TreeViewInternalState> {
+        self.treeview_state.as_mut()
+    }
+
     pub(crate) fn apply_style_to_control(&mut self, control_id: ControlId, style_id: StyleId) {
         // [CDU-Styling-ApplyV1] Track which logical control has an applied `StyleId` so redraw hooks can resolve palette/font info.
         self.applied_styles.insert(control_id, style_id);

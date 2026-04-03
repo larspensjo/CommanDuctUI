@@ -57,16 +57,12 @@ use std::sync::Arc;
  *     windows::Win32::Foundation::COLORREF(0x00FF0000); // BGR format for Blue
  */
 
-const MARKER_DIAMETER: i32 = 9;
-const MARKER_LANE_GAP: i32 = 4;
-const MARKER_LANE_PADDING: i32 = 4;
+const MARKER_MIN_DIAMETER: i32 = 12;
+const MARKER_MAX_DIAMETER: i32 = 14;
+const MARKER_LANE_GAP: i32 = 3;
+const STATE_ICON_LANE_WIDTH: i32 = 18;
 const SELECTION_ACCENT_WIDTH: i32 = 3;
 const MARKER_BORDER: i32 = 1;
-const MARKER_OUTER_COLOR: Color = Color {
-    r: 255,
-    g: 255,
-    b: 255,
-};
 
 /*
  * Holds internal state specific to a TreeView control instance.
@@ -77,6 +73,7 @@ const MARKER_OUTER_COLOR: Color = Color {
 pub(crate) struct TreeViewInternalState {
     pub(crate) item_id_to_htreeitem: HashMap<TreeItemId, HTREEITEM>,
     pub(crate) htreeitem_to_item_id: HashMap<isize, TreeItemId>,
+    pub(crate) check_states: HashMap<TreeItemId, CheckState>,
     pub(crate) style_overrides: HashMap<TreeItemId, StyleId>,
 }
 
@@ -85,6 +82,7 @@ impl TreeViewInternalState {
         Self {
             item_id_to_htreeitem: HashMap::new(),
             htreeitem_to_item_id: HashMap::new(),
+            check_states: HashMap::new(),
             style_overrides: HashMap::new(),
         }
     }
@@ -105,6 +103,7 @@ impl TreeViewInternalState {
         }
         self.item_id_to_htreeitem.clear();
         self.htreeitem_to_item_id.clear();
+        self.check_states.clear();
         self.style_overrides.clear();
         log::debug!("TreeViewInternalState::clear_items_impl completed for HWND {hwnd_treeview:?}");
     }
@@ -124,12 +123,6 @@ impl TreeViewInternalState {
 
         let mut text_buffer: Vec<u16> = item_desc.text.encode_utf16().collect();
         text_buffer.push(0); // Null terminator
-
-        // Determine the state image index for checkbox (1-based: 1 for unchecked, 2 for checked)
-        let image_index = match item_desc.state {
-            CheckState::Checked => 2,
-            CheckState::Unchecked => 1,
-        };
 
         let tv_item = TVITEMEXW {
             mask: TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN,
@@ -172,6 +165,7 @@ impl TreeViewInternalState {
             .insert(item_desc.id, h_current_item_native);
         self.htreeitem_to_item_id
             .insert(h_current_item_native.0, item_desc.id);
+        self.check_states.insert(item_desc.id, item_desc.state);
         if let Some(style_id) = item_desc.style_override {
             self.style_overrides.insert(item_desc.id, style_id);
         }
@@ -183,7 +177,7 @@ impl TreeViewInternalState {
         let mut tv_item_update = TVITEMEXW {
             mask: TVIF_STATE,
             hItem: h_current_item_native,
-            state: (image_index as u32) << 12,
+            state: treeview_state_image_mask(item_desc.state),
             stateMask: TVIS_STATEIMAGEMASK.0,
             ..Default::default()
         };
@@ -420,15 +414,10 @@ pub(crate) fn update_treeview_item_visual_state(
         return Err(PlatformError::InvalidHandle("Invalid TreeView HWND".into()));
     }
 
-    let image_index = match new_check_state {
-        CheckState::Checked => 2,   // Index for checked state image
-        CheckState::Unchecked => 1, // Index for unchecked state image
-    };
-
     let mut tv_item_update = TVITEMEXW {
         mask: TVIF_STATE,
         hItem: h_item_native,
-        state: (image_index as u32) << 12, // State image index is bits 12-15 of state
+        state: treeview_state_image_mask(new_check_state),
         stateMask: TVIS_STATEIMAGEMASK.0,
         ..Default::default()
     };
@@ -448,6 +437,17 @@ pub(crate) fn update_treeview_item_visual_state(
             "TVM_SETITEMW failed for item {item_id:?}: {last_error:?}"
         )));
     }
+
+    internal_state.with_window_data_write(window_id, |window_data| {
+        let tv_state = window_data.get_treeview_state_mut().ok_or_else(|| {
+            PlatformError::OperationFailed(format!(
+                "No TreeView state exists in window {window_id:?}"
+            ))
+        })?;
+        tv_state.check_states.insert(item_id, new_check_state);
+        Ok(())
+    })?;
+
     Ok(())
 }
 
@@ -992,6 +992,40 @@ fn treeview_item_rect(
     Some(rect)
 }
 
+fn treeview_state_image_mask(state: CheckState) -> u32 {
+    let image_index = match state {
+        // Win32 collapses the state-image lane entirely at index 0. Hidden rows
+        // intentionally reuse the unchecked slot and blank that glyph in postpaint
+        // so marker/layout alignment stays stable.
+        CheckState::Hidden => 1,
+        CheckState::Unchecked => 1,
+        CheckState::Checked => 2,
+    };
+    image_index << 12
+}
+
+fn tree_item_state_icon_lane_rect(item_rect: RECT, text_rect: RECT) -> Option<RECT> {
+    if item_rect.bottom <= item_rect.top
+        || text_rect.bottom <= text_rect.top
+        || text_rect.left <= item_rect.left
+    {
+        return None;
+    }
+
+    let right = text_rect.left.checked_sub(MARKER_LANE_GAP)?;
+    let left = right.checked_sub(STATE_ICON_LANE_WIDTH)?;
+    if left < item_rect.left {
+        return None;
+    }
+
+    Some(RECT {
+        left,
+        top: item_rect.top,
+        right,
+        bottom: item_rect.bottom,
+    })
+}
+
 fn tree_item_marker_rect(item_rect: RECT, text_rect: RECT) -> Option<RECT> {
     if item_rect.bottom <= item_rect.top
         || item_rect.right <= item_rect.left
@@ -1001,24 +1035,32 @@ fn tree_item_marker_rect(item_rect: RECT, text_rect: RECT) -> Option<RECT> {
         return None;
     }
 
-    let available_right = text_rect.left.checked_sub(MARKER_LANE_GAP)?;
-    let left_limit = item_rect.left + MARKER_LANE_PADDING;
-    let left = available_right.checked_sub(MARKER_DIAMETER)?;
-    if left < left_limit {
+    let lane_rect = tree_item_state_icon_lane_rect(item_rect, text_rect)?;
+    let lane_width = lane_rect.right - lane_rect.left;
+    let marker_diameter = (text_rect.bottom - text_rect.top - (MARKER_BORDER * 2))
+        .clamp(MARKER_MIN_DIAMETER, MARKER_MAX_DIAMETER);
+    if lane_width < marker_diameter {
         return None;
     }
 
-    let height = item_rect.bottom - item_rect.top;
-    let top = item_rect.top + (height - MARKER_DIAMETER) / 2;
+    let left = lane_rect.left + (lane_width - marker_diameter) / 2;
+    let text_height = text_rect.bottom - text_rect.top;
+    let top = text_rect.top + (text_height - marker_diameter) / 2;
     Some(RECT {
         left,
         top,
-        right: left + MARKER_DIAMETER,
-        bottom: top + MARKER_DIAMETER,
+        right: left + marker_diameter,
+        bottom: top + marker_diameter,
     })
 }
 
-fn draw_tree_item_marker(hdc: HDC, hwnd_treeview: HWND, h_item_native: HTREEITEM, color: Color) {
+fn draw_tree_item_marker(
+    hdc: HDC,
+    hwnd_treeview: HWND,
+    h_item_native: HTREEITEM,
+    color: Color,
+    background_color_ref: windows::Win32::Foundation::COLORREF,
+) {
     let Some(item_rect) = treeview_item_rect(hwnd_treeview, h_item_native, false) else {
         return;
     };
@@ -1030,8 +1072,7 @@ fn draw_tree_item_marker(hdc: HDC, hwnd_treeview: HWND, h_item_native: HTREEITEM
         return;
     };
 
-    let outer_color_ref = styling_handler::color_to_colorref(&MARKER_OUTER_COLOR);
-    let outer_brush = unsafe { CreateSolidBrush(outer_color_ref) };
+    let outer_brush = unsafe { CreateSolidBrush(background_color_ref) };
     if !outer_brush.is_invalid() {
         unsafe {
             let previous_brush = SelectObject(hdc, HGDIOBJ(outer_brush.0));
@@ -1138,10 +1179,12 @@ fn should_request_postpaint(
     selected_font: Option<HFONT>,
     marker_kind: TreeItemMarkerKind,
     draws_selection_accent: bool,
+    hides_state_icon: bool,
 ) -> bool {
     selected_font.is_some()
         || !matches!(marker_kind, TreeItemMarkerKind::None)
         || draws_selection_accent
+        || hides_state_icon
 }
 
 fn should_draw_selection_accent(
@@ -1178,6 +1221,14 @@ pub(crate) fn handle_nm_customdraw(
             let tree_item_id = TreeItemId(nmtvcd.nmcd.lItemlParam.0 as u64);
             let item_is_new = is_item_new_for_display(internal_state, window_id, tree_item_id);
             let marker_kind = tree_item_marker_for_display(internal_state, window_id, tree_item_id);
+            let check_state = internal_state
+                .with_window_data_read(window_id, |window_data| {
+                    Ok(window_data
+                        .get_treeview_state()
+                        .and_then(|state| state.check_states.get(&tree_item_id).copied()))
+                })
+                .unwrap_or(None)
+                .unwrap_or(CheckState::Unchecked);
 
             // Gather base style colors
             let base_style_id = internal_state
@@ -1308,6 +1359,7 @@ pub(crate) fn handle_nm_customdraw(
                 .and_then(|style| style.background_color.clone());
             let draws_selection_accent =
                 should_draw_selection_accent(is_selected, selection_accent_color.is_some());
+            let hides_state_icon = check_state == CheckState::Hidden;
 
             let mut result: isize = CDRF_DODEFAULT as isize;
             if let Some(font_handle) = selected_font {
@@ -1320,7 +1372,12 @@ pub(crate) fn handle_nm_customdraw(
                 // the changed clrText/clrTextBk values.
                 result |= CDRF_NEWFONT as isize;
             }
-            if should_request_postpaint(selected_font, marker_kind, draws_selection_accent) {
+            if should_request_postpaint(
+                selected_font,
+                marker_kind,
+                draws_selection_accent,
+                hides_state_icon,
+            ) {
                 result |= CDRF_NOTIFYPOSTPAINT as isize;
             }
 
@@ -1331,6 +1388,14 @@ pub(crate) fn handle_nm_customdraw(
             let hwnd_treeview = nmtvcd.nmcd.hdr.hwndFrom;
             let tree_item_id = TreeItemId(nmtvcd.nmcd.lItemlParam.0 as u64);
             let marker_kind = tree_item_marker_for_display(internal_state, window_id, tree_item_id);
+            let check_state = internal_state
+                .with_window_data_read(window_id, |window_data| {
+                    Ok(window_data
+                        .get_treeview_state()
+                        .and_then(|state| state.check_states.get(&tree_item_id).copied()))
+                })
+                .unwrap_or(None)
+                .unwrap_or(CheckState::Unchecked);
 
             let style_override = internal_state
                 .with_window_data_read(window_id, |window_data| {
@@ -1381,9 +1446,25 @@ pub(crate) fn handle_nm_customdraw(
                     }
                 }
             }
+            if check_state == CheckState::Hidden {
+                let h_item_native = HTREEITEM(nmtvcd.nmcd.dwItemSpec as isize);
+                if let Some(item_rect) = treeview_item_rect(hwnd_treeview, h_item_native, false)
+                    && let Some(text_rect) = treeview_item_rect(hwnd_treeview, h_item_native, true)
+                    && let Some(state_icon_rect) =
+                        tree_item_state_icon_lane_rect(item_rect, text_rect)
+                {
+                    let hidden_lane_brush = unsafe { CreateSolidBrush(nmtvcd.clrTextBk) };
+                    if !hidden_lane_brush.is_invalid() {
+                        unsafe {
+                            let _ = FillRect(hdc, &state_icon_rect, hidden_lane_brush);
+                            let _ = DeleteObject(HGDIOBJ(hidden_lane_brush.0));
+                        }
+                    }
+                }
+            }
             if let Some(color) = tree_item_marker_color(marker_kind) {
                 let h_item_native = HTREEITEM(nmtvcd.nmcd.dwItemSpec as isize);
-                draw_tree_item_marker(hdc, hwnd_treeview, h_item_native, color);
+                draw_tree_item_marker(hdc, hwnd_treeview, h_item_native, color, nmtvcd.clrTextBk);
             }
 
             // Draw selection accent bar if this item is selected and accent style is defined.
@@ -1474,13 +1555,6 @@ pub(crate) fn handle_wm_app_treeview_checkbox_clicked(
             return Err(PlatformError::OperationFailed("TVM_GETITEMW failed".into()));
         }
 
-        let state_image_idx = (tv_item_get.state & TVIS_STATEIMAGEMASK.0) >> 12;
-        let new_check_state = if state_image_idx == 2 {
-            CheckState::Checked
-        } else {
-            CheckState::Unchecked
-        };
-
         let app_item_id = if tv_item_get.lParam.0 != 0 {
             TreeItemId(tv_item_get.lParam.0 as u64)
         } else {
@@ -1492,15 +1566,50 @@ pub(crate) fn handle_wm_app_treeview_checkbox_clicked(
                 .ok_or_else(|| PlatformError::InvalidHandle("HTREEITEM not found in map".into()))?
         };
 
-        Ok(AppEvent::TreeViewItemToggledByUser {
+        let stored_check_state = tv_state
+            .check_states
+            .get(&app_item_id)
+            .copied()
+            .unwrap_or(CheckState::Unchecked);
+        // This map reflects the last host-confirmed state. For normal checkbox rows
+        // it can be briefly stale between the user's click and the host's follow-up
+        // UpdateTreeItemVisualState command, which is acceptable because hidden-row
+        // suppression is the only behavior that depends on it inside this handler.
+        if stored_check_state == CheckState::Hidden {
+            let mut tv_item_restore = TVITEMEXW {
+                mask: TVIF_STATE,
+                hItem: h_item_clicked,
+                state: treeview_state_image_mask(CheckState::Hidden),
+                stateMask: TVIS_STATEIMAGEMASK.0,
+                ..Default::default()
+            };
+            let _ = unsafe {
+                SendMessageW(
+                    hwnd_treeview,
+                    TVM_SETITEMW,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(&mut tv_item_restore as *mut _ as isize)),
+                )
+            };
+            return Ok(None);
+        }
+
+        let state_image_idx = (tv_item_get.state & TVIS_STATEIMAGEMASK.0) >> 12;
+        let new_check_state = if state_image_idx == 2 {
+            CheckState::Checked
+        } else {
+            CheckState::Unchecked
+        };
+
+        Ok(Some(AppEvent::TreeViewItemToggledByUser {
             window_id,
             item_id: app_item_id,
             new_state: new_check_state,
-        })
+        }))
     });
 
     match result {
-        Ok(event) => Some(event),
+        Ok(event) => event,
         Err(e) => {
             log::error!("Failed to handle checkbox click for HTREEITEM {h_item_clicked:?}: {e:?}");
             None
@@ -1735,10 +1844,10 @@ mod tests {
         assert_eq!(
             tree_item_marker_rect(item_rect, text_rect),
             Some(RECT {
-                left: 27,
-                top: 15,
-                right: 36,
-                bottom: 24,
+                left: 22,
+                top: 14,
+                right: 34,
+                bottom: 26,
             })
         );
     }
@@ -1759,6 +1868,57 @@ mod tests {
         };
 
         assert_eq!(tree_item_marker_rect(item_rect, text_rect), None);
+    }
+
+    #[test]
+    fn treeview_state_image_mask_preserves_hidden_lane() {
+        assert_eq!(treeview_state_image_mask(CheckState::Hidden), 1 << 12);
+        assert_eq!(treeview_state_image_mask(CheckState::Unchecked), 1 << 12);
+        assert_eq!(treeview_state_image_mask(CheckState::Checked), 2 << 12);
+    }
+
+    #[test]
+    fn tree_item_state_icon_lane_rect_reserves_space_before_text() {
+        let item_rect = RECT {
+            left: 0,
+            top: 10,
+            right: 200,
+            bottom: 30,
+        };
+        let text_rect = RECT {
+            left: 40,
+            top: 12,
+            right: 160,
+            bottom: 28,
+        };
+
+        assert_eq!(
+            tree_item_state_icon_lane_rect(item_rect, text_rect),
+            Some(RECT {
+                left: 19,
+                top: 10,
+                right: 37,
+                bottom: 30,
+            })
+        );
+    }
+
+    #[test]
+    fn tree_item_state_icon_lane_rect_returns_none_when_text_starts_before_item() {
+        let item_rect = RECT {
+            left: 30,
+            top: 10,
+            right: 200,
+            bottom: 30,
+        };
+        let text_rect = RECT {
+            left: 30,
+            top: 12,
+            right: 160,
+            bottom: 28,
+        };
+
+        assert_eq!(tree_item_state_icon_lane_rect(item_rect, text_rect), None);
     }
 
     #[test]
@@ -1795,6 +1955,7 @@ mod tests {
             None,
             TreeItemMarkerKind::None,
             false,
+            false,
         ));
     }
 
@@ -1804,6 +1965,7 @@ mod tests {
             None,
             TreeItemMarkerKind::None,
             true,
+            false,
         ));
     }
 
@@ -1813,6 +1975,17 @@ mod tests {
             None,
             TreeItemMarkerKind::Blue,
             false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn should_request_postpaint_when_hidden_state_icon_is_erased() {
+        assert!(should_request_postpaint(
+            None,
+            TreeItemMarkerKind::None,
+            false,
+            true,
         ));
     }
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.6
+
+- Keep a blank TreeView state-icon lane for `CheckState::Hidden` rows and erase the checkbox glyph in postpaint, so custom dots can sit between the expand button and the text instead of collapsing back onto the tree affordance
+
+## 0.10.5
+
+- Add `CheckState::Hidden` so TreeView rows can reserve the state-image lane without showing a checkbox, which lets host applications align custom markers cleanly while keeping interactive review rows opt-in
+- Size TreeView markers from the text lane height so priority and status dots read as deliberate UI elements instead of tiny overlay pixels
+
 ## 0.10.4
 
 - TreeView markers now anchor to the text lane instead of a fixed offset, which keeps the dot placement stable across checkbox and selection states
