@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.7
+
+- Add `StyleId::SecondaryButton` so host applications can demote non-primary actions without weakening every generic button surface
+- Mute disabled button fills toward the warm neutral background instead of keeping full-strength active fills, so disabled destructive buttons no longer read as urgent active errors
+
 ## 0.10.6
 
 - Keep a blank TreeView state-icon lane for `CheckState::Hidden` rows and erase the checkbox glyph in postpaint, so custom dots can sit between the expand button and the text instead of collapsing back onto the tree affordance

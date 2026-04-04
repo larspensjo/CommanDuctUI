@@ -96,5 +96,6 @@ pub enum StyleId {
     SectionTitle,
     // Button hierarchy
     PrimaryButton,
+    SecondaryButton,
     DestructiveButton,
 }

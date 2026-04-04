@@ -15,9 +15,9 @@ use std::sync::Arc;
 use windows::Win32::{
     Foundation::{COLORREF, HWND, LRESULT},
     Graphics::Gdi::{
-        COLOR_BTNFACE, COLOR_BTNTEXT, COLOR_GRAYTEXT, CreateSolidBrush, DT_CENTER, DT_SINGLELINE,
-        DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor, HDC, HGDIOBJ,
-        InflateRect, OPAQUE, SelectObject, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
+        COLOR_BTNFACE, COLOR_BTNTEXT, CreateSolidBrush, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
+        DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor, HDC, HGDIOBJ, InflateRect,
+        OPAQUE, SelectObject, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
     },
     UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED},
     UI::WindowsAndMessaging::{
@@ -28,6 +28,16 @@ use windows::Win32::{
 use windows::core::{HSTRING, PCWSTR};
 
 const WC_BUTTON: PCWSTR = windows::core::w!("BUTTON");
+const DISABLED_BG_TARGET: Color = Color {
+    r: 0x1E,
+    g: 0x1E,
+    b: 0x1C,
+};
+const DISABLED_TEXT_COLOR: Color = Color {
+    r: 0x87,
+    g: 0x86,
+    b: 0x7F,
+};
 
 /*
  * Creates a native push button and registers the resulting HWND in the
@@ -227,11 +237,7 @@ pub(crate) fn handle_wm_drawitem(
         let is_pressed = (dis.itemState.0 & ODS_SELECTED.0) != 0;
 
         let (bg_color, text_color) = if is_disabled {
-            // Disabled: use system gray text, keep background
-            (
-                base_bg,
-                colorref_to_color(COLORREF(GetSysColor(COLOR_GRAYTEXT))),
-            )
+            resolve_disabled_button_colors(base_bg, base_fg)
         } else if is_pressed {
             // Pressed: darken background by 20%
             let pressed_bg = Color {
@@ -324,6 +330,25 @@ pub(crate) fn handle_wm_ctlcolorbtn(
     result.ok().flatten()
 }
 
+fn resolve_disabled_button_colors(base_bg: Color, base_fg: Color) -> (Color, Color) {
+    (
+        blend_color(base_bg, DISABLED_BG_TARGET, 1, 2),
+        blend_color(base_fg, DISABLED_TEXT_COLOR, 1, 2),
+    )
+}
+
+fn blend_color(a: Color, b: Color, a_weight: u16, b_weight: u16) -> Color {
+    let total = u32::from(a_weight) + u32::from(b_weight);
+    Color {
+        r: ((u32::from(a.r) * u32::from(a_weight) + u32::from(b.r) * u32::from(b_weight)) / total)
+            as u8,
+        g: ((u32::from(a.g) * u32::from(a_weight) + u32::from(b.g) * u32::from(b_weight)) / total)
+            as u8,
+        b: ((u32::from(a.b) * u32::from(a_weight) + u32::from(b.b) * u32::from(b_weight)) / total)
+            as u8,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +367,63 @@ mod tests {
             }
             other => panic!("Unexpected event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn disabled_button_colors_are_muted_toward_theme_neutrals() {
+        let (bg, text) = resolve_disabled_button_colors(
+            Color {
+                r: 0xB5,
+                g: 0x33,
+                b: 0x33,
+            },
+            Color {
+                r: 0xFA,
+                g: 0xF9,
+                b: 0xF5,
+            },
+        );
+        assert_eq!(
+            bg,
+            Color {
+                r: 0x50,
+                g: 0x25,
+                b: 0x23,
+            }
+        );
+        assert_eq!(
+            text,
+            Color {
+                r: 0xAD,
+                g: 0xAC,
+                b: 0xA6,
+            }
+        );
+    }
+
+    #[test]
+    fn blend_color_biases_toward_second_color_by_weight() {
+        let blended = blend_color(
+            Color {
+                r: 0x10,
+                g: 0x20,
+                b: 0x30,
+            },
+            Color {
+                r: 0x40,
+                g: 0x50,
+                b: 0x60,
+            },
+            1,
+            3,
+        );
+        assert_eq!(
+            blended,
+            Color {
+                r: 0x34,
+                g: 0x44,
+                b: 0x54,
+            }
+        );
     }
 }
