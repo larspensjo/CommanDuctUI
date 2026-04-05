@@ -23,25 +23,24 @@ use std::sync::{Arc, OnceLock};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject, DrawTextW, EndPaint,
-    FillRect, GetStockObject, GetTextExtentPoint32W, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT,
-    RoundRect, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    BeginPaint, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject, DrawTextW, EndPaint, FillRect,
+    GetStockObject, GetTextExtentPoint32W, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, RoundRect,
+    SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
+use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_NEXT, VK_PRIOR,
-    VK_UP,
+    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GET_ANCESTOR_FLAGS, GWLP_USERDATA,
-    GetAncestor, GetClientRect, GetDlgCtrlID, GetWindowLongPtrW, HMENU, RegisterClassW,
-    SendMessageW, SetWindowLongPtrW, SCROLLINFO, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
-    SB_PAGEUP, SB_PAGEDOWN, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SIF_PAGE, SIF_POS,
-    SIF_RANGE, WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSW,
-    WS_CHILD, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    GetAncestor, GetClientRect, GetDlgCtrlID, GetWindowLongPtrW, HMENU, RegisterClassW, SB_BOTTOM,
+    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
+    SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SendMessageW, SetWindowLongPtrW,
+    WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
-use windows::Win32::UI::Controls::SetScrollInfo;
-use windows::core::{w, HSTRING, PCWSTR};
+use windows::core::{HSTRING, PCWSTR, w};
 
 // WM_MOUSELEAVE is not exported by windows-rs in this crate version.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -81,14 +80,46 @@ struct ListBoxPalette {
 impl Default for ListBoxPalette {
     fn default() -> Self {
         Self {
-            row_background: Color { r: 0x26, g: 0x2A, b: 0x2E },
-            row_text: Color { r: 0xE0, g: 0xE5, b: 0xEC },
-            row_metadata: Color { r: 0xA4, g: 0xAB, b: 0xB3 },
-            selected_background: Color { r: 0x37, g: 0x3E, b: 0x47 },
-            hover_background: Color { r: 0x2D, g: 0x33, b: 0x3A },
-            disabled_background: Color { r: 0x24, g: 0x27, b: 0x2B },
-            disabled_text: Color { r: 0x87, g: 0x8C, b: 0x93 },
-            accent: Color { r: 0x00, g: 0x80, b: 0xFF },
+            row_background: Color {
+                r: 0x26,
+                g: 0x2A,
+                b: 0x2E,
+            },
+            row_text: Color {
+                r: 0xE0,
+                g: 0xE5,
+                b: 0xEC,
+            },
+            row_metadata: Color {
+                r: 0xA4,
+                g: 0xAB,
+                b: 0xB3,
+            },
+            selected_background: Color {
+                r: 0x37,
+                g: 0x3E,
+                b: 0x47,
+            },
+            hover_background: Color {
+                r: 0x2D,
+                g: 0x33,
+                b: 0x3A,
+            },
+            disabled_background: Color {
+                r: 0x24,
+                g: 0x27,
+                b: 0x2B,
+            },
+            disabled_text: Color {
+                r: 0x87,
+                g: 0x8C,
+                b: 0x93,
+            },
+            accent: Color {
+                r: 0x00,
+                g: 0x80,
+                b: 0xFF,
+            },
         }
     }
 }
@@ -109,7 +140,11 @@ struct ListBoxState {
 impl ListBoxState {
     fn new() -> Self {
         let font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
-        let font = if font.is_invalid() { HGDIOBJ::default() } else { font };
+        let font = if font.is_invalid() {
+            HGDIOBJ::default()
+        } else {
+            font
+        };
         Self {
             items: Vec::new(),
             selected_index: None,
@@ -259,14 +294,9 @@ unsafe fn handle_vscroll(hwnd: HWND, wparam: WPARAM) {
     match code {
         x if x == SB_LINEUP.0 as u32 => scroll_by_rows(hwnd, -1),
         x if x == SB_LINEDOWN.0 as u32 => scroll_by_rows(hwnd, 1),
-        x if x == SB_PAGEUP.0 as u32 => {
-            scroll_by_rows(hwnd, -(visible_rows(hwnd) as i32))
-        }
-        x if x == SB_PAGEDOWN.0 as u32 => {
-            scroll_by_rows(hwnd, visible_rows(hwnd) as i32)
-        }
-        x if x == SB_THUMBTRACK.0 as u32 || x == SB_THUMBPOSITION.0 as u32 =>
-        {
+        x if x == SB_PAGEUP.0 as u32 => scroll_by_rows(hwnd, -(visible_rows(hwnd) as i32)),
+        x if x == SB_PAGEDOWN.0 as u32 => scroll_by_rows(hwnd, visible_rows(hwnd) as i32),
+        x if x == SB_THUMBTRACK.0 as u32 || x == SB_THUMBPOSITION.0 as u32 => {
             set_scroll_row(hwnd, thumb);
         }
         x if x == SB_TOP.0 as u32 => {
@@ -420,44 +450,124 @@ unsafe fn notify_scroll_changed(hwnd: HWND, position: u32) {
 fn badge_colors(style: StyleId, disabled: bool) -> ColorPair {
     let pair = match style {
         StyleId::BadgePriorityCritical => ColorPair {
-            background: Color { r: 0x8F, g: 0x2D, b: 0x2E },
-            text: Color { r: 0xFF, g: 0xF7, b: 0xF4 },
+            background: Color {
+                r: 0x8F,
+                g: 0x2D,
+                b: 0x2E,
+            },
+            text: Color {
+                r: 0xFF,
+                g: 0xF7,
+                b: 0xF4,
+            },
         },
         StyleId::BadgePriorityHigh => ColorPair {
-            background: Color { r: 0xA7, g: 0x72, b: 0x2A },
-            text: Color { r: 0xFF, g: 0xF8, b: 0xEA },
+            background: Color {
+                r: 0xA7,
+                g: 0x72,
+                b: 0x2A,
+            },
+            text: Color {
+                r: 0xFF,
+                g: 0xF8,
+                b: 0xEA,
+            },
         },
         StyleId::BadgePriorityMedium => ColorPair {
-            background: Color { r: 0x66, g: 0x4B, b: 0x8D },
-            text: Color { r: 0xF1, g: 0xE9, b: 0xFF },
+            background: Color {
+                r: 0x66,
+                g: 0x4B,
+                b: 0x8D,
+            },
+            text: Color {
+                r: 0xF1,
+                g: 0xE9,
+                b: 0xFF,
+            },
         },
         StyleId::BadgePriorityLow => ColorPair {
-            background: Color { r: 0x56, g: 0x5C, b: 0x66 },
-            text: Color { r: 0xF0, g: 0xF3, b: 0xF5 },
+            background: Color {
+                r: 0x56,
+                g: 0x5C,
+                b: 0x66,
+            },
+            text: Color {
+                r: 0xF0,
+                g: 0xF3,
+                b: 0xF5,
+            },
         },
         StyleId::BadgeCategory => ColorPair {
-            background: Color { r: 0x3D, g: 0x45, b: 0x43 },
-            text: Color { r: 0xD6, g: 0xDC, b: 0xD7 },
+            background: Color {
+                r: 0x3D,
+                g: 0x45,
+                b: 0x43,
+            },
+            text: Color {
+                r: 0xD6,
+                g: 0xDC,
+                b: 0xD7,
+            },
         },
         StyleId::BadgeStatusDone => ColorPair {
-            background: Color { r: 0x2C, g: 0x6C, b: 0x4A },
-            text: Color { r: 0xEC, g: 0xF8, b: 0xEF },
+            background: Color {
+                r: 0x2C,
+                g: 0x6C,
+                b: 0x4A,
+            },
+            text: Color {
+                r: 0xEC,
+                g: 0xF8,
+                b: 0xEF,
+            },
         },
         StyleId::BadgeStatusError => ColorPair {
-            background: Color { r: 0x8C, g: 0x36, b: 0x36 },
-            text: Color { r: 0xFF, g: 0xF0, b: 0xF0 },
+            background: Color {
+                r: 0x8C,
+                g: 0x36,
+                b: 0x36,
+            },
+            text: Color {
+                r: 0xFF,
+                g: 0xF0,
+                b: 0xF0,
+            },
         },
         StyleId::BadgeStatusActive => ColorPair {
-            background: Color { r: 0x5A, g: 0x4A, b: 0x8F },
-            text: Color { r: 0xF4, g: 0xEF, b: 0xFF },
+            background: Color {
+                r: 0x5A,
+                g: 0x4A,
+                b: 0x8F,
+            },
+            text: Color {
+                r: 0xF4,
+                g: 0xEF,
+                b: 0xFF,
+            },
         },
         StyleId::BadgeStatusMuted | StyleId::BadgeIndirect => ColorPair {
-            background: Color { r: 0x54, g: 0x58, b: 0x5E },
-            text: Color { r: 0xE0, g: 0xE5, b: 0xEC },
+            background: Color {
+                r: 0x54,
+                g: 0x58,
+                b: 0x5E,
+            },
+            text: Color {
+                r: 0xE0,
+                g: 0xE5,
+                b: 0xEC,
+            },
         },
         _ => ColorPair {
-            background: Color { r: 0x54, g: 0x58, b: 0x5E },
-            text: Color { r: 0xE0, g: 0xE5, b: 0xEC },
+            background: Color {
+                r: 0x54,
+                g: 0x58,
+                b: 0x5E,
+            },
+            text: Color {
+                r: 0xE0,
+                g: 0xE5,
+                b: 0xEC,
+            },
         },
     };
     if disabled {
@@ -502,7 +612,12 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
     for (offset, item) in state.items[start..end].iter().enumerate() {
         let row_index = start + offset;
         let top = (offset as i32) * ROW_HEIGHT;
-        let row_rect = RECT { left: 0, top, right: width, bottom: top + ROW_HEIGHT };
+        let row_rect = RECT {
+            left: 0,
+            top,
+            right: width,
+            bottom: top + ROW_HEIGHT,
+        };
         let bg = if state.selected_index == Some(row_index) {
             state.palette.selected_background.clone()
         } else if state.hover_index == Some(row_index) {
@@ -765,9 +880,8 @@ pub(crate) fn handle_populate_list_box_command(
             .map(|item| item.id);
         state.items = items;
         state.badge_column_width = i32::from(badge_column_width);
-        state.selected_index = selected_id.and_then(|id| {
-            state.items.iter().position(|item| item.id == id)
-        });
+        state.selected_index =
+            selected_id.and_then(|id| state.items.iter().position(|item| item.id == id));
         if state.items.is_empty() {
             state.scroll_row = 0;
         } else {
@@ -858,7 +972,10 @@ mod tests {
     fn badge_text_flags_left_align_with_end_ellipsis() {
         let flags = badge_text_flags();
 
-        assert_eq!(flags & windows::Win32::Graphics::Gdi::DT_LEFT.0, windows::Win32::Graphics::Gdi::DT_LEFT.0);
+        assert_eq!(
+            flags & windows::Win32::Graphics::Gdi::DT_LEFT.0,
+            windows::Win32::Graphics::Gdi::DT_LEFT.0
+        );
         assert_eq!(
             flags & windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS.0,
             windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS.0
