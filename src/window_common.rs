@@ -84,6 +84,9 @@ pub(crate) const WM_APP_SPLITTER_DRAG_ENDED: u32 = WM_APP + 0x103;
 pub(crate) const WM_APP_TAB_SELECTED: u32 = WM_APP + 0x104;
 // Custom application message sent by ToggleSwitch WndProc to root on click/key-toggle.
 pub(crate) const WM_APP_TOGGLE_SWITCH_CLICKED: u32 = WM_APP + 0x105;
+// Custom application message sent by the owner-drawn ListBox to its root window.
+pub(crate) const WM_APP_LISTBOX_SELECTION_CHANGED: u32 = WM_APP + 0x106;
+pub(crate) const WM_APP_LISTBOX_SCROLLED: u32 = WM_APP + 0x107;
 
 // General UI constants
 /// Default debounce delay for edit controls in milliseconds.
@@ -105,6 +108,7 @@ pub(crate) enum ControlKind {
     Button,
     ProgressBar,
     TreeView,
+    ListBox,
     Static,
     Edit,
     RichEdit,
@@ -329,7 +333,9 @@ impl NativeWindowData {
     }
 
     fn should_erase_leaf_control(&self, control_id: ControlId, kind: ControlKind) -> bool {
-        if kind == ControlKind::TreeView && self.treeview_redraw_suspended {
+        if (kind == ControlKind::TreeView || kind == ControlKind::ListBox)
+            && self.treeview_redraw_suspended
+        {
             return false;
         }
 
@@ -343,7 +349,11 @@ impl NativeWindowData {
 
         matches!(
             kind,
-            ControlKind::TreeView | ControlKind::Edit | ControlKind::Static | ControlKind::RichEdit
+            ControlKind::TreeView
+                | ControlKind::ListBox
+                | ControlKind::Edit
+                | ControlKind::Static
+                | ControlKind::RichEdit
         )
     }
 
@@ -367,7 +377,7 @@ impl NativeWindowData {
         let mut frozen = HashSet::new();
 
         for (control_id, kind) in &self.control_kinds {
-            if *kind != ControlKind::TreeView {
+            if *kind != ControlKind::TreeView && *kind != ControlKind::ListBox {
                 continue;
             }
 
@@ -384,7 +394,9 @@ impl NativeWindowData {
     }
 
     fn should_freeze_control_layout(&self, control_id: ControlId, kind: ControlKind) -> bool {
-        if kind == ControlKind::TreeView && self.treeview_redraw_suspended {
+        if (kind == ControlKind::TreeView || kind == ControlKind::ListBox)
+            && self.treeview_redraw_suspended
+        {
             return true;
         }
 
@@ -450,6 +462,25 @@ impl NativeWindowData {
             }
             log::info!(
                 "[TreeView] redraw_suspended={} window_id={:?} control_id={} hwnd={hwnd:?}",
+                suspend,
+                self.logical_window_id,
+                control_id.raw()
+            );
+        }
+        for (control_id, hwnd) in self.collect_control_hwnds_by_kind(ControlKind::ListBox) {
+            unsafe {
+                _ = SendMessageW(
+                    hwnd,
+                    WM_SETREDRAW,
+                    Some(WPARAM(if suspend { 0 } else { 1 })),
+                    Some(LPARAM(0)),
+                );
+                if !suspend {
+                    _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+            log::info!(
+                "[ListBox] redraw_suspended={} window_id={:?} control_id={} hwnd={hwnd:?}",
                 suspend,
                 self.logical_window_id,
                 control_id.raw()
@@ -1794,6 +1825,10 @@ impl Win32ApiInternalState {
             WM_EXITSIZEMOVE => "WM_EXITSIZEMOVE",
             WM_APP_SPLITTER_DRAGGING => "WM_APP_SPLITTER_DRAGGING",
             WM_APP_SPLITTER_DRAG_ENDED => "WM_APP_SPLITTER_DRAG_ENDED",
+            WM_APP_TAB_SELECTED => "WM_APP_TAB_SELECTED",
+            WM_APP_TOGGLE_SWITCH_CLICKED => "WM_APP_TOGGLE_SWITCH_CLICKED",
+            WM_APP_LISTBOX_SELECTION_CHANGED => "WM_APP_LISTBOX_SELECTION_CHANGED",
+            WM_APP_LISTBOX_SCROLLED => "WM_APP_LISTBOX_SCROLLED",
             _ => "OTHER",
         }
     }
@@ -1812,6 +1847,10 @@ impl Win32ApiInternalState {
                 | WM_EXITSIZEMOVE
                 | WM_APP_SPLITTER_DRAGGING
                 | WM_APP_SPLITTER_DRAG_ENDED
+                | WM_APP_TAB_SELECTED
+                | WM_APP_TOGGLE_SWITCH_CLICKED
+                | WM_APP_LISTBOX_SELECTION_CHANGED
+                | WM_APP_LISTBOX_SCROLLED
         )
     }
 
@@ -1928,6 +1967,14 @@ impl Win32ApiInternalState {
             }
             WM_APP_TAB_SELECTED => {
                 event_to_send = self.handle_wm_app_tab_selected(hwnd, wparam, lparam, window_id);
+            }
+            WM_APP_LISTBOX_SELECTION_CHANGED => {
+                event_to_send =
+                    self.handle_wm_app_listbox_selection_changed(hwnd, wparam, lparam, window_id);
+            }
+            WM_APP_LISTBOX_SCROLLED => {
+                event_to_send =
+                    self.handle_wm_app_listbox_scrolled(hwnd, wparam, lparam, window_id);
             }
             WM_APP_TOGGLE_SWITCH_CLICKED => {
                 event_to_send =
@@ -2546,6 +2593,54 @@ impl Win32ApiInternalState {
             window_id,
             control_id,
             selected_index,
+        })
+    }
+
+    fn handle_wm_app_listbox_selection_changed(
+        self: &Arc<Self>,
+        _hwnd_parent: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        window_id: WindowId,
+    ) -> Option<AppEvent> {
+        let hwnd_list = HWND(wparam.0 as *mut std::ffi::c_void);
+        let control_id_raw = unsafe { GetDlgCtrlID(hwnd_list) };
+        if control_id_raw == 0 {
+            log::warn!(
+                "[ListBox] WM_APP_LISTBOX_SELECTION_CHANGED from HWND {:?} without control ID",
+                hwnd_list
+            );
+            return None;
+        }
+
+        Some(AppEvent::ListBoxItemSelectionChanged {
+            window_id,
+            control_id: ControlId::new(control_id_raw),
+            item_id: crate::types::ListBoxItemId(lparam.0 as u64),
+        })
+    }
+
+    fn handle_wm_app_listbox_scrolled(
+        self: &Arc<Self>,
+        _hwnd_parent: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        window_id: WindowId,
+    ) -> Option<AppEvent> {
+        let hwnd_list = HWND(wparam.0 as *mut std::ffi::c_void);
+        let control_id_raw = unsafe { GetDlgCtrlID(hwnd_list) };
+        if control_id_raw == 0 {
+            log::warn!(
+                "[ListBox] WM_APP_LISTBOX_SCROLLED from HWND {:?} without control ID",
+                hwnd_list
+            );
+            return None;
+        }
+
+        Some(AppEvent::ListBoxScrolled {
+            window_id,
+            control_id: ControlId::new(control_id_raw),
+            position: lparam.0 as u32,
         })
     }
 

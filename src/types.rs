@@ -38,6 +38,27 @@ impl WindowId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TreeItemId(pub u64);
 
+/// An opaque identifier for an item in the custom list control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ListBoxItemId(pub u64);
+
+/// Badge payload rendered inside a custom list-row pill.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BadgeDescriptor {
+    pub text: String,
+    pub style: StyleId,
+}
+
+/// Describes a structured row rendered by the custom list control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListBoxItemDescriptor {
+    pub id: ListBoxItemId,
+    pub badges: Vec<BadgeDescriptor>,
+    pub title: String,
+    pub metadata: String,
+    pub enabled: bool,
+}
+
 /*
  * Represents a logical UI control identifier shared between the app logic
  * and the platform layer. Wrapping the raw `i32` ID prevents accidental
@@ -235,6 +256,16 @@ pub enum AppEvent {
     TreeViewItemSelectionChanged {
         window_id: WindowId,
         item_id: TreeItemId,
+    },
+    ListBoxItemSelectionChanged {
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: ListBoxItemId,
+    },
+    ListBoxScrolled {
+        window_id: WindowId,
+        control_id: ControlId,
+        position: u32,
     },
     // Signals that a button was clicked.
     ButtonClicked {
@@ -600,6 +631,17 @@ pub enum PlatformCommand {
         parent_control_id: Option<ControlId>, // The logical ID for the parent, None for main window
         control_id: ControlId,                // The logical ID for the TreeView
     },
+    CreateListBox {
+        window_id: WindowId,
+        parent_control_id: Option<ControlId>,
+        control_id: ControlId,
+    },
+    PopulateListBox {
+        window_id: WindowId,
+        control_id: ControlId,
+        items: Vec<ListBoxItemDescriptor>,
+        badge_column_width: u16,
+    },
     // Signals to the platform layer that all initial UI description commands
     // for the main window have been enqueued and processed.
     SignalMainWindowUISetupComplete {
@@ -701,6 +743,11 @@ pub enum PlatformCommand {
         window_id: WindowId,
         control_id: ControlId,
         item_id: TreeItemId,
+    },
+    SetListBoxSelection {
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: ListBoxItemId,
     },
     UpdateLabelText {
         window_id: WindowId,

@@ -7,6 +7,7 @@ pub(crate) mod dark_border;
 pub(crate) mod dialog_handler;
 pub(crate) mod input_handler;
 pub(crate) mod label_handler;
+pub(crate) mod listbox_handler;
 pub(crate) mod menu_handler;
 pub(crate) mod paint_router;
 pub(crate) mod panel_handler;

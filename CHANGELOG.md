@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0
+
+- Add an owner-drawn `ListBox` control contract for structured multi-line rows with badge descriptors, selection events, and programmatic selection commands
+- Add `ListBoxRow` / `ListBoxSelectedRow` / `ListBoxHoverRow` / `ListBoxDisabledRow` styles plus badge styles for priority, category, status, and indirect markers
+- Keep TreeView support intact for existing consumers while exposing the new list control as a separate platform primitive
+
 ## 0.10.7
 
 - Add `StyleId::SecondaryButton` so host applications can demote non-primary actions without weakening every generic button surface

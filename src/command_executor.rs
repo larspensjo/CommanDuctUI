@@ -10,10 +10,12 @@
  */
 
 use super::app::Win32ApiInternalState;
-use super::controls::{richedit_handler, treeview_handler}; // Ensure treeview_handler is used for its functions
+use super::controls::{listbox_handler, richedit_handler, treeview_handler};
 use super::error::{PlatformError, Result as PlatformResult};
 use super::styling::StyleId;
-use super::types::{CheckState, ControlId, LayoutRule, TreeItemId, WindowId};
+use super::types::{
+    CheckState, ControlId, LayoutRule, ListBoxItemDescriptor, ListBoxItemId, TreeItemId, WindowId,
+};
 use super::window_common::{ControlKind, ProgrammaticScrollGuard, try_enable_dark_mode};
 
 use std::sync::Arc;
@@ -187,6 +189,50 @@ pub(crate) fn execute_populate_treeview(
         control_id.raw()
     );
     treeview_handler::populate_treeview(internal_state, window_id, control_id, items)
+}
+
+pub(crate) fn execute_create_list_box(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    parent_control_id: Option<ControlId>,
+    control_id: ControlId,
+) -> PlatformResult<()> {
+    listbox_handler::handle_create_list_box_command(
+        internal_state,
+        window_id,
+        parent_control_id,
+        control_id,
+    )
+}
+
+pub(crate) fn execute_populate_list_box(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    control_id: ControlId,
+    items: Vec<ListBoxItemDescriptor>,
+    badge_column_width: u16,
+) -> PlatformResult<()> {
+    listbox_handler::handle_populate_list_box_command(
+        internal_state,
+        window_id,
+        control_id,
+        items,
+        badge_column_width,
+    )
+}
+
+pub(crate) fn execute_set_list_box_selection(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    control_id: ControlId,
+    item_id: ListBoxItemId,
+) -> PlatformResult<()> {
+    listbox_handler::handle_set_list_box_selection_command(
+        internal_state,
+        window_id,
+        control_id,
+        item_id,
+    )
 }
 
 /*

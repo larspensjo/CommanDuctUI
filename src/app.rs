@@ -426,6 +426,28 @@ impl Win32ApiInternalState {
                 control_id,
                 items,
             } => command_executor::execute_populate_treeview(self, window_id, control_id, items),
+            PlatformCommand::CreateListBox {
+                window_id,
+                parent_control_id,
+                control_id,
+            } => command_executor::execute_create_list_box(
+                self,
+                window_id,
+                parent_control_id,
+                control_id,
+            ),
+            PlatformCommand::PopulateListBox {
+                window_id,
+                control_id,
+                items,
+                badge_column_width,
+            } => command_executor::execute_populate_list_box(
+                self,
+                window_id,
+                control_id,
+                items,
+                badge_column_width,
+            ),
             PlatformCommand::UpdateTreeItemVisualState {
                 window_id,
                 control_id,
@@ -844,6 +866,13 @@ impl Win32ApiInternalState {
                 control_id,
                 item_id,
             } => command_executor::execute_set_treeview_selection(
+                self, window_id, control_id, item_id,
+            ),
+            PlatformCommand::SetListBoxSelection {
+                window_id,
+                control_id,
+                item_id,
+            } => command_executor::execute_set_list_box_selection(
                 self, window_id, control_id, item_id,
             ),
             PlatformCommand::DefineStyle { style_id, style } => self.define_style(style_id, style),
