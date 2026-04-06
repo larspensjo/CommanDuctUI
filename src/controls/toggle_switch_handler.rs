@@ -12,6 +12,9 @@
 
 use crate::app::Win32ApiInternalState;
 use crate::controls::gdi_utils::SelectedObject;
+use crate::controls::keyboard_navigation::{
+    KeyboardNavigation, apply_window_style, focus_on_click,
+};
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::Color;
@@ -34,11 +37,16 @@ use windows::Win32::{
             GWLP_USERDATA, GetAncestor, GetClientRect, GetWindowLongPtrW, HMENU, RegisterClassW,
             SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND,
             WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONUP, WM_PAINT, WM_SETFOCUS, WNDCLASSW, WS_CHILD,
-            WS_TABSTOP, WS_VISIBLE,
+            WS_VISIBLE,
         },
     },
 };
 use windows::core::{HSTRING, PCWSTR, w};
+
+const KEYBOARD_NAVIGATION: KeyboardNavigation = KeyboardNavigation {
+    focus_on_click: true,
+    want_arrows: false,
+};
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -163,6 +171,7 @@ unsafe extern "system" fn toggle_switch_wnd_proc(
             // Toggle on mouse button release — standard Windows control behavior:
             // the user can cancel by moving the cursor away before releasing.
             unsafe {
+                focus_on_click(hwnd, KEYBOARD_NAVIGATION);
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if ptr != 0 {
                     let state = ptr as *mut ToggleSwitchState;
@@ -416,7 +425,7 @@ pub(crate) fn handle_create_toggle_switch_command(
             WINDOW_EX_STYLE(0),
             TOGGLE_SWITCH_CLASS_NAME,
             &HSTRING::from(""),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            apply_window_style(WS_CHILD | WS_VISIBLE, KEYBOARD_NAVIGATION),
             0,
             0,
             10,

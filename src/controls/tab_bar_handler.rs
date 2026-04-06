@@ -11,6 +11,9 @@
 
 use crate::app::Win32ApiInternalState;
 use crate::controls::gdi_utils::SelectedObject;
+use crate::controls::keyboard_navigation::{
+    KeyboardNavigation, apply_window_style, dialog_code, focus_on_click,
+};
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::Color;
@@ -24,19 +27,22 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM},
     Graphics::Gdi::{
         BeginPaint, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET,
-        DEFAULT_GUI_FONT, DEFAULT_QUALITY, DeleteObject, EndPaint, FF_DONTCARE, FW_BOLD, FW_NORMAL,
-        FillRect, GetDC, GetDeviceCaps, GetStockObject, GetTextExtentPoint32W, HDC, HFONT, HGDIOBJ,
-        InvalidateRect, LOGPIXELSY, OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC,
-        SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
+        DEFAULT_GUI_FONT, DEFAULT_QUALITY, DeleteObject, DrawFocusRect, EndPaint, FF_DONTCARE,
+        FW_BOLD, FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetStockObject, GetTextExtentPoint32W,
+        HDC, HFONT, HGDIOBJ, InvalidateRect, LOGPIXELSY, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
+        ReleaseDC, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
     },
     System::WindowsProgramming::MulDiv,
     UI::{
-        Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
+        Input::KeyboardAndMouse::{
+            TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_END, VK_HOME, VK_LEFT, VK_RIGHT,
+        },
         WindowsAndMessaging::{
             CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GET_ANCESTOR_FLAGS,
             GWLP_USERDATA, GetAncestor, GetClientRect, GetWindowLongPtrW, HMENU, RegisterClassW,
             SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND,
-            WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_VISIBLE,
+            WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT,
+            WM_SETFOCUS, WM_SIZE, WNDCLASSW, WS_CHILD, WS_VISIBLE,
         },
     },
 };
@@ -44,6 +50,10 @@ use windows::core::{HSTRING, PCWSTR, w};
 
 // WM_MOUSELEAVE is not exported by windows-rs; define the constant directly.
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const KEYBOARD_NAVIGATION: KeyboardNavigation = KeyboardNavigation {
+    focus_on_click: true,
+    want_arrows: true,
+};
 
 // ── Default palette ───────────────────────────────────────────────────────────
 
@@ -137,6 +147,7 @@ struct TabBarState {
     selected_index: usize,
     hover_index: Option<usize>,
     tracking_mouse: bool,
+    focused: bool,
     /// Computed during WM_PAINT, read during hit-testing.
     item_rects: Vec<RECT>,
     palette: TabBarPalette,
@@ -151,6 +162,7 @@ impl TabBarState {
             selected_index: 0,
             hover_index: None,
             tracking_mouse: false,
+            focused: false,
             item_rects: Vec::new(),
             palette: TabBarPalette::default(),
             font: None,
@@ -233,27 +245,33 @@ unsafe extern "system" fn tab_bar_wnd_proc(
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
             unsafe {
+                focus_on_click(hwnd, KEYBOARD_NAVIGATION);
                 let state = get_or_init_state(hwnd);
                 let hit = hit_test(&(*state).item_rects, x, y);
                 if let Some(idx) = hit.filter(|&i| i != (*state).selected_index) {
-                    (*state).selected_index = idx;
+                    select_tab_and_notify(hwnd, &mut *state, idx);
                     let _ = InvalidateRect(Some(hwnd), None, false);
-                    // Notify root window: WPARAM = our HWND, LPARAM = selected index.
-                    // Use GetAncestor(GA_ROOT) so the message reaches the main window's
-                    // WndProc even when the tab bar is a grandchild (panel nesting).
-                    let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)); // GA_ROOT
-                    if !root.is_invalid() {
-                        let _ = SendMessageW(
-                            root,
-                            WM_APP_TAB_SELECTED,
-                            Some(WPARAM(hwnd.0 as usize)),
-                            Some(LPARAM(idx as isize)),
-                        );
-                    }
                 }
             }
             LRESULT(0)
         }
+        WM_KEYDOWN => {
+            let key = wparam.0 as u16;
+            unsafe {
+                let state = get_or_init_state(hwnd);
+                if let Some(next_index) =
+                    next_selected_index_for_key((*state).selected_index, (*state).items.len(), key)
+                {
+                    if next_index != (*state).selected_index {
+                        select_tab_and_notify(hwnd, &mut *state, next_index);
+                    }
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_GETDLGCODE => dialog_code(KEYBOARD_NAVIGATION)
+            .unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }),
         WM_MOUSEMOVE => {
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
@@ -288,6 +306,22 @@ unsafe extern "system" fn tab_bar_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_SETFOCUS => {
+            unsafe {
+                let state = get_or_init_state(hwnd);
+                (*state).focused = true;
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            }
+            LRESULT(0)
+        }
+        WM_KILLFOCUS => {
+            unsafe {
+                let state = get_or_init_state(hwnd);
+                (*state).focused = false;
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            }
+            LRESULT(0)
+        }
         WM_DESTROY => {
             let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
             if ptr != 0 {
@@ -301,6 +335,39 @@ unsafe extern "system" fn tab_bar_wnd_proc(
 }
 
 // ── Hit-test helper ───────────────────────────────────────────────────────────
+
+unsafe fn select_tab_and_notify(hwnd: HWND, state: &mut TabBarState, idx: usize) {
+    state.selected_index = idx;
+    // Notify root window: WPARAM = our HWND, LPARAM = selected index.
+    // Use GetAncestor(GA_ROOT) so the message reaches the main window's
+    // WndProc even when the tab bar is a grandchild (panel nesting).
+    let root = unsafe { GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)) }; // GA_ROOT
+    if !root.is_invalid() {
+        let _ = unsafe { SendMessageW(
+            root,
+            WM_APP_TAB_SELECTED,
+            Some(WPARAM(hwnd.0 as usize)),
+            Some(LPARAM(idx as isize)),
+        ) };
+    }
+}
+
+fn next_selected_index_for_key(current: usize, len: usize, key: u16) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    if key == VK_LEFT.0 {
+        Some(current.saturating_sub(1))
+    } else if key == VK_RIGHT.0 {
+        Some((current + 1).min(len.saturating_sub(1)))
+    } else if key == VK_HOME.0 {
+        Some(0)
+    } else if key == VK_END.0 {
+        Some(len.saturating_sub(1))
+    } else {
+        None
+    }
+}
 
 fn hit_test(rects: &[RECT], x: i32, y: i32) -> Option<usize> {
     for (i, r) in rects.iter().enumerate() {
@@ -415,6 +482,16 @@ unsafe fn paint_tab_bar(hwnd: HWND, hdc: HDC) {
         let accent_brush = unsafe { CreateSolidBrush(accent_cr) };
         let _ = unsafe { FillRect(hdc, &accent_rect, accent_brush) };
         let _ = unsafe { DeleteObject(accent_brush.into()) };
+    }
+
+    if state.focused {
+        let focus_rect = RECT {
+            left: 2,
+            top: 2,
+            right: client.right - 2,
+            bottom: client.bottom - 2,
+        };
+        let _ = unsafe { DrawFocusRect(hdc, &focus_rect) };
     }
 
     // _font drops here, restoring previous font
@@ -538,7 +615,7 @@ pub(crate) fn handle_create_tab_bar_command(
             WINDOW_EX_STYLE(0),
             TAB_BAR_CLASS_NAME,
             &HSTRING::from(""),
-            WS_CHILD | WS_VISIBLE,
+            apply_window_style(WS_CHILD | WS_VISIBLE, KEYBOARD_NAVIGATION),
             0,
             0,
             10,
@@ -780,6 +857,22 @@ mod tests {
         assert_eq!(state.selected_index, 0);
         assert!(state.hover_index.is_none());
         assert!(!state.tracking_mouse);
+        assert!(!state.focused);
         assert!(state.item_rects.is_empty());
+    }
+
+    #[test]
+    fn tab_bar_arrow_keys_move_selection() {
+        assert_eq!(next_selected_index_for_key(1, 4, VK_LEFT.0), Some(0));
+        assert_eq!(next_selected_index_for_key(1, 4, VK_RIGHT.0), Some(2));
+        assert_eq!(next_selected_index_for_key(2, 4, VK_HOME.0), Some(0));
+        assert_eq!(next_selected_index_for_key(1, 4, VK_END.0), Some(3));
+    }
+
+    #[test]
+    fn tab_bar_arrow_keys_clamp_at_edges() {
+        assert_eq!(next_selected_index_for_key(0, 4, VK_LEFT.0), Some(0));
+        assert_eq!(next_selected_index_for_key(3, 4, VK_RIGHT.0), Some(3));
+        assert_eq!(next_selected_index_for_key(0, 0, VK_RIGHT.0), None);
     }
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3
+- **Fix**: Owner-drawn toggle switches now claim focus on click, so keyboard follow-up actions stay on the control the user just activated instead of remaining on the previous focus target.
+- **Feature**: Owner-drawn tab bars are now keyboard-accessible. They claim focus on click, request arrow-navigation dialog keys, render a focus cue, and support `Left` / `Right` / `Home` / `End` selection changes in addition to mouse clicks.
+
 ## 1.0.2
 - **Fix**: Owner-drawn list box now claims keyboard focus on click and returns the appropriate `WM_GETDLGCODE` flags so Arrow/Page/Home/End navigation reliably reaches the control inside dialog-style window message loops without over-claiming character input.
 - **Hardening**: Add a shared `keyboard_navigation` helper for custom controls that centralizes the Win32 contract for dialog-navigation behavior (`WS_TABSTOP`, focus-on-click, and dialog-code negotiation) instead of re-encoding that behavior in each control WndProc.
