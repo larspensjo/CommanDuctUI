@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2
+- **Fix**: Owner-drawn list box now claims keyboard focus on click and returns the appropriate `WM_GETDLGCODE` flags so Arrow/Page/Home/End navigation reliably reaches the control inside dialog-style window message loops without over-claiming character input.
+- **Hardening**: Add a shared `keyboard_navigation` helper for custom controls that centralizes the Win32 contract for dialog-navigation behavior (`WS_TABSTOP`, focus-on-click, and dialog-code negotiation) instead of re-encoding that behavior in each control WndProc.
+
 ## 1.0.1
 
 - **Fix**: Badge text in the owner-drawn list box was drawn with the DC's default system font instead of `meta_font` because `SelectObject` was called to measure text width and then immediately restored before `DrawTextW` ran. Short labels such as "OK" were silently truncated to "O." at normal DPI. The font is now kept selected across both the measurement and the draw call using the new `SelectedObject` RAII guard.

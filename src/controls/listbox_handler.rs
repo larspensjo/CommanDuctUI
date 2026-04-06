@@ -11,6 +11,9 @@
 
 use crate::app::Win32ApiInternalState;
 use crate::controls::gdi_utils::SelectedObject;
+use crate::controls::keyboard_navigation::{
+    KeyboardNavigation, apply_window_style, dialog_code, focus_on_click,
+};
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::Color;
@@ -30,21 +33,23 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
+    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_NEXT, VK_PRIOR,
+    VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GET_ANCESTOR_FLAGS, GWLP_USERDATA,
     GetAncestor, GetClientRect, GetDlgCtrlID, GetWindowLongPtrW, HMENU, RegisterClassW, SB_BOTTOM,
     SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
     SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SendMessageW, SetWindowLongPtrW,
-    WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND, WM_GETDLGCODE, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_VISIBLE,
     WS_VSCROLL,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
 // WM_MOUSELEAVE is not exported by windows-rs in this crate version.
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const KEYBOARD_NAVIGATION: KeyboardNavigation = KeyboardNavigation::DIALOG_NAVIGATION;
 
 const LIST_BOX_CLASS_NAME: PCWSTR = w!("CommanDuctUIOwnerDrawnListBox");
 static LIST_BOX_CLASS_REGISTERED: OnceLock<()> = OnceLock::new();
@@ -216,6 +221,7 @@ unsafe extern "system" fn list_box_wnd_proc(
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
             unsafe {
+                focus_on_click(hwnd, KEYBOARD_NAVIGATION);
                 if select_row_from_point(hwnd, x, y) {
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
@@ -275,6 +281,8 @@ unsafe extern "system" fn list_box_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_GETDLGCODE => dialog_code(KEYBOARD_NAVIGATION)
+            .unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }),
         WM_DESTROY => {
             let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
             if ptr != 0 {
@@ -826,7 +834,7 @@ pub(crate) fn handle_create_list_box_command(
             WINDOW_EX_STYLE(0),
             LIST_BOX_CLASS_NAME,
             &HSTRING::from(""),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL,
+            apply_window_style(WS_CHILD | WS_VISIBLE | WS_VSCROLL, KEYBOARD_NAVIGATION),
             0,
             0,
             10,

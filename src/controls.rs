@@ -7,6 +7,7 @@ pub(crate) mod combobox_handler;
 pub(crate) mod dark_border;
 pub(crate) mod dialog_handler;
 pub(crate) mod input_handler;
+pub(crate) mod keyboard_navigation;
 pub(crate) mod label_handler;
 pub(crate) mod listbox_handler;
 pub(crate) mod menu_handler;
