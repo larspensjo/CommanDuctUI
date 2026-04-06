@@ -1696,6 +1696,14 @@ mod tests {
         Color { r, g, b }
     }
 
+    fn rect_width(rect: RECT) -> i32 {
+        rect.right - rect.left
+    }
+
+    fn rect_height(rect: RECT) -> i32 {
+        rect.bottom - rect.top
+    }
+
     #[test]
     fn resolve_item_colors_no_styles() {
         let (text, bg) = resolve_item_colors(None, None, None, None, false, None, None);
@@ -1815,15 +1823,11 @@ mod tests {
 
         let fill_rect = treeview_tail_fill_rect(item_rect, client_rect);
 
-        assert_eq!(
-            fill_rect,
-            Some(RECT {
-                left: 160,
-                top: 10,
-                right: 320,
-                bottom: 30,
-            })
-        );
+        let fill_rect = fill_rect.expect("tail fill rect should exist when draw rect ends before client");
+        assert_eq!(fill_rect.left, item_rect.right);
+        assert_eq!(fill_rect.top, item_rect.top);
+        assert_eq!(fill_rect.right, client_rect.right);
+        assert_eq!(fill_rect.bottom, item_rect.bottom);
     }
 
     #[test]
@@ -1841,14 +1845,22 @@ mod tests {
             bottom: 30,
         };
 
+        let lane_rect =
+            tree_item_state_icon_lane_rect(item_rect, text_rect).expect("state icon lane should exist");
+        let marker_rect =
+            tree_item_marker_rect(item_rect, text_rect).expect("marker rect should exist");
+
+        assert_eq!(rect_width(marker_rect), rect_height(marker_rect));
+        assert!((MARKER_MIN_DIAMETER..=MARKER_MAX_DIAMETER).contains(&rect_width(marker_rect)));
+        assert!(marker_rect.left >= lane_rect.left);
+        assert!(marker_rect.right <= lane_rect.right);
+        assert!(marker_rect.right <= text_rect.left);
+        assert!(marker_rect.top >= text_rect.top);
+        assert!(marker_rect.bottom <= text_rect.bottom);
         assert_eq!(
-            tree_item_marker_rect(item_rect, text_rect),
-            Some(RECT {
-                left: 22,
-                top: 14,
-                right: 34,
-                bottom: 26,
-            })
+            (marker_rect.left - lane_rect.left) - (lane_rect.right - marker_rect.right),
+            0,
+            "marker should stay horizontally centered in the reserved lane"
         );
     }
 
@@ -1872,9 +1884,14 @@ mod tests {
 
     #[test]
     fn treeview_state_image_mask_preserves_hidden_lane() {
-        assert_eq!(treeview_state_image_mask(CheckState::Hidden), 1 << 12);
-        assert_eq!(treeview_state_image_mask(CheckState::Unchecked), 1 << 12);
-        assert_eq!(treeview_state_image_mask(CheckState::Checked), 2 << 12);
+        let hidden = treeview_state_image_mask(CheckState::Hidden);
+        let unchecked = treeview_state_image_mask(CheckState::Unchecked);
+        let checked = treeview_state_image_mask(CheckState::Checked);
+
+        assert_eq!(hidden, unchecked);
+        assert_ne!(checked, hidden);
+        assert_eq!(checked >> 12, 2);
+        assert_eq!(hidden >> 12, 1);
     }
 
     #[test]
@@ -1892,15 +1909,15 @@ mod tests {
             bottom: 28,
         };
 
-        assert_eq!(
-            tree_item_state_icon_lane_rect(item_rect, text_rect),
-            Some(RECT {
-                left: 19,
-                top: 10,
-                right: 37,
-                bottom: 30,
-            })
-        );
+        let lane_rect =
+            tree_item_state_icon_lane_rect(item_rect, text_rect).expect("state icon lane should exist");
+
+        assert_eq!(lane_rect.top, item_rect.top);
+        assert_eq!(lane_rect.bottom, item_rect.bottom);
+        assert_eq!(rect_width(lane_rect), STATE_ICON_LANE_WIDTH);
+        assert_eq!(text_rect.left - lane_rect.right, MARKER_LANE_GAP);
+        assert!(lane_rect.left >= item_rect.left);
+        assert!(lane_rect.right <= text_rect.left);
     }
 
     #[test]
@@ -1923,30 +1940,20 @@ mod tests {
 
     #[test]
     fn tree_item_marker_color_uses_warm_palette() {
-        assert_eq!(
-            tree_item_marker_color(TreeItemMarkerKind::Red),
-            Some(Color {
-                r: 196,
-                g: 101,
-                b: 76,
-            })
+        let red = tree_item_marker_color(TreeItemMarkerKind::Red).expect("red marker color");
+        let yellow = tree_item_marker_color(TreeItemMarkerKind::Yellow).expect("yellow marker color");
+        let gray = tree_item_marker_color(TreeItemMarkerKind::Gray).expect("gray marker color");
+
+        assert!(red.r > red.g && red.g > red.b, "red marker should skew warm");
+        assert!(yellow.r >= yellow.g && yellow.g > yellow.b, "yellow marker should skew warm");
+        assert!(
+            (gray.r as i16 - gray.g as i16).abs() <= 16
+                && (gray.g as i16 - gray.b as i16).abs() <= 16,
+            "gray marker should stay near-neutral"
         );
-        assert_eq!(
-            tree_item_marker_color(TreeItemMarkerKind::Yellow),
-            Some(Color {
-                r: 214,
-                g: 158,
-                b: 78,
-            })
-        );
-        assert_eq!(
-            tree_item_marker_color(TreeItemMarkerKind::Gray),
-            Some(Color {
-                r: 141,
-                g: 130,
-                b: 118,
-            })
-        );
+        assert_ne!(red, yellow);
+        assert_ne!(yellow, gray);
+        assert_ne!(red, gray);
     }
 
     #[test]

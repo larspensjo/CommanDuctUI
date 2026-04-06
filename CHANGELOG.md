@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.4
+- **Tests**: Rewrite brittle `treeview_handler` unit tests around invariant-level assertions instead of exact pixel rectangles, packed mask literals, and exact palette values where those details are implementation choices rather than the public behavior contract.
+- **Hardening**: Keep explicit coverage for TreeView marker placement, reserved state-icon lane spacing, hidden-lane semantics, and warm/neutral marker palette intent while making harmless layout-tuning changes less likely to break the suite.
+
 ## 1.0.3
 - **Fix**: Owner-drawn toggle switches now claim focus on click, so keyboard follow-up actions stay on the control the user just activated instead of remaining on the previous focus target.
 - **Feature**: Owner-drawn tab bars are now keyboard-accessible. They claim focus on click, request arrow-navigation dialog keys, render a focus cue, and support `Left` / `Right` / `Home` / `End` selection changes in addition to mouse clicks.
