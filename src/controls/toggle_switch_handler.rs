@@ -11,6 +11,7 @@
  */
 
 use crate::app::Win32ApiInternalState;
+use crate::controls::gdi_utils::SelectedObject;
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::Color;
@@ -24,7 +25,7 @@ use windows::Win32::{
     Graphics::Gdi::{
         BeginPaint, CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject, DrawFocusRect,
         Ellipse, EndPaint, FillRect, GetStockObject, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT,
-        PS_SOLID, RoundRect, SelectObject, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
+        PS_SOLID, RoundRect, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
     },
     UI::{
         Input::KeyboardAndMouse::{VK_RETURN, VK_SPACE},
@@ -276,22 +277,22 @@ unsafe fn paint_toggle_switch(hwnd: HWND, hdc: HDC) {
     };
     let pill_brush = unsafe { CreateSolidBrush(pill_color) };
     let null_pen: HGDIOBJ = unsafe { GetStockObject(windows::Win32::Graphics::Gdi::NULL_PEN) };
-    let old_pen = unsafe { SelectObject(hdc, null_pen) };
-    let old_brush = unsafe { SelectObject(hdc, pill_brush.into()) };
-    let corner = PILL_H; // diameter = height → fully rounded ends
-    let _ = unsafe {
-        RoundRect(
-            hdc,
-            pill_left,
-            pill_top,
-            pill_right,
-            pill_bottom,
-            corner,
-            corner,
-        )
-    };
-    unsafe { SelectObject(hdc, old_brush) };
-    unsafe { SelectObject(hdc, old_pen) };
+    {
+        let _pen = unsafe { SelectedObject::select(hdc, null_pen) };
+        let _brush = unsafe { SelectedObject::select(hdc, pill_brush.into()) };
+        let corner = PILL_H; // diameter = height → fully rounded ends
+        let _ = unsafe {
+            RoundRect(
+                hdc,
+                pill_left,
+                pill_top,
+                pill_right,
+                pill_bottom,
+                corner,
+                corner,
+            )
+        };
+    } // _brush and _pen drop here, restoring previous pen/brush
     let _ = unsafe { DeleteObject(pill_brush.into()) };
 
     // Draw knob (circle, centered vertically inside pill).
@@ -307,11 +308,11 @@ unsafe fn paint_toggle_switch(hwnd: HWND, hdc: HDC) {
     let knob_cr = color_to_colorref(&state.palette.knob);
     let knob_brush = unsafe { CreateSolidBrush(knob_cr) };
     let knob_pen = unsafe { CreatePen(PS_SOLID, 0, knob_cr) };
-    let old_pen = unsafe { SelectObject(hdc, knob_pen.into()) };
-    let old_brush = unsafe { SelectObject(hdc, knob_brush.into()) };
-    let _ = unsafe { Ellipse(hdc, knob_left, knob_top, knob_right, knob_bottom) };
-    unsafe { SelectObject(hdc, old_brush) };
-    unsafe { SelectObject(hdc, old_pen) };
+    {
+        let _pen = unsafe { SelectedObject::select(hdc, knob_pen.into()) };
+        let _brush = unsafe { SelectedObject::select(hdc, knob_brush.into()) };
+        let _ = unsafe { Ellipse(hdc, knob_left, knob_top, knob_right, knob_bottom) };
+    } // _brush and _pen drop here, restoring previous pen/brush
     let _ = unsafe { DeleteObject(knob_brush.into()) };
     let _ = unsafe { DeleteObject(knob_pen.into()) };
 
@@ -324,7 +325,7 @@ unsafe fn paint_toggle_switch(hwnd: HWND, hdc: HDC) {
         let _ = unsafe { SetTextColor(hdc, text_cr) };
 
         let stock_font: HGDIOBJ = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
-        let old_font = unsafe { SelectObject(hdc, stock_font) };
+        let _font = unsafe { SelectedObject::select(hdc, stock_font) };
 
         let mut sz = windows::Win32::Foundation::SIZE::default();
         let _ = unsafe {
@@ -332,7 +333,7 @@ unsafe fn paint_toggle_switch(hwnd: HWND, hdc: HDC) {
         };
         let text_y = (h - sz.cy) / 2;
         let _ = unsafe { TextOutW(hdc, text_x, text_y, &label_wide) };
-        unsafe { SelectObject(hdc, old_font) };
+        // _font drops here, restoring previous font
     }
 
     // Draw focus rect around pill when focused.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1
+
+- **Fix**: Badge text in the owner-drawn list box was drawn with the DC's default system font instead of `meta_font` because `SelectObject` was called to measure text width and then immediately restored before `DrawTextW` ran. Short labels such as "OK" were silently truncated to "O." at normal DPI. The font is now kept selected across both the measurement and the draw call using the new `SelectedObject` RAII guard.
+- **Fix**: Badge column was always at least 130 px wide regardless of badge content, pushing list row titles far from their badges. The minimum is now 44 px so short status badges ("OK", "ERR") leave a tight, readable gap before the title.
+- **Fix**: Owner-drawn list box scrollbar rendered in the system light theme. `try_enable_dark_mode` is now called on the list box window after creation so the native scrollbar inherits the app dark-mode policy.
+- **Hardening**: Add `SelectedObject` RAII guard in `gdi_utils` that selects a GDI object into an HDC and restores the previous selection on `Drop`. Eliminates the class of bugs where a manual `SelectObject` restore is omitted on an early return or during future edits. Applied across `listbox_handler`, `chart_handler` (which had four separate early-return restore sites), `tab_bar_handler`, and `toggle_switch_handler`.
+
 ## 1.0.0
 
 - Add an owner-drawn `ListBox` control contract for structured multi-line rows with badge descriptors, selection events, and programmatic selection commands

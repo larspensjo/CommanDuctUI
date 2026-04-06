@@ -14,6 +14,7 @@
  */
 
 use crate::app::Win32ApiInternalState;
+use crate::controls::gdi_utils::SelectedObject;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::types::{ChartDataPacket, ChartLineEmphasis, ControlId, WindowId};
 use crate::window_common::ControlKind;
@@ -24,7 +25,7 @@ use windows::Win32::{
     Graphics::Gdi::{
         BACKGROUND_MODE, BeginPaint, CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject,
         Ellipse, EndPaint, FillRect, GetStockObject, GetTextExtentPoint32W, InvalidateRect, LineTo,
-        MoveToEx, PAINTSTRUCT, PS_DOT, PS_SOLID, Polyline, SelectObject, SetBkMode, SetTextColor,
+        MoveToEx, PAINTSTRUCT, PS_DOT, PS_SOLID, Polyline, SetBkMode, SetTextColor,
         TextOutW,
     },
     UI::WindowsAndMessaging::{
@@ -271,9 +272,9 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
         .max()
         .unwrap_or(0);
 
-    // Select default GUI font early so text measurements are accurate.
+    // Select default GUI font for the duration of this paint call.
     let hfont = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
-    let old_font = unsafe { SelectObject(hdc, hfont) };
+    let _font = unsafe { SelectedObject::select(hdc, hfont) };
     unsafe { SetBkMode(hdc, BACKGROUND_MODE(1)) }; // TRANSPARENT
 
     // Plot layout — derive margin_left from measured y-axis label width.
@@ -323,28 +324,29 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
         vec![]
     };
     let grid_pen = unsafe { CreatePen(PS_DOT, 1, COLOR_GRID) };
-    let old_pen = unsafe { SelectObject(hdc, grid_pen.into()) };
-    for i in 0i32..=4 {
-        let y = margin_top + plot_h * i / 4;
-        let _ = unsafe { MoveToEx(hdc, margin_left, y, None) };
-        let _ = unsafe { LineTo(hdc, margin_left + plot_w, y) };
+    {
+        let _grid_pen = unsafe { SelectedObject::select(hdc, grid_pen.into()) };
+        for i in 0i32..=4 {
+            let y = margin_top + plot_h * i / 4;
+            let _ = unsafe { MoveToEx(hdc, margin_left, y, None) };
+            let _ = unsafe { LineTo(hdc, margin_left + plot_w, y) };
 
-        let tick_idx = 4 - i as usize;
-        if show_y_axis_labels && tick_idx < ticks.len() {
-            // i=0 is the top gridline → highest tick value; i=4 is 0.
-            let tick_val = ticks[tick_idx];
-            let label = format!("{tick_val}");
-            let wide: Vec<u16> = label.encode_utf16().collect();
-            let mut sz = SIZE::default();
-            let _ = unsafe { GetTextExtentPoint32W(hdc, &wide, &mut sz) };
-            // Right-align to margin_left - 4.
-            let text_x = (margin_left - 4 - sz.cx).max(0);
-            let text_y = y - sz.cy / 2;
-            let _ = unsafe { SetTextColor(hdc, COLORREF(0x0080_8080)) };
-            let _ = unsafe { TextOutW(hdc, text_x, text_y, &wide) };
+            let tick_idx = 4 - i as usize;
+            if show_y_axis_labels && tick_idx < ticks.len() {
+                // i=0 is the top gridline → highest tick value; i=4 is 0.
+                let tick_val = ticks[tick_idx];
+                let label = format!("{tick_val}");
+                let wide: Vec<u16> = label.encode_utf16().collect();
+                let mut sz = SIZE::default();
+                let _ = unsafe { GetTextExtentPoint32W(hdc, &wide, &mut sz) };
+                // Right-align to margin_left - 4.
+                let text_x = (margin_left - 4 - sz.cx).max(0);
+                let text_y = y - sz.cy / 2;
+                let _ = unsafe { SetTextColor(hdc, COLORREF(0x0080_8080)) };
+                let _ = unsafe { TextOutW(hdc, text_x, text_y, &wide) };
+            }
         }
-    }
-    unsafe { SelectObject(hdc, old_pen) };
+    } // _grid_pen drops here, restoring previous pen
     let _ = unsafe { DeleteObject(grid_pen.into()) };
 
     // 3. Loading placeholder.
@@ -352,16 +354,14 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
         let msg: Vec<u16> = "Loading\u{2026}".encode_utf16().collect();
         let _ = unsafe { SetTextColor(hdc, COLORREF(0x0080_8080)) };
         let _ = unsafe { TextOutW(hdc, margin_left, margin_top + plot_h / 2 - 8, &msg) };
-        unsafe { SelectObject(hdc, old_font) };
-        return;
+        return; // _font drops here, restoring previous font
     }
 
     // 4. Draw entity lines.
     // Skip only if every line has 0 points.
     let any_points = lines.iter().any(|l| !l.weekly_counts.is_empty());
     if !any_points {
-        unsafe { SelectObject(hdc, old_font) };
-        return;
+        return; // _font drops here, restoring previous font
     }
 
     let max_val = (max_val_u32 as i32).max(1);
@@ -392,11 +392,11 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
             const R: i32 = 4;
             let brush = unsafe { CreateSolidBrush(COLORREF(effective_color)) };
             let pen = unsafe { CreatePen(PS_SOLID, 1, COLORREF(effective_color)) };
-            let old_pen = unsafe { SelectObject(hdc, pen.into()) };
-            let old_brush = unsafe { SelectObject(hdc, brush.into()) };
-            let _ = unsafe { Ellipse(hdc, x - R, y - R, x + R, y + R) };
-            unsafe { SelectObject(hdc, old_brush) };
-            unsafe { SelectObject(hdc, old_pen) };
+            {
+                let _pen = unsafe { SelectedObject::select(hdc, pen.into()) };
+                let _brush = unsafe { SelectedObject::select(hdc, brush.into()) };
+                let _ = unsafe { Ellipse(hdc, x - R, y - R, x + R, y + R) };
+            } // _brush and _pen drop here, restoring previous pen/brush
             let _ = unsafe { DeleteObject(pen.into()) };
             let _ = unsafe { DeleteObject(brush.into()) };
 
@@ -414,9 +414,10 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
                 .collect();
 
             let pen = unsafe { CreatePen(PS_SOLID, pen_width, COLORREF(effective_color)) };
-            let old_pen = unsafe { SelectObject(hdc, pen.into()) };
-            let _ = unsafe { Polyline(hdc, &points) };
-            unsafe { SelectObject(hdc, old_pen) };
+            {
+                let _pen = unsafe { SelectedObject::select(hdc, pen.into()) };
+                let _ = unsafe { Polyline(hdc, &points) };
+            } // _pen drops here, restoring previous pen
             let _ = unsafe { DeleteObject(pen.into()) };
 
             if show_end_labels && let Some(lbl) = &line.end_label {
@@ -447,8 +448,7 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
 
     // 6. End labels OR legend.
     if lines.is_empty() {
-        unsafe { SelectObject(hdc, old_font) };
-        return;
+        return; // _font drops here, restoring previous font
     }
 
     if show_end_labels {
@@ -478,10 +478,11 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
 
             // Colored swatch: a short horizontal line.
             let swatch_pen = unsafe { CreatePen(PS_SOLID, 2, COLORREF(line.color)) };
-            let old_swatch_pen = unsafe { SelectObject(hdc, swatch_pen.into()) };
-            let _ = unsafe { MoveToEx(hdc, legend_x, y + 7, None) };
-            let _ = unsafe { LineTo(hdc, legend_x + 15, y + 7) };
-            unsafe { SelectObject(hdc, old_swatch_pen) };
+            {
+                let _swatch_pen = unsafe { SelectedObject::select(hdc, swatch_pen.into()) };
+                let _ = unsafe { MoveToEx(hdc, legend_x, y + 7, None) };
+                let _ = unsafe { LineTo(hdc, legend_x + 15, y + 7) };
+            } // _swatch_pen drops here, restoring previous pen
             let _ = unsafe { DeleteObject(swatch_pen.into()) };
 
             // Label text.
@@ -490,8 +491,7 @@ unsafe fn paint_chart(hdc: windows::Win32::Graphics::Gdi::HDC, hwnd: HWND) {
             let _ = unsafe { TextOutW(hdc, legend_x + 19, y, &label_wide) };
         }
     }
-
-    unsafe { SelectObject(hdc, old_font) };
+    // _font drops here, restoring previous font
 }
 
 // ── Command handlers ──────────────────────────────────────────────────────────

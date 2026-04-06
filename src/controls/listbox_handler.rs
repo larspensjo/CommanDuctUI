@@ -10,13 +10,14 @@
  */
 
 use crate::app::Win32ApiInternalState;
+use crate::controls::gdi_utils::SelectedObject;
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::Color;
 use crate::styling_primitives::StyleId;
 use crate::types::{ControlId, ListBoxItemDescriptor, ListBoxItemId, WindowId};
 use crate::window_common::{
-    ControlKind, WM_APP_LISTBOX_SCROLLED, WM_APP_LISTBOX_SELECTION_CHANGED,
+    ControlKind, WM_APP_LISTBOX_SCROLLED, WM_APP_LISTBOX_SELECTION_CHANGED, try_enable_dark_mode,
 };
 
 use std::sync::{Arc, OnceLock};
@@ -25,7 +26,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject, DrawTextW, EndPaint, FillRect,
     GetStockObject, GetTextExtentPoint32W, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, RoundRect,
-    SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -669,7 +670,7 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
         };
 
         unsafe {
-            let old_title_font = SelectObject(hdc, state.title_font);
+            let _title_font = SelectedObject::select(hdc, state.title_font);
             SetTextColor(hdc, color_to_colorref(&title_color));
             let mut title: Vec<u16> = item.title.encode_utf16().collect();
             let _ = DrawTextW(
@@ -681,9 +682,10 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
                     | windows::Win32::Graphics::Gdi::DT_NOPREFIX
                     | windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS,
             );
-            SelectObject(hdc, old_title_font);
+        }
+        unsafe {
+            let _meta_font = SelectedObject::select(hdc, state.meta_font);
             SetTextColor(hdc, color_to_colorref(&meta_color));
-            let old_meta_font = SelectObject(hdc, state.meta_font);
             let mut meta: Vec<u16> = item.metadata.encode_utf16().collect();
             let _ = DrawTextW(
                 hdc,
@@ -694,7 +696,6 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
                     | windows::Win32::Graphics::Gdi::DT_NOPREFIX
                     | windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS,
             );
-            SelectObject(hdc, old_meta_font);
         }
     }
 }
@@ -713,11 +714,9 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
         let pair = badge_colors(badge.style, !item.enabled);
         let mut text: Vec<u16> = badge.text.encode_utf16().collect();
         let mut size = SIZE::default();
-        unsafe {
-            let old_font = SelectObject(hdc, state.meta_font);
-            let _ = GetTextExtentPoint32W(hdc, &text, &mut size);
-            SelectObject(hdc, old_font);
-        }
+        // Keep meta_font selected for both measurement and drawing.
+        let _font = unsafe { SelectedObject::select(hdc, state.meta_font) };
+        unsafe { let _ = GetTextExtentPoint32W(hdc, &text, &mut size); }
         let badge_width = size.cx + BADGE_PAD_X * 2;
         let rect = RECT {
             left: x,
@@ -726,13 +725,13 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
             bottom: y + BADGE_HEIGHT,
         };
         if rect.right <= rect.left {
-            break;
+            break; // _font drops here, restoring previous selection
         }
         unsafe {
             let fill = CreateSolidBrush(color_to_colorref(&pair.background));
             let null_pen = GetStockObject(windows::Win32::Graphics::Gdi::NULL_PEN);
-            let old_pen = SelectObject(hdc, null_pen);
-            let old_brush = SelectObject(hdc, fill.into());
+            let _pen = SelectedObject::select(hdc, null_pen);
+            let _brush = SelectedObject::select(hdc, fill.into());
             let _ = RoundRect(
                 hdc,
                 rect.left,
@@ -742,8 +741,9 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
                 BADGE_RADIUS,
                 BADGE_RADIUS,
             );
-            SelectObject(hdc, old_brush);
-            SelectObject(hdc, old_pen);
+            // _brush and _pen drop here, restoring previous pen/brush
+            drop(_brush);
+            drop(_pen);
             let _ = DeleteObject(fill.into());
             SetTextColor(hdc, color_to_colorref(&pair.text));
             let mut text_rect = badge_text_rect(rect);
@@ -754,6 +754,7 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
                 windows::Win32::Graphics::Gdi::DRAW_TEXT_FORMAT(badge_text_flags()),
             );
         }
+        // _font drops at end of loop body, restoring previous font selection
         x += badge_width + BADGE_GAP;
     }
 }
@@ -845,6 +846,8 @@ pub(crate) fn handle_create_list_box_command(
             }
         }
     };
+
+    try_enable_dark_mode(hwnd);
 
     let state = Box::new(ListBoxState::new());
     unsafe {

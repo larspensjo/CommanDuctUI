@@ -10,6 +10,7 @@
  */
 
 use crate::app::Win32ApiInternalState;
+use crate::controls::gdi_utils::SelectedObject;
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::Color;
@@ -25,7 +26,7 @@ use windows::Win32::{
         BeginPaint, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET,
         DEFAULT_GUI_FONT, DEFAULT_QUALITY, DeleteObject, EndPaint, FF_DONTCARE, FW_BOLD, FW_NORMAL,
         FillRect, GetDC, GetDeviceCaps, GetStockObject, GetTextExtentPoint32W, HDC, HFONT, HGDIOBJ,
-        InvalidateRect, LOGPIXELSY, OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC, SelectObject,
+        InvalidateRect, LOGPIXELSY, OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC,
         SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
     },
     System::WindowsProgramming::MulDiv,
@@ -341,7 +342,7 @@ unsafe fn paint_tab_bar(hwnd: HWND, hdc: HDC) {
     } else {
         stock_font
     };
-    let old_font = unsafe { SelectObject(hdc, font_hgdiobj) };
+    let _font = unsafe { SelectedObject::select(hdc, font_hgdiobj) };
 
     // Fill background.
     let bg_cr = color_to_colorref(&state.palette.background);
@@ -416,8 +417,7 @@ unsafe fn paint_tab_bar(hwnd: HWND, hdc: HDC) {
         let _ = unsafe { DeleteObject(accent_brush.into()) };
     }
 
-    // Restore font.
-    unsafe { SelectObject(hdc, old_font) };
+    // _font drops here, restoring previous font
 }
 
 // ── Font creation helper ──────────────────────────────────────────────────────
