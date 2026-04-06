@@ -87,6 +87,7 @@ pub(crate) const WM_APP_TOGGLE_SWITCH_CLICKED: u32 = WM_APP + 0x105;
 // Custom application message sent by the owner-drawn ListBox to its root window.
 pub(crate) const WM_APP_LISTBOX_SELECTION_CHANGED: u32 = WM_APP + 0x106;
 pub(crate) const WM_APP_LISTBOX_SCROLLED: u32 = WM_APP + 0x107;
+pub(crate) const WM_APP_LISTBOX_KEYDOWN: u32 = WM_APP + 0x108;
 
 // General UI constants
 /// Default debounce delay for edit controls in milliseconds.
@@ -1829,6 +1830,7 @@ impl Win32ApiInternalState {
             WM_APP_TOGGLE_SWITCH_CLICKED => "WM_APP_TOGGLE_SWITCH_CLICKED",
             WM_APP_LISTBOX_SELECTION_CHANGED => "WM_APP_LISTBOX_SELECTION_CHANGED",
             WM_APP_LISTBOX_SCROLLED => "WM_APP_LISTBOX_SCROLLED",
+            WM_APP_LISTBOX_KEYDOWN => "WM_APP_LISTBOX_KEYDOWN",
             _ => "OTHER",
         }
     }
@@ -1851,6 +1853,7 @@ impl Win32ApiInternalState {
                 | WM_APP_TOGGLE_SWITCH_CLICKED
                 | WM_APP_LISTBOX_SELECTION_CHANGED
                 | WM_APP_LISTBOX_SCROLLED
+                | WM_APP_LISTBOX_KEYDOWN
         )
     }
 
@@ -1975,6 +1978,10 @@ impl Win32ApiInternalState {
             WM_APP_LISTBOX_SCROLLED => {
                 event_to_send =
                     self.handle_wm_app_listbox_scrolled(hwnd, wparam, lparam, window_id);
+            }
+            WM_APP_LISTBOX_KEYDOWN => {
+                event_to_send =
+                    self.handle_wm_app_listbox_keydown(hwnd, wparam, lparam, window_id);
             }
             WM_APP_TOGGLE_SWITCH_CLICKED => {
                 event_to_send =
@@ -2641,6 +2648,31 @@ impl Win32ApiInternalState {
             window_id,
             control_id: ControlId::new(control_id_raw),
             position: lparam.0 as u32,
+        })
+    }
+
+    fn handle_wm_app_listbox_keydown(
+        self: &Arc<Self>,
+        _hwnd_parent: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        window_id: WindowId,
+    ) -> Option<AppEvent> {
+        let hwnd_list = HWND(wparam.0 as *mut std::ffi::c_void);
+        let control_id_raw = unsafe { GetDlgCtrlID(hwnd_list) };
+        if control_id_raw == 0 {
+            log::warn!(
+                "[ListBox] WM_APP_LISTBOX_KEYDOWN from HWND {:?} without control ID",
+                hwnd_list
+            );
+            return None;
+        }
+
+        Some(AppEvent::ListBoxItemKeyDown {
+            window_id,
+            control_id: ControlId::new(control_id_raw),
+            // WM_APP_LISTBOX_KEYDOWN stores the original WORD-sized virtual-key in LPARAM.
+            key_code: lparam.0 as u16,
         })
     }
 

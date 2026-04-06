@@ -262,6 +262,11 @@ pub enum AppEvent {
         control_id: ControlId,
         item_id: ListBoxItemId,
     },
+    ListBoxItemKeyDown {
+        window_id: WindowId,
+        control_id: ControlId,
+        key_code: u16,
+    },
     ListBoxScrolled {
         window_id: WindowId,
         control_id: ControlId,

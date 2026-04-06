@@ -20,7 +20,8 @@ use crate::styling::Color;
 use crate::styling_primitives::StyleId;
 use crate::types::{ControlId, ListBoxItemDescriptor, ListBoxItemId, WindowId};
 use crate::window_common::{
-    ControlKind, WM_APP_LISTBOX_SCROLLED, WM_APP_LISTBOX_SELECTION_CHANGED, try_enable_dark_mode,
+    ControlKind, WM_APP_LISTBOX_KEYDOWN, WM_APP_LISTBOX_SCROLLED,
+    WM_APP_LISTBOX_SELECTION_CHANGED, try_enable_dark_mode,
 };
 
 use std::sync::{Arc, OnceLock};
@@ -277,7 +278,11 @@ unsafe extern "system" fn list_box_wnd_proc(
         }
         WM_KEYDOWN => {
             unsafe {
-                handle_keydown(hwnd, wparam);
+                // Virtual-key codes are WORD-sized in Win32, so narrowing WPARAM here is lossless.
+                let key_code = wparam.0 as u16;
+                if !handle_keydown(hwnd, key_code) {
+                    notify_keydown(hwnd, key_code);
+                }
             }
             LRESULT(0)
         }
@@ -322,15 +327,29 @@ unsafe fn handle_vscroll(hwnd: HWND, wparam: WPARAM) {
     }
 }
 
-unsafe fn handle_keydown(hwnd: HWND, wparam: WPARAM) {
+fn is_navigation_key(key: u16) -> bool {
+    matches!(
+        key,
+        x if x == VK_UP.0
+            || x == VK_DOWN.0
+            || x == VK_HOME.0
+            || x == VK_END.0
+            || x == VK_PRIOR.0
+            || x == VK_NEXT.0
+    )
+}
+
+unsafe fn handle_keydown(hwnd: HWND, key: u16) -> bool {
     let state = &mut *get_or_init_state(hwnd);
     let len = state.items.len();
     if len == 0 {
-        return;
+        return false;
+    }
+    if !is_navigation_key(key) {
+        return false;
     }
     let visible = visible_rows(hwnd).max(1);
     let mut next = state.selected_index.unwrap_or(0);
-    let key = wparam.0 as u16;
     if key == VK_UP.0 {
         next = next.saturating_sub(1);
     } else if key == VK_DOWN.0 {
@@ -343,8 +362,6 @@ unsafe fn handle_keydown(hwnd: HWND, wparam: WPARAM) {
         next = next.saturating_sub(visible);
     } else if key == VK_NEXT.0 {
         next = (next + visible).min(len.saturating_sub(1));
-    } else {
-        return;
     }
     if state.selected_index != Some(next) {
         state.selected_index = Some(next);
@@ -352,6 +369,7 @@ unsafe fn handle_keydown(hwnd: HWND, wparam: WPARAM) {
         notify_selection_changed(hwnd, state.items[next].id);
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
+    true
 }
 
 unsafe fn scroll_by_rows(hwnd: HWND, delta: i32) {
@@ -453,6 +471,23 @@ unsafe fn notify_scroll_changed(hwnd: HWND, position: u32) {
         WM_APP_LISTBOX_SCROLLED,
         Some(WPARAM(hwnd.0 as usize)),
         Some(LPARAM(position as isize)),
+    );
+}
+
+unsafe fn notify_keydown(hwnd: HWND, key_code: u16) {
+    let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2));
+    if root.is_invalid() {
+        return;
+    }
+    let control_id = GetDlgCtrlID(hwnd);
+    if control_id == 0 {
+        return;
+    }
+    let _ = SendMessageW(
+        root,
+        WM_APP_LISTBOX_KEYDOWN,
+        Some(WPARAM(hwnd.0 as usize)),
+        Some(LPARAM(key_code as isize)),
     );
 }
 
@@ -992,5 +1027,16 @@ mod tests {
             windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS.0
         );
         assert_eq!(flags & windows::Win32::Graphics::Gdi::DT_CENTER.0, 0);
+    }
+
+    #[test]
+    fn navigation_key_helper_covers_list_navigation_keys() {
+        assert!(is_navigation_key(VK_UP.0));
+        assert!(is_navigation_key(VK_DOWN.0));
+        assert!(is_navigation_key(VK_HOME.0));
+        assert!(is_navigation_key(VK_END.0));
+        assert!(is_navigation_key(VK_PRIOR.0));
+        assert!(is_navigation_key(VK_NEXT.0));
+        assert!(!is_navigation_key(b'X' as u16));
     }
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.5
+- **Feature**: Add listbox keydown forwarding so host apps can handle control-local shortcuts without routing through the generic window message path.
+- **Feature**: Extend owner-drawn listbox rows with additional badge and marker presentation hooks so hosts can attach richer row metadata without forking the control.
+- **Fix**: Restore the generic `SecondaryButton` contract, including correct enabled-state updates for demoted non-primary footer actions.
+
 ## 1.0.4
 - **Tests**: Rewrite brittle `treeview_handler` unit tests around invariant-level assertions instead of exact pixel rectangles, packed mask literals, and exact palette values where those details are implementation choices rather than the public behavior contract.
 - **Hardening**: Keep explicit coverage for TreeView marker placement, reserved state-icon lane spacing, hidden-lane semantics, and warm/neutral marker palette intent while making harmless layout-tuning changes less likely to break the suite.
