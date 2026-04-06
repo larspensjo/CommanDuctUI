@@ -1,11 +1,11 @@
 // Declare the control handler sub-modules
-pub(crate) mod gdi_utils;
 pub(crate) mod button_handler;
 pub(crate) mod chart_handler;
 pub(crate) mod checkbox_handler;
 pub(crate) mod combobox_handler;
 pub(crate) mod dark_border;
 pub(crate) mod dialog_handler;
+pub(crate) mod gdi_utils;
 pub(crate) mod input_handler;
 pub(crate) mod keyboard_navigation;
 pub(crate) mod label_handler;

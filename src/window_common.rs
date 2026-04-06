@@ -1980,8 +1980,7 @@ impl Win32ApiInternalState {
                     self.handle_wm_app_listbox_scrolled(hwnd, wparam, lparam, window_id);
             }
             WM_APP_LISTBOX_KEYDOWN => {
-                event_to_send =
-                    self.handle_wm_app_listbox_keydown(hwnd, wparam, lparam, window_id);
+                event_to_send = self.handle_wm_app_listbox_keydown(hwnd, wparam, lparam, window_id);
             }
             WM_APP_TOGGLE_SWITCH_CLICKED => {
                 event_to_send =

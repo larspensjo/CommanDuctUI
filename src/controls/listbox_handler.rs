@@ -20,8 +20,8 @@ use crate::styling::Color;
 use crate::styling_primitives::StyleId;
 use crate::types::{ControlId, ListBoxItemDescriptor, ListBoxItemId, WindowId};
 use crate::window_common::{
-    ControlKind, WM_APP_LISTBOX_KEYDOWN, WM_APP_LISTBOX_SCROLLED,
-    WM_APP_LISTBOX_SELECTION_CHANGED, try_enable_dark_mode,
+    ControlKind, WM_APP_LISTBOX_KEYDOWN, WM_APP_LISTBOX_SCROLLED, WM_APP_LISTBOX_SELECTION_CHANGED,
+    try_enable_dark_mode,
 };
 
 use std::sync::{Arc, OnceLock};
@@ -34,8 +34,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_NEXT, VK_PRIOR,
-    VK_UP,
+    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GET_ANCESTOR_FLAGS, GWLP_USERDATA,
@@ -759,7 +758,9 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
         let mut size = SIZE::default();
         // Keep meta_font selected for both measurement and drawing.
         let _font = unsafe { SelectedObject::select(hdc, state.meta_font) };
-        unsafe { let _ = GetTextExtentPoint32W(hdc, &text, &mut size); }
+        unsafe {
+            let _ = GetTextExtentPoint32W(hdc, &text, &mut size);
+        }
         let badge_width = size.cx + BADGE_PAD_X * 2;
         let rect = RECT {
             left: x,

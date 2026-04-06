@@ -35,7 +35,10 @@ impl KeyboardNavigation {
     }
 }
 
-pub(crate) fn apply_window_style(base: WINDOW_STYLE, navigation: KeyboardNavigation) -> WINDOW_STYLE {
+pub(crate) fn apply_window_style(
+    base: WINDOW_STYLE,
+    navigation: KeyboardNavigation,
+) -> WINDOW_STYLE {
     if navigation.needs_tab_stop() {
         base | WS_TABSTOP
     } else {
@@ -51,16 +54,12 @@ pub(crate) unsafe fn focus_on_click(hwnd: HWND, navigation: KeyboardNavigation) 
 
 pub(crate) fn dialog_code(navigation: KeyboardNavigation) -> Option<LRESULT> {
     let bits = navigation.dialog_code_bits();
-    if bits == 0 {
-        None
-    } else {
-        Some(LRESULT(bits))
-    }
+    if bits == 0 { None } else { Some(LRESULT(bits)) }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_window_style, dialog_code, KeyboardNavigation};
+    use super::{KeyboardNavigation, apply_window_style, dialog_code};
     use windows::Win32::UI::WindowsAndMessaging::{WINDOW_STYLE, WS_CHILD, WS_TABSTOP, WS_VISIBLE};
 
     #[test]

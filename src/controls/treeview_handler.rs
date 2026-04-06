@@ -1823,7 +1823,8 @@ mod tests {
 
         let fill_rect = treeview_tail_fill_rect(item_rect, client_rect);
 
-        let fill_rect = fill_rect.expect("tail fill rect should exist when draw rect ends before client");
+        let fill_rect =
+            fill_rect.expect("tail fill rect should exist when draw rect ends before client");
         assert_eq!(fill_rect.left, item_rect.right);
         assert_eq!(fill_rect.top, item_rect.top);
         assert_eq!(fill_rect.right, client_rect.right);
@@ -1845,8 +1846,8 @@ mod tests {
             bottom: 30,
         };
 
-        let lane_rect =
-            tree_item_state_icon_lane_rect(item_rect, text_rect).expect("state icon lane should exist");
+        let lane_rect = tree_item_state_icon_lane_rect(item_rect, text_rect)
+            .expect("state icon lane should exist");
         let marker_rect =
             tree_item_marker_rect(item_rect, text_rect).expect("marker rect should exist");
 
@@ -1909,8 +1910,8 @@ mod tests {
             bottom: 28,
         };
 
-        let lane_rect =
-            tree_item_state_icon_lane_rect(item_rect, text_rect).expect("state icon lane should exist");
+        let lane_rect = tree_item_state_icon_lane_rect(item_rect, text_rect)
+            .expect("state icon lane should exist");
 
         assert_eq!(lane_rect.top, item_rect.top);
         assert_eq!(lane_rect.bottom, item_rect.bottom);
@@ -1941,11 +1942,18 @@ mod tests {
     #[test]
     fn tree_item_marker_color_uses_warm_palette() {
         let red = tree_item_marker_color(TreeItemMarkerKind::Red).expect("red marker color");
-        let yellow = tree_item_marker_color(TreeItemMarkerKind::Yellow).expect("yellow marker color");
+        let yellow =
+            tree_item_marker_color(TreeItemMarkerKind::Yellow).expect("yellow marker color");
         let gray = tree_item_marker_color(TreeItemMarkerKind::Gray).expect("gray marker color");
 
-        assert!(red.r > red.g && red.g > red.b, "red marker should skew warm");
-        assert!(yellow.r >= yellow.g && yellow.g > yellow.b, "yellow marker should skew warm");
+        assert!(
+            red.r > red.g && red.g > red.b,
+            "red marker should skew warm"
+        );
+        assert!(
+            yellow.r >= yellow.g && yellow.g > yellow.b,
+            "yellow marker should skew warm"
+        );
         assert!(
             (gray.r as i16 - gray.g as i16).abs() <= 16
                 && (gray.g as i16 - gray.b as i16).abs() <= 16,

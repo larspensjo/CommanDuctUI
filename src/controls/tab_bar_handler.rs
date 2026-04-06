@@ -343,12 +343,14 @@ unsafe fn select_tab_and_notify(hwnd: HWND, state: &mut TabBarState, idx: usize)
     // WndProc even when the tab bar is a grandchild (panel nesting).
     let root = unsafe { GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)) }; // GA_ROOT
     if !root.is_invalid() {
-        let _ = unsafe { SendMessageW(
-            root,
-            WM_APP_TAB_SELECTED,
-            Some(WPARAM(hwnd.0 as usize)),
-            Some(LPARAM(idx as isize)),
-        ) };
+        let _ = unsafe {
+            SendMessageW(
+                root,
+                WM_APP_TAB_SELECTED,
+                Some(WPARAM(hwnd.0 as usize)),
+                Some(LPARAM(idx as isize)),
+            )
+        };
     }
 }
 

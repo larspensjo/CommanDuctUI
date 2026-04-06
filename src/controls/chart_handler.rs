@@ -25,8 +25,7 @@ use windows::Win32::{
     Graphics::Gdi::{
         BACKGROUND_MODE, BeginPaint, CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject,
         Ellipse, EndPaint, FillRect, GetStockObject, GetTextExtentPoint32W, InvalidateRect, LineTo,
-        MoveToEx, PAINTSTRUCT, PS_DOT, PS_SOLID, Polyline, SetBkMode, SetTextColor,
-        TextOutW,
+        MoveToEx, PAINTSTRUCT, PS_DOT, PS_SOLID, Polyline, SetBkMode, SetTextColor, TextOutW,
     },
     UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, HMENU,
