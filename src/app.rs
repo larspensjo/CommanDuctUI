@@ -2,8 +2,8 @@ use crate::{
     command_executor,
     controls::{
         button_handler, chart_handler, checkbox_handler, combobox_handler, dialog_handler,
-        label_handler, menu_handler, panel_handler, progress_handler, radiobutton_handler,
-        richedit_handler, splitter_handler, styling_handler, tab_bar_handler,
+        label_handler, listbox_handler, menu_handler, panel_handler, progress_handler,
+        radiobutton_handler, richedit_handler, splitter_handler, styling_handler, tab_bar_handler,
         toggle_switch_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
@@ -1161,6 +1161,10 @@ impl Win32ApiInternalState {
             {
                 let (background, foreground) = richedit_handler::style_colors_for_rich_edit(style);
                 richedit_handler::apply_rich_edit_colors(control_hwnd, background, foreground);
+            } else if control_kind == window_common::ControlKind::ListBox
+                && let Some(ref style) = parsed_style
+            {
+                listbox_handler::handle_apply_style_command(control_hwnd, style_id, style);
             }
         }
 

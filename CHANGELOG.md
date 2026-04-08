@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.6
+- **Fix**: Owner-drawn list box selection now defaults to the warm visual-design palette instead of the older cool blue-gray fallback, so selected rows and the left accent bar match the app accent system out of the box.
+- **Feature**: Add `StyleId::ListBoxSelectionAccent` and let list boxes consume `ListBoxRow` / `ListBoxSelectedRow` / `ListBoxSelectionAccent` / `ListBoxHoverRow` / `ListBoxDisabledRow` directly, so host apps can theme row states without patching `CommanDuctUI`.
+
 ## 1.0.5
 - **Feature**: Add listbox keydown forwarding so host apps can handle control-local shortcuts without routing through the generic window message path.
 - **Feature**: Extend owner-drawn listbox rows with additional badge and marker presentation hooks so hosts can attach richer row metadata without forking the control.

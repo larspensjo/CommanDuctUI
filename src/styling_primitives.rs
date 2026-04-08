@@ -84,6 +84,7 @@ pub enum StyleId {
     TreeViewSelectionAccent,
     ListBoxRow,
     ListBoxSelectedRow,
+    ListBoxSelectionAccent,
     ListBoxHoverRow,
     ListBoxDisabledRow,
     BadgePriorityCritical,

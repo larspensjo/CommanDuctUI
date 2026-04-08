@@ -18,6 +18,7 @@ use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::styling::Color;
 use crate::styling_primitives::StyleId;
+use crate::styling_windows::ParsedControlStyle;
 use crate::types::{ControlId, ListBoxItemDescriptor, ListBoxItemId, WindowId};
 use crate::window_common::{
     ControlKind, WM_APP_LISTBOX_KEYDOWN, WM_APP_LISTBOX_SCROLLED, WM_APP_LISTBOX_SELECTION_CHANGED,
@@ -87,46 +88,87 @@ impl Default for ListBoxPalette {
     fn default() -> Self {
         Self {
             row_background: Color {
-                r: 0x26,
-                g: 0x2A,
-                b: 0x2E,
+                r: 0x1E,
+                g: 0x1E,
+                b: 0x1C,
             },
             row_text: Color {
-                r: 0xE0,
-                g: 0xE5,
-                b: 0xEC,
+                r: 0xFA,
+                g: 0xF9,
+                b: 0xF5,
             },
             row_metadata: Color {
-                r: 0xA4,
-                g: 0xAB,
-                b: 0xB3,
+                r: 0xB0,
+                g: 0xAE,
+                b: 0xA5,
             },
             selected_background: Color {
-                r: 0x37,
-                g: 0x3E,
-                b: 0x47,
-            },
-            hover_background: Color {
-                r: 0x2D,
-                g: 0x33,
+                r: 0x3D,
+                g: 0x3D,
                 b: 0x3A,
             },
+            hover_background: Color {
+                r: 0x2A,
+                g: 0x2A,
+                b: 0x28,
+            },
             disabled_background: Color {
-                r: 0x24,
-                g: 0x27,
-                b: 0x2B,
+                r: 0x1E,
+                g: 0x1E,
+                b: 0x1C,
             },
             disabled_text: Color {
-                r: 0x87,
-                g: 0x8C,
-                b: 0x93,
+                r: 0x5E,
+                g: 0x5D,
+                b: 0x59,
             },
             accent: Color {
-                r: 0x00,
-                g: 0x80,
-                b: 0xFF,
+                r: 0xC9,
+                g: 0x64,
+                b: 0x42,
             },
         }
+    }
+}
+
+fn apply_palette_style(
+    palette: &mut ListBoxPalette,
+    style_id: StyleId,
+    style: &ParsedControlStyle,
+) {
+    match style_id {
+        StyleId::ListBoxRow => {
+            if let Some(color) = style.background_color.as_ref() {
+                palette.row_background = color.clone();
+            }
+            if let Some(color) = style.text_color.as_ref() {
+                palette.row_text = color.clone();
+            }
+        }
+        StyleId::ListBoxSelectedRow => {
+            if let Some(color) = style.background_color.as_ref() {
+                palette.selected_background = color.clone();
+            }
+        }
+        StyleId::ListBoxSelectionAccent => {
+            if let Some(color) = style.background_color.as_ref() {
+                palette.accent = color.clone();
+            }
+        }
+        StyleId::ListBoxHoverRow => {
+            if let Some(color) = style.background_color.as_ref() {
+                palette.hover_background = color.clone();
+            }
+        }
+        StyleId::ListBoxDisabledRow => {
+            if let Some(color) = style.background_color.as_ref() {
+                palette.disabled_background = color.clone();
+            }
+            if let Some(color) = style.text_color.as_ref() {
+                palette.disabled_text = color.clone();
+            }
+        }
+        _ => {}
     }
 }
 
@@ -971,6 +1013,18 @@ pub(crate) fn handle_set_list_box_selection_command(
     Ok(())
 }
 
+pub(crate) fn handle_apply_style_command(
+    hwnd: HWND,
+    style_id: StyleId,
+    parsed_style: &ParsedControlStyle,
+) {
+    unsafe {
+        let state = &mut *get_or_init_state(hwnd);
+        apply_palette_style(&mut state.palette, style_id, parsed_style);
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -980,7 +1034,28 @@ mod tests {
         let palette = ListBoxPalette::default();
         assert!(palette.row_background.r < 0x80);
         assert!(palette.row_text.r > palette.row_background.r);
-        assert!(palette.accent.b > palette.row_background.b);
+        assert!(palette.accent.r > palette.accent.b);
+    }
+
+    #[test]
+    fn apply_palette_style_updates_selection_accent() {
+        let mut palette = ListBoxPalette::default();
+        let style = ParsedControlStyle {
+            font_handle: None,
+            text_color: None,
+            background_color: Some(Color {
+                r: 0xC9,
+                g: 0x64,
+                b: 0x42,
+            }),
+            background_brush: None,
+        };
+
+        apply_palette_style(&mut palette, StyleId::ListBoxSelectionAccent, &style);
+
+        assert_eq!(palette.accent.r, 0xC9);
+        assert_eq!(palette.accent.g, 0x64);
+        assert_eq!(palette.accent.b, 0x42);
     }
 
     #[test]
