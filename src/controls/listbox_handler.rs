@@ -277,8 +277,9 @@ unsafe extern "system" fn list_box_wnd_proc(
                 let state = &mut *get_or_init_state(hwnd);
                 let new_hover = hit_test_row(state, y);
                 if new_hover != state.hover_index {
+                    let previous_hover = state.hover_index;
                     state.hover_index = new_hover;
-                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    invalidate_row_transition(hwnd, previous_hover, new_hover);
                 }
                 if !state.tracking_mouse {
                     let mut tme = TRACKMOUSEEVENT {
@@ -297,9 +298,10 @@ unsafe extern "system" fn list_box_wnd_proc(
         WM_MOUSELEAVE => {
             unsafe {
                 let state = &mut *get_or_init_state(hwnd);
+                let previous_hover = state.hover_index;
                 state.hover_index = None;
                 state.tracking_mouse = false;
-                let _ = InvalidateRect(Some(hwnd), None, false);
+                invalidate_row_transition(hwnd, previous_hover, None);
             }
             LRESULT(0)
         }
@@ -464,6 +466,41 @@ unsafe fn ensure_row_visible(hwnd: HWND, row: usize) {
 fn hit_test_row(state: &ListBoxState, y: i32) -> Option<usize> {
     let row = (y / ROW_HEIGHT).max(0) as usize + state.scroll_row;
     (row < state.items.len()).then_some(row)
+}
+
+fn row_rect(state: &ListBoxState, row_index: usize, width: i32) -> Option<RECT> {
+    if row_index < state.scroll_row {
+        return None;
+    }
+    let visible_offset = row_index - state.scroll_row;
+    let top = i32::try_from(visible_offset).ok()?.saturating_mul(ROW_HEIGHT);
+    Some(RECT {
+        left: 0,
+        top,
+        right: width.max(0),
+        bottom: top + ROW_HEIGHT,
+    })
+}
+
+unsafe fn invalidate_row(hwnd: HWND, row_index: usize) {
+    let state = &*get_or_init_state(hwnd);
+    let mut client = RECT::default();
+    let _ = GetClientRect(hwnd, &mut client);
+    if let Some(rect) = row_rect(state, row_index, client.right - client.left) {
+        let _ = InvalidateRect(Some(hwnd), Some(&rect), false);
+    }
+}
+
+unsafe fn invalidate_row_transition(hwnd: HWND, previous: Option<usize>, current: Option<usize>) {
+    if previous == current {
+        return;
+    }
+    if let Some(row) = previous {
+        invalidate_row(hwnd, row);
+    }
+    if let Some(row) = current {
+        invalidate_row(hwnd, row);
+    }
 }
 
 unsafe fn select_row_from_point(hwnd: HWND, _x: i32, y: i32) -> bool {
@@ -1103,6 +1140,21 @@ mod tests {
             windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS.0
         );
         assert_eq!(flags & windows::Win32::Graphics::Gdi::DT_CENTER.0, 0);
+    }
+
+    #[test]
+    fn row_rect_maps_visible_rows_to_client_coordinates() {
+        let state = ListBoxState {
+            scroll_row: 5,
+            ..ListBoxState::new()
+        };
+
+        let rect = row_rect(&state, 7, 320).expect("visible row rect");
+
+        assert_eq!(rect.left, 0);
+        assert_eq!(rect.top, 2 * ROW_HEIGHT);
+        assert_eq!(rect.right, 320);
+        assert_eq!(rect.bottom, 3 * ROW_HEIGHT);
     }
 
     #[test]

@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.7
+- **Fix**: Owner-drawn list box hover changes now invalidate only the previous and current row instead of the full client, eliminating the left-edge flicker visible while moving the mouse across article rows.
+
 ## 1.0.6
 - **Fix**: Owner-drawn list box selection now defaults to the warm visual-design palette instead of the older cool blue-gray fallback, so selected rows and the left accent bar match the app accent system out of the box.
 - **Feature**: Add `StyleId::ListBoxSelectionAccent` and let list boxes consume `ListBoxRow` / `ListBoxSelectedRow` / `ListBoxSelectionAccent` / `ListBoxHoverRow` / `ListBoxDisabledRow` directly, so host apps can theme row states without patching `CommanDuctUI`.
