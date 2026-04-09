@@ -473,7 +473,9 @@ fn row_rect(state: &ListBoxState, row_index: usize, width: i32) -> Option<RECT> 
         return None;
     }
     let visible_offset = row_index - state.scroll_row;
-    let top = i32::try_from(visible_offset).ok()?.saturating_mul(ROW_HEIGHT);
+    let top = i32::try_from(visible_offset)
+        .ok()?
+        .saturating_mul(ROW_HEIGHT);
     Some(RECT {
         left: 0,
         top,
