@@ -75,6 +75,7 @@ pub enum StyleId {
     SummaryFolderText,
     SummaryFolderMissingFile,
     HeaderLabel,
+    MetadataText,
     ProgressBar,
     // Splitter control
     Splitter,

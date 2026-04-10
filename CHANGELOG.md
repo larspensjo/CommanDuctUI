@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.8
+- **Feature**: Add `StyleId::MetadataText` so host applications can define a reusable label style for secondary metadata text.
+
 ## 1.0.7
 - **Fix**: Owner-drawn list box hover changes now invalidate only the previous and current row instead of the full client, eliminating the left-edge flicker visible while moving the mouse across article rows.
 
