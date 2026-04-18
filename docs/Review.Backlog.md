@@ -22,15 +22,16 @@ bottom. Status flips in place as work progresses.
 | [F-01-010](Review.01-Architecture.md#f-01-010-listbox_handler-imports-parsedcontrolstyle-via-styling_windows-instead-of-the-styling-alias) | Minor | arch | `listbox_handler` imports `ParsedControlStyle` via `styling_windows` instead of the `styling` alias | fixed | Phase 1 |
 | [F-01-011](Review.01-Architecture.md#f-01-011-mutexoptionweakmutexdyn--on-handlerprovider-slots-is-unusual) | Nit | arch | `Mutex<Option<Weak<Mutex<dyn …>>>>` on handler/provider slots is unusual | fixed | Phase 1 |
 | [F-02-001](Review.02-ApiAndRelease.md#f-02-001-license-files-do-not-match-the-mit-or-apache-20-spdx-claim) | Major | release | License files do not match the `MIT OR Apache-2.0` SPDX claim | open | Phase 2 |
-| [F-02-002](Review.02-ApiAndRelease.md#f-02-002-cargotoml-missing-cratesio-publication-metadata) | Major | release | `Cargo.toml` missing crates.io publication metadata | open | Phase 2 |
+| [F-02-002](Review.02-ApiAndRelease.md#f-02-002-recommended-cargotoml-metadata-is-incomplete) | Minor | release | Recommended `Cargo.toml` metadata is incomplete | open | Phase 2 |
 | [F-02-003](Review.02-ApiAndRelease.md#f-02-003-no-crate-level-rustdoc-most-public-items-use-non-rustdoc-comments) | Major | api | No crate-level rustdoc; most public items use non-rustdoc comments | open | Phase 2 |
-| [F-02-004](Review.02-ApiAndRelease.md#f-02-004-public-enums-lack-non_exhaustive-locking-in-semver-risk) | Major | api | Public enums lack `#[non_exhaustive]`, locking in semver risk | open | Phase 2 |
-| [F-02-005](Review.02-ApiAndRelease.md#f-02-005-crate-is-versioned-108-but-has-never-been-published) | Major | release | Crate is versioned 1.0.8 but has never been published | open | Phase 2 |
-| [F-02-006](Review.02-ApiAndRelease.md#f-02-006-several-public-types-required-by-the-api-are-not-re-exported) | Major | api | Several public types required by the API are not re-exported | open | Phase 2 |
+| [F-02-004](Review.02-ApiAndRelease.md#f-02-004-growth-oriented-public-enums-lack-non_exhaustive) | Major | api | Growth-oriented public enums lack `#[non_exhaustive]` | open | Phase 2 |
+| [F-02-005](Review.02-ApiAndRelease.md#f-02-005-starting-at-10x-vs-resetting-to-0x--release-strategy-advice) | Nit | release | Starting at 1.0.x vs resetting to 0.x — release strategy advice | wontfix | Phase 2 |
+| [F-02-006](Review.02-ApiAndRelease.md#f-02-006-several-public-types-are-only-reachable-via-internal-module-paths) | Minor | api | Several public types are only reachable via internal module paths | open | Phase 2 |
 | [F-02-007](Review.02-ApiAndRelease.md#f-02-007-identifier-newtypes-have-inconsistent-inner-visibility-and-width) | Minor | api | Identifier newtypes have inconsistent inner visibility and width | open | Phase 2 |
-| [F-02-008](Review.02-ApiAndRelease.md#f-02-008-readme-references-nonexistent-license-mit--license-apache-files) | Minor | release | README references nonexistent LICENSE-MIT / LICENSE-APACHE files | open | Phase 2 |
-| [F-02-009](Review.02-ApiAndRelease.md#f-02-009-no-examples-directory-readme-example-can-silently-rot) | Minor | release | No `examples/` directory; README example can silently rot | open | Phase 2 |
+| [F-02-008](Review.02-ApiAndRelease.md#f-02-008-merged-into-f-02-001) | — | — | (merged into F-02-001) | wontfix | Phase 2 |
+| [F-02-009](Review.02-ApiAndRelease.md#f-02-009-no-examples-directory-readme-example-is-broken) | Minor | release | No `examples/` directory; README example is broken | open | Phase 2 |
 | [F-02-010](Review.02-ApiAndRelease.md#f-02-010-no-ci-workflow) | Minor | release | No CI workflow | open | Phase 2 |
 | [F-02-011](Review.02-ApiAndRelease.md#f-02-011-changelog-lacks-an-unreleased-section-and-releases-lose-dates-post-10) | Nit | release | CHANGELOG lacks an `Unreleased` section and releases lose dates post-1.0 | open | Phase 2 |
-| [F-02-012](Review.02-ApiAndRelease.md#f-02-012-platformerror-variants-discard-structured-cause-information) | Minor | api | `PlatformError` variants discard structured cause information | open | Phase 2 |
-| [F-02-013](Review.02-ApiAndRelease.md#f-02-013-platformerror-itself-is-not-re-exported-from-librs) | Nit | api | `PlatformError` itself is not re-exported from `lib.rs` | open | Phase 2 |
+| [F-02-012](Review.02-ApiAndRelease.md#f-02-012-platformerror-variants-discard-structured-cause-information) | Nit | api | `PlatformError` variants discard structured cause information | open | Phase 2 |
+| [F-02-013](Review.02-ApiAndRelease.md#f-02-013-merged-into-f-02-006) | — | — | (merged into F-02-006) | wontfix | Phase 2 |
+| [F-02-014](Review.02-ApiAndRelease.md#f-02-014-cargo-package-ships-local-editor-plan-and-review-material) | Major | release | `cargo package` ships local editor, plan, and review material | open | Phase 2 |
