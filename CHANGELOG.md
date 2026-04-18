@@ -1,5 +1,9 @@
 # Changelog
 
+This file tracks released, user-facing crate changes.
+Update it together with `Cargo.toml` when cutting a new version.
+Skip changelog entries for internal-only refactors, plans, review docs, diary updates, and doc-only or test-only changes unless they ship as part of a user-visible release.
+
 ## 1.0.8
 - **Feature**: Add `StyleId::MetadataText` so host applications can define a reusable label style for secondary metadata text.
 

@@ -7,6 +7,12 @@
 - When adding a CLI flag to `harvester_batch`, update `scripts/Start-HarvesterBatch.ps1` in the same change.
 - When creating or saving plan documents, always save them to the `docs/` folder unless explicitly told otherwise. Use the prfix 'Plan.'.
 
+## Releases
+- Update `Cargo.toml` version and `CHANGELOG.md` together, in the same change.
+- Bump the version only for releasable crate changes that matter to downstream users.
+- Use semver intent.
+- Keep `CHANGELOG.md` focused on released, user-facing changes.
+
 ## Architecture
 - Preserve the host/library flow: native input -> `AppEvent` -> host state/update logic -> `PlatformCommand` -> native effect/render.
 - Keep application state and business logic out of the platform layer.
