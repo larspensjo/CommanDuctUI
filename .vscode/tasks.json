@@ -1,0 +1,49 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build workspace",
+      "type": "shell",
+      "command": "cargo build --workspace",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "Test workspace",
+      "type": "shell",
+      "command": "cargo nextest run",
+      "group": "test",
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "Clippy",
+      "type": "shell",
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "group": "build",
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "Format",
+      "type": "shell",
+      "command": "cargo fmt --all",
+      "group": "none",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean workspace",
+      "type": "shell",
+      "command": "cargo clean",
+      "group": "none",
+      "problemMatcher": []
+    }
+  ]
+}
