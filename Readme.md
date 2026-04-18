@@ -60,71 +60,63 @@ git submodule update --init --recursive
 
 ## Basic Usage Example
 
-Here is a minimal example of an application that uses `CommanDuctUI` to create a window with a button. Clicking the button updates the window's title.
+The repository ships a runnable example at [`examples/hello_window.rs`](examples/hello_window.rs).
+Keep that file as the authoritative end-to-end sample. The minimal contract looks like this:
 
 ```rust
-use commanductui::{PlatformCommand, AppEvent, PlatformEventHandler, PlatformInterface, WindowConfig, ControlId, MenuItemConfig};
-use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
-
-// Define unique IDs for your controls
-const BTN_CLICK_ME: ControlId = ControlId::new(101);
-
-// Your application's state and logic
-struct MyAppLogic {
-    command_queue: VecDeque<PlatformCommand>,
-    click_count: u32,
-}
+use commanductui::{
+    AppEvent, PlatformCommand, PlatformEventHandler, PlatformInterface, WindowConfig,
+};
 
 impl PlatformEventHandler for MyAppLogic {
-    // The library calls this to give your app events
     fn handle_event(&mut self, event: AppEvent) {
-        if let AppEvent::ButtonClicked { control_id, .. } = event {
-            if control_id == BTN_CLICK_ME {
-                self.click_count += 1;
-                let new_title = format!("You clicked {} times!", self.click_count);
-                // Enqueue a command to update the window title
-                self.command_queue.push_back(PlatformCommand::SetWindowTitle {
-                    window_id: WindowId(1), // Assuming a single main window
-                    title: new_title,
-                });
-            }
+        match event {
+            AppEvent::ButtonClicked { .. } => { /* update app state, enqueue commands */ }
+            AppEvent::WindowCloseRequestedByUser { window_id } =>
+                self.enqueue(PlatformCommand::CloseWindow { window_id }),
+            _ => {}
         }
     }
-
-    // The library calls this to get commands from your app
-    fn try_dequeue_command(&mut self) -> Option<PlatformCommand> {
-        self.command_queue.pop_front()
-    }
 }
 
-fn main() {
-    let platform = PlatformInterface::new("MyApp".to_string()).unwrap();
+fn create_main_window(platform: &PlatformInterface) -> commanductui::PlatformResult<()> {
+    let window_id = platform.create_window(WindowConfig {
+        title: "My App",
+        width: 400,
+        height: 300,
+    })?;
 
-    let window_config = WindowConfig { title: "My App", width: 400, height: 300 };
-    let main_window_id = platform.create_window(window_config).unwrap();
-
-    // Define the initial UI structure with commands
-    let initial_commands = vec![
-        PlatformCommand::CreateButton {
-            window_id: main_window_id,
-            parent_control_id: None,
-            control_id: BTN_CLICK_ME,
-            text: "Click Me".to_string(),
-        },
-        // In a real app, you would also define layouts here
-        PlatformCommand::ShowWindow { window_id: main_window_id },
-    ];
-
-    let app_logic = Arc::new(Mutex::new(MyAppLogic {
-        command_queue: VecDeque::new(),
-        click_count: 0,
-    }));
-
-    // Start the main event loop
-    platform.main_event_loop(app_logic.clone(), app_logic, initial_commands).unwrap();
+    // Build controls, define layout, then show the window.
+    // See examples/hello_window.rs for the full runnable version.
+    Ok(())
 }
 ```
+
+Two important details are easy to miss:
+
+- `create_window` returns the `WindowId` you must keep and reuse in later commands.
+- Clicking the native close button emits `AppEvent::WindowCloseRequestedByUser`; your host logic must decide what to do, typically by enqueuing `PlatformCommand::CloseWindow`.
+
+## Testing the `hello_window` Example
+
+On Windows, run the example from the repository root:
+
+```powershell
+cargo run --example hello_window
+```
+
+What to verify:
+
+- A native window opens with a visible `Click Me` button near the top.
+- Clicking the button updates the window title with the click count.
+- Clicking the native close button closes the application.
+
+Useful variants:
+
+- Build without running: `cargo build --example hello_window`
+- Type-check only: `cargo check --example hello_window`
+
+If `cargo build --example hello_window` fails with `LNK1104` for `hello_window.exe`, a previous run is still open. Close the running example and rerun the command.
 
 ## Developer Workflow
 
@@ -163,9 +155,4 @@ git submodule update --recursive
 
 ## License
 
-This project is licensed under either of:
-
--   MIT License ([LICENSE-MIT](LICENSE-MIT))
--   Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-
-at your option.
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

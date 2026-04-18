@@ -1,12 +1,12 @@
+//! Error types returned by the public platform API.
+
 #[cfg(target_os = "windows")]
 use windows::core::Error as WinError;
 
-// Represents errors that can occur within the platform abstraction layer.
-//
-// This enum centralizes error handling for operations related to the native UI toolkit,
-// such as window creation failures, invalid operations, or underlying OS errors.
-// TODO: Where are these taken care of?
-// TODO: Usually, these are created at the same time as a log::error!, etc. Maybe unnecessary duplication?
+/// Errors that can occur within the platform abstraction layer.
+///
+/// These variants cover Win32 failures plus higher-level lifecycle and handle errors that
+/// host applications may want to log or surface to users.
 #[derive(Debug, Clone)]
 pub enum PlatformError {
     /// An error originating from the Windows API.
@@ -56,5 +56,4 @@ impl std::error::Error for PlatformError {
 }
 
 /// A specialized `Result` type for platform layer operations.
-// [CDU-Tech-ErrorHandlingV1] Command handlers use this alias to bubble rich PlatformError values back to the application.
 pub type Result<T> = std::result::Result<T, PlatformError>;

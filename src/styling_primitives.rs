@@ -1,60 +1,51 @@
-/*
- * This module provides platform-agnostic styling primitives used by both
- * the application logic and the platform layer. These definitions are free
- * of any Win32 or OS-specific details so they can be compiled on any
- * target. They describe colors, fonts, and control styles that higher level
- * code can reference when defining UI appearance.
- */
+//! Platform-agnostic styling primitives shared by host logic and the platform layer.
 
+/// RGB color used by public styling commands and descriptors.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Color {
+    /// Red channel.
     pub r: u8,
+    /// Green channel.
     pub g: u8,
+    /// Blue channel.
     pub b: u8,
 }
 
-/*
- * Defines the weight (e.g., boldness) of a font.
- */
+/// Font-weight hint for a resolved control font.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum FontWeight {
+    /// Default or regular weight.
     #[default]
     Normal,
+    /// Bold weight.
     Bold,
 }
 
-/*
- * Describes the properties of a font in a platform-agnostic way. All fields
- * are optional so styles can override only specific aspects of a control's
- * default font.
- */
+/// Platform-agnostic font settings that can override control defaults.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FontDescription {
+    /// Optional face name.
     pub name: Option<String>,
+    /// Optional point size expressed in logical units expected by the platform layer.
     pub size: Option<i32>,
+    /// Optional font weight.
     pub weight: Option<FontWeight>,
-    // italic, underline, etc. can be added here
 }
 
-/*
- * The master struct that holds all possible style properties for a control.
- * The UI description layer produces these and the platform layer consumes
- * them when rendering controls.
- */
+/// Collection of style properties that may be applied to a control.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ControlStyle {
+    /// Optional font override.
     pub font: Option<FontDescription>,
+    /// Optional foreground text color.
     pub text_color: Option<Color>,
+    /// Optional background fill color.
     pub background_color: Option<Color>,
-    // Properties for border, hover, etc., will be added in later phases.
 }
 
-/*
- * A unique, semantic identifier for a reusable style definition. These IDs
- * are used by the application logic to refer to styles without embedding
- * platform-specific details.
- */
+/// Semantic identifier for a reusable style definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum StyleId {
     // General Controls
     DefaultText,

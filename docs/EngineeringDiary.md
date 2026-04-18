@@ -33,3 +33,9 @@ Change: Removed `Clone` from `ParsedControlStyle`, documented the UI-thread even
 Lessons Learned: Small boundary-focused fixes are worth landing early when they remove future footguns without forcing a wider refactor.
 Prevention: Treat native-resource owner types and thread-affinity contracts as explicit review items, not implicit assumptions.
 Refs: src/styling_windows.rs, src/types.rs, src/app.rs, src/controls/listbox_handler.rs
+
+## 2026-04-18 - Crate publish surface tightened for first release
+Type: Decision
+Context: The phase 2 API/release review found that the crate was close to publishable but still exposed an inconsistent root API, shipped author-only files in `cargo package`, and rendered sparse docs.rs output despite existing prose in source comments.
+Change: Curated `Cargo.toml` package metadata and include rules, switched the declared license to match the shipped MIT license file, added docs.rs target metadata plus a CI workflow and compiled example, re-exported the remaining public support types from `src/lib.rs`, standardized public identifier wrappers on constructor/accessor helpers, and converted key public prose to rustdoc-visible comments.
+Refs: Cargo.toml, src/lib.rs, src/types.rs, src/styling_primitives.rs, src/error.rs, src/app.rs, Readme.md, examples/hello_window.rs, .github/workflows/ci.yml, CHANGELOG.md

@@ -1,22 +1,11 @@
-/*
- * This module defines core data types used for communication between the
- * application logic and the platform layer. It includes identifiers for windows
- * and tree items, configurations for UI elements (windows, menus),
- * platform-agnostic event types (`AppEvent`), commands for the platform layer
- * (`PlatformCommand`), severity levels for messages (`MessageSeverity`),
- * and semantic identifiers for menu actions (`MenuActionId`). It also defines the
- * `PlatformEventHandler` trait that the application logic must implement.
- */
+//! Core platform-agnostic types shared between host logic and the Win32 backend.
 
 use std::path::PathBuf;
 
 use super::styling_primitives::{Color, ControlStyle, FontDescription, StyleId};
 
-// An opaque identifier for a native window, managed by the platform layer.
-//
-// The application logic layer uses this ID to refer to specific windows
-// when sending commands or receiving events, without needing to know about
-// native window handles like HWND.
+/// Opaque identifier for a native top-level window managed by the platform layer.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(pub(crate) usize);
 
@@ -30,17 +19,39 @@ impl WindowId {
     }
 }
 
-// An opaque identifier for an item within a tree-like control (e.g., TreeView).
-//
-// This ID is generated and managed by the application logic layer and used to
-// uniquely identify tree items in commands and events. The platform layer
-// maps this to native tree item handles.
+/// Opaque identifier for an item within a tree-like control.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TreeItemId(pub u64);
+pub struct TreeItemId(pub(crate) u64);
+
+impl TreeItemId {
+    /// Creates a tree-item identifier from the host-defined raw value.
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the host-defined raw value.
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
 
 /// An opaque identifier for an item in the custom list control.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ListBoxItemId(pub u64);
+pub struct ListBoxItemId(pub(crate) u64);
+
+impl ListBoxItemId {
+    /// Creates a list-box item identifier from the host-defined raw value.
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the host-defined raw value.
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
 
 /// Badge payload rendered inside a custom list-row pill.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,15 +70,10 @@ pub struct ListBoxItemDescriptor {
     pub enabled: bool,
 }
 
-/*
- * Represents a logical UI control identifier shared between the app logic
- * and the platform layer. Wrapping the raw `i32` ID prevents accidental
- * mixing with unrelated integer values and documents the intended usage.
- * The platform layer maps these logical IDs to native control handles.
- * [CDU-ControlLogicalIdsV1] Every control is referenced through this strongly typed wrapper instead of raw HWND values.
- */
+/// Logical identifier for a control managed by the platform layer.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ControlId(pub i32);
+pub struct ControlId(pub(crate) i32);
 
 impl ControlId {
     pub const fn new(raw: i32) -> Self {
@@ -91,53 +97,71 @@ impl From<ControlId> for i32 {
     }
 }
 
-/*
- * Strongly typed identifier for application-defined menu actions.
- *
- * Wrapping the raw `u32` in a dedicated newtype keeps the public API generic
- * while still allowing consumers to use compile-time constants for their menu
- * semantics. [CDU-MenuActionIdV1] The platform layer only needs to track these
- * opaque IDs and map them to Win32 menu command identifiers.
- */
+/// Strongly typed identifier for an application-defined menu action.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MenuActionId(pub u32);
+pub struct MenuActionId(pub(crate) u32);
 
-// --- Data Structures for UI Description (Platform-Agnostic) ---
+impl MenuActionId {
+    /// Creates a menu action identifier from a host-defined raw value.
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
 
-// Configuration for creating a new native window.
-//
-// Provided by the application logic to the platform layer, describing
-// the desired properties of a window without specifying native details.
+    /// Returns the host-defined raw value.
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for MenuActionId {
+    fn from(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<MenuActionId> for u32 {
+    fn from(action_id: MenuActionId) -> Self {
+        action_id.0
+    }
+}
+
+/// Configuration for creating a new top-level native window.
 #[derive(Debug, Clone)]
 pub struct WindowConfig<'a> {
+    /// Initial window title.
     pub title: &'a str,
+    /// Initial client width in pixels.
     pub width: i32,
+    /// Initial client height in pixels.
     pub height: i32,
 }
 
-// Represents the visual state-image lane of an item in a tree control.
-//
-// `Hidden` reserves the lane but leaves it blank, which is useful when the host
-// application wants consistent alignment without exposing a user-toggleable
-// checkbox for that row.
+/// Visual state-image lane of an item in a tree control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckState {
+    /// Reserves the lane but leaves it blank.
     Hidden,
+    /// Shows a checked state image.
     Checked,
+    /// Shows an unchecked state image.
     Unchecked,
 }
 
-// Describes a single item to be displayed in a tree-like control.
-//
-// This structure is used by the application logic to define the content
-// and hierarchy of a tree view, which the platform layer then renders.
+/// Descriptor for one tree item, including its children and style override.
 #[derive(Debug, Clone)]
 pub struct TreeItemDescriptor {
+    /// Stable host-defined identifier for this item.
     pub id: TreeItemId,
+    /// Visible label text.
     pub text: String,
+    /// Whether the item should be rendered with folder affordances.
     pub is_folder: bool,
+    /// Requested checkbox/state-image lane state.
     pub state: CheckState,
+    /// Nested child items.
     pub children: Vec<TreeItemDescriptor>,
+    /// Optional semantic style override.
     pub style_override: Option<StyleId>,
 }
 
@@ -153,84 +177,61 @@ pub enum TreeItemMarkerKind {
     Gray,
 }
 
-/*
- * Configuration for a single menu item, used by `PlatformCommand::CreateMainMenu`.
- *
- * Each item can opt into semantic routing by providing a `MenuActionId`; popups
- * omit the action and supply child `MenuItemConfig` entries instead.
- */
+/// Configuration for one menu item in a declarative menu tree.
 #[derive(Debug, Clone)]
 pub struct MenuItemConfig {
+    /// Action routed back through [`AppEvent::MenuActionClicked`], if any.
     pub action: Option<MenuActionId>,
+    /// Menu caption text, including Win32 accelerator markers such as `&File`.
     pub text: String,
-    pub children: Vec<MenuItemConfig>, // For submenus
+    /// Child items for popup menus.
+    pub children: Vec<MenuItemConfig>,
 }
 
-// --- Layout Primitives ---
-
-/*
- * Defines how a control should dock within its parent container.
- * This is a simplified docking model. More advanced anchoring or grid systems
- * could be introduced later.
- * TODO: I think many of these have not been implemented yet.
- */
+/// Docking rule used by the built-in layout engine.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DockStyle {
-    None,   // No docking, control is positioned manually or by other rules.
-    Top,    // Docks to the top edge of the container.
-    Bottom, // Docks to the bottom edge of the container.
-    Left,   // Docks to the left edge of the container.
-    Right,  // Docks to the right edge of the container.
-    Fill,   // Fills all remaining space in the container (both axes).
-    ProportionalFill { weight: f32 }, // Fills space along main axis proportionally with siblings.
+    /// No docking. Positioning is handled elsewhere.
+    None,
+    /// Dock to the top edge of the parent container.
+    Top,
+    /// Dock to the bottom edge of the parent container.
+    Bottom,
+    /// Dock to the left edge of the parent container.
+    Left,
+    /// Dock to the right edge of the parent container.
+    Right,
+    /// Fill the remaining space in the parent container.
+    Fill,
+    /// Fill space along the main axis proportionally with siblings.
+    ProportionalFill { weight: f32 },
 }
 
-/*
- * A rule that associates a control (by its ID) with a specific docking style.
- * The `order` field can be used to determine the sequence in which docking
- * calculations are performed (e.g., top/bottom docks first, then left/right, then fill).
- * Lower order values are typically processed first.
- * The `parent_control_id` specifies the logical ID of the parent control; `None` indicates
- * the main window client area is the parent.
- */
+/// Associates a control with a docking style inside a parent container.
 #[derive(Debug, Clone)]
 pub struct LayoutRule {
-    pub control_id: ControlId, // The ID of the control this rule applies to.
-    pub parent_control_id: Option<ControlId>, // ID of the parent control, None for main window.
+    /// Control that the rule applies to.
+    pub control_id: ControlId,
+    /// Parent control, or `None` for the main window client area.
+    pub parent_control_id: Option<ControlId>,
+    /// Docking behavior to apply.
     pub dock_style: DockStyle,
-    pub order: u32, // Order of application (e.g., 0 for top, 1 for bottom, 10 for fill)
-    pub fixed_size: Option<i32>, // For Top/Bottom, this is height. For Left/Right, this is width. Not used for Fill/None.
-    pub margin: (i32, i32, i32, i32), // (top, right, bottom, left) margins around the control.
+    /// Application order for sibling layout rules.
+    pub order: u32,
+    /// Fixed width or height for edge docking modes.
+    pub fixed_size: Option<i32>,
+    /// Margins in `(top, right, bottom, left)` order.
+    pub margin: (i32, i32, i32, i32),
 }
 
-// --- Events from Platform to App Logic ---
-
-/*
- * Represents platform-agnostic UI events generated by the native toolkit.
- *
- * The platform layer translates native OS events into these types and
- * sends them to the application logic layer for handling. Menu item clicks
- * are now generalized into `MenuActionClicked`.
- *
- * ## Splitter Event Contract
- *
- * Splitter controls (when implemented) emit events with `desired_left_width_px` in
- * **window client coordinates** (not raw mouse x). The platform layer is responsible
- * for computing the desired width by:
- * 1. Converting the mouse position to window client coordinates
- * 2. Accounting for any relevant margins
- * 3. Accounting for the splitter's own thickness/width
- *
- * This ensures the application logic receives a value that directly represents
- * the intended total width of the left region, ready for clamping and state updates.
- */
+/// Platform-agnostic UI events translated from native toolkit activity.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum AppEvent {
     WindowCloseRequestedByUser {
         window_id: WindowId,
     },
-    // Signals that a window has been resized.
     WindowResized {
         window_id: WindowId,
         width: i32,
@@ -243,8 +244,6 @@ pub enum AppEvent {
         outer_width: i32,
         outer_height: i32,
     },
-    // Signals that a window and its native resources have been destroyed.
-    // The `WindowId` should be considered invalid after this event.
     WindowDestroyed {
         window_id: WindowId,
     },
@@ -272,16 +271,13 @@ pub enum AppEvent {
         control_id: ControlId,
         position: u32,
     },
-    // Signals that a button was clicked.
     ButtonClicked {
         window_id: WindowId,
         control_id: ControlId,
     },
-    // Signals that a menu item was clicked, identified by its semantic `MenuActionId`.
     MenuActionClicked {
         action_id: MenuActionId,
     },
-    // Signals the result of a "Save File" dialog.
     FileSaveDialogCompleted {
         window_id: WindowId,
         result: Option<std::path::PathBuf>,
@@ -316,7 +312,6 @@ pub enum AppEvent {
         window_id: WindowId,
         path: Option<PathBuf>,
     },
-    // Signals that the initial static UI setup for the main window is complete.
     MainWindowUISetupComplete {
         window_id: WindowId,
     },
@@ -326,55 +321,40 @@ pub enum AppEvent {
         vertical_pos: u32,
         horizontal_pos: u32,
     },
-    // Signals that text was entered in an input control after debouncing.
     InputTextChanged {
         window_id: WindowId,
         control_id: ControlId,
         text: String,
     },
-    // Signals that a splitter is being dragged by the user.
-    // Emitted continuously during the drag operation.
-    // The `desired_left_width_px` is in window client coordinates and represents
-    // the total width the left region should have (see Splitter Event Contract above).
     SplitterDragging {
         window_id: WindowId,
         control_id: ControlId,
         desired_left_width_px: i32,
     },
-    // Signals that the user has finished dragging the splitter (mouse button released).
-    // The `desired_left_width_px` is the final position in window client coordinates.
     SplitterDragEnded {
         window_id: WindowId,
         control_id: ControlId,
         desired_left_width_px: i32,
     },
-    // Signals that a ComboBox selection was changed by the user.
-    // None means no selection (CB_ERR).
     ComboBoxSelectionChanged {
         window_id: WindowId,
         control_id: ControlId,
         selected_index: Option<usize>,
     },
-    // Signals that a RadioButton was selected by the user.
     RadioButtonSelected {
         window_id: WindowId,
         control_id: ControlId,
     },
-    // Signals that a CheckBox was toggled by the user.
-    // The `checked` field reflects the new state after the click.
     CheckBoxToggled {
         window_id: WindowId,
         control_id: ControlId,
         checked: bool,
     },
-    // Signals that the user clicked a tab in a TabBar control.
     TabBarSelectionChanged {
         window_id: WindowId,
         control_id: ControlId,
         selected_index: usize,
     },
-    // Signals that a toggle switch was toggled by the user (click or keyboard).
-    // The `checked` field reflects the new state after the toggle.
     ToggleSwitchToggled {
         window_id: WindowId,
         control_id: ControlId,
@@ -382,28 +362,28 @@ pub enum AppEvent {
     },
 }
 
-// Defines the severity of a message to be displayed, e.g., in the status bar.
-// Ordered from least to most severe for comparison. `None` clears.
-// TODO: 'None' isn't used, is it needed?
+/// Severity level used by status and message-box surfaces.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum MessageSeverity {
-    None,        // Clears the status, or lowest priority if not explicitly clearing
-    Information, // Neutral information
-    Warning,     // A warning to the user
-    Error,       // An error has occurred
+    /// Clears the status surface or represents the lowest priority.
+    None,
+    /// Neutral information.
+    Information,
+    /// Warning state.
+    Warning,
+    /// Error state.
+    Error,
 }
 
-// --- Label Classification ---
-// TODO: Only 'StatusBar' is currently used, is it needed?
+/// Semantic classification for label controls.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelClass {
     Default,
     StatusBar,
 }
-
-// --- Splitter Orientation ---
 
 /// Defines the orientation of a splitter control.
 ///
@@ -527,13 +507,10 @@ pub enum FormFieldValue {
     CheckBox { field_id: String, checked: bool },
 }
 
-// Represents platform-agnostic commands sent from the application logic to the platform layer.
-//
-// These commands instruct the platform layer to perform specific actions on
-// native UI elements.
-// TODO: All commands that create controls should use the same name for this ID. E.g. "control_id".
+/// Platform-agnostic commands sent from host logic to the platform layer.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum PlatformCommand {
     SetWindowTitle {
         window_id: WindowId,
@@ -597,11 +574,6 @@ pub enum PlatformCommand {
         window_id: WindowId,
         form: FormDialogDescriptor,
     },
-    /*
-     * Shows a simple modal message box from the platform layer.
-     * The application logic provides the window owner, title, body text,
-     * and a severity that the platform layer maps to the appropriate icon.
-     */
     ShowMessageBox {
         window_id: WindowId,
         title: String,
@@ -647,12 +619,9 @@ pub enum PlatformCommand {
         items: Vec<ListBoxItemDescriptor>,
         badge_column_width: u16,
     },
-    // Signals to the platform layer that all initial UI description commands
-    // for the main window have been enqueued and processed.
     SignalMainWindowUISetupComplete {
         window_id: WindowId,
     },
-    // New command to define layout rules for controls within a window.
     DefineLayout {
         window_id: WindowId,
         rules: Vec<LayoutRule>,
@@ -669,7 +638,6 @@ pub enum PlatformCommand {
         initial_text: String,
         class: LabelClass, // Classify labels for potential specific styling
     },
-    // TODO: Now that 'CreateInput' can be used to create a read-only item, it should probably change name.
     CreateInput {
         window_id: WindowId,
         parent_control_id: Option<ControlId>,
@@ -760,12 +728,10 @@ pub enum PlatformCommand {
         text: String,
         severity: MessageSeverity,
     },
-    // Expands only the currently visible items in a TreeView. Used when a filter is active.
     ExpandVisibleTreeItems {
         window_id: WindowId,
         control_id: ControlId,
     },
-    // Expands all items in a TreeView regardless of visibility.
     ExpandAllTreeItems {
         window_id: WindowId,
         control_id: ControlId,
@@ -841,13 +807,10 @@ pub enum PlatformCommand {
         accent_color: Color,
         font: Option<FontDescription>,
     },
-    // --- Style Management Commands ---
-    // This style can then be applied to controls.
     DefineStyle {
         style_id: StyleId,
         style: ControlStyle,
     },
-    // Applies a previously defined style to a specific control.
     ApplyStyleToControl {
         window_id: WindowId,
         control_id: ControlId,

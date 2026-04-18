@@ -1460,7 +1460,7 @@ fn push_str_utf16(vec: &mut Vec<u8>, s: &str) {
 
 // Helper to align a byte vector to a DWORD (4-byte) boundary.
 fn align_to_dword(vec: &mut Vec<u8>) {
-    while !vec.len().is_multiple_of(align_of::<u32>()) {
+    while vec.len() % align_of::<u32>() != 0 {
         vec.push(0);
     }
 }

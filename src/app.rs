@@ -1249,20 +1249,13 @@ impl Drop for Win32ApiInternalState {
     }
 }
 
-/*
- * Provides the main interface for the application to interact with the
- * underlying Win32 platform. It handles window creation, command execution,
- * and running the main event loop.
- */
+/// Main entry point for interacting with the Win32 platform implementation.
 pub struct PlatformInterface {
     internal_state: Arc<Win32ApiInternalState>,
 }
 
 impl PlatformInterface {
-    /*
-     * Creates a new `PlatformInterface`.
-     * Initializes the internal Win32 state and registers the main window class.
-     */
+    /// Creates a new platform interface and registers the main window class.
     pub fn new(app_name_for_class: String) -> PlatformResult<Self> {
         window_common::init_app_dark_mode();
         let internal_state = Win32ApiInternalState::new(app_name_for_class)?;
@@ -1273,11 +1266,7 @@ impl PlatformInterface {
         Ok(PlatformInterface { internal_state })
     }
 
-    /*
-     * A `WindowId` is generated and associated with the native window's state.
-     * The window is not shown until a `PlatformCommand::ShowWindow` is received.
-     * [CDU-WindowCreationV1] Creating a top-level window wires logical metadata to the native HWND before it is ever shown.
-     */
+    /// Creates a new native window and returns its logical identifier.
     pub fn create_window(&self, config: WindowConfig) -> PlatformResult<WindowId> {
         let window_id = self.internal_state.prepare_new_window()?;
 
@@ -1319,13 +1308,7 @@ impl PlatformInterface {
         Ok(window_id)
     }
 
-    /*
-     * Takes the application's event handler and a list of initial commands.
-     * Processes initial commands, then enters the message loop, dequeuing and
-     * executing commands from the event handler before processing OS messages.
-     * Returns when the application quits.
-     * [CDU-CmdEventPatternV1] The main loop dequeues `PlatformCommand`s first and then emits `AppEvent`s back to the handler, enforcing the command/event contract.
-     */
+    /// Runs the main event loop until the application quits.
     pub fn main_event_loop(
         &self,
         event_handler_param: Arc<Mutex<dyn PlatformEventHandler>>,

@@ -1,14 +1,14 @@
-/*
- * Provides the public entry point for the CommanDuctUI crate, a reusable Win32 UI
- * layer extracted from SourcePacker's original `platform_layer`. This module wires
- * together the platform-agnostic types, styling primitives, and the Windows-specific
- * implementation so downstream applications can treat it as a single dependency.
- *
- * The library exposes only the safe API surface (`PlatformInterface`, `PlatformCommand`,
- * etc.) while keeping Win32 internals scoped to the crate. Conditional compilation keeps
- * portable pieces (types, styling primitives) available on every platform so non-Windows
- * builds can still compile and test logic that depends on these types.
- */
+//! CommanDuctUI is a declarative, command-driven Win32 UI toolkit.
+//!
+//! Host applications describe native UI work by enqueueing [`PlatformCommand`] values and
+//! receive translated user interactions as [`AppEvent`] values through a
+//! [`PlatformEventHandler`]. This keeps application state and business logic outside the
+//! platform layer while still exposing the Win32-backed [`PlatformInterface`] on Windows.
+//!
+//! The crate keeps platform-agnostic contracts such as identifiers, event types, and
+//! styling primitives available on every target so host logic can compile and test
+//! cross-platform. The Windows implementation is conditionally compiled behind
+//! `target_os = "windows"`.
 #[cfg(target_os = "windows")]
 pub mod app;
 #[cfg(target_os = "windows")]
@@ -31,11 +31,13 @@ pub(crate) mod window_common;
 
 #[cfg(target_os = "windows")]
 pub use app::PlatformInterface;
-pub use error::Result as PlatformResult;
+pub use error::{PlatformError, Result as PlatformResult};
 pub use styling_primitives::{Color, ControlStyle, FontDescription, FontWeight, StyleId};
 pub use types::{
     AppEvent, BadgeDescriptor, ChartDataPacket, ChartLineData, ChartLineEmphasis, CheckState,
-    FormButtons, FormDialogDescriptor, FormField, FormFieldValue, FormFileExistsWarning, FormRow,
-    FormTextValidation, ListBoxItemDescriptor, ListBoxItemId, MessageSeverity, PlatformCommand,
-    PlatformEventHandler, TreeItemDescriptor, TreeItemId, UiStateProvider, WindowConfig, WindowId,
+    ControlId, DockStyle, FormButtons, FormDialogDescriptor, FormField, FormFieldValue,
+    FormFileExistsWarning, FormRow, FormTextValidation, LabelClass, LayoutRule,
+    ListBoxItemDescriptor, ListBoxItemId, MenuActionId, MenuItemConfig, MessageSeverity,
+    PlatformCommand, PlatformEventHandler, SplitterOrientation, TreeItemDescriptor, TreeItemId,
+    TreeItemMarkerKind, UiStateProvider, WindowConfig, WindowId,
 };

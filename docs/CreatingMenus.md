@@ -23,9 +23,9 @@ It's best practice to define all your action IDs as constants in a central locat
 // In my_app/src/constants.rs
 use commanductui::MenuActionId;
 
-pub const ACTION_FILE_NEW: MenuActionId = MenuActionId(1);
-pub const ACTION_FILE_OPEN: MenuActionId = MenuActionId(2);
-pub const ACTION_FILE_SAVE: MenuActionId = MenuActionId(3);
+pub const ACTION_FILE_NEW: MenuActionId = MenuActionId::new(1);
+pub const ACTION_FILE_OPEN: MenuActionId = MenuActionId::new(2);
+pub const ACTION_FILE_SAVE: MenuActionId = MenuActionId::new(3);
 ```
 
 #### Step 2: Describe the Menu Structure

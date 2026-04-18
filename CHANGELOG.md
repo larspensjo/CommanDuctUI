@@ -4,41 +4,50 @@ This file tracks released, user-facing crate changes.
 Update it together with `Cargo.toml` when cutting a new version.
 Skip changelog entries for internal-only refactors, plans, review docs, diary updates, and doc-only or test-only changes unless they ship as part of a user-visible release.
 
-## 1.0.8
+## Unreleased
+
+## 2.0.0 - 2026-04-18
+- **BREAKING**: Make `ControlId`, `TreeItemId`, `ListBoxItemId`, and `MenuActionId` opaque by standardizing construction on `::new(...)` plus `.raw()` accessors instead of public tuple-field access.
+- **BREAKING**: Mark `AppEvent`, `PlatformCommand`, `StyleId`, and `MessageSeverity` as `#[non_exhaustive]`, requiring downstream crates to include a fallback match arm for forward compatibility.
+- **API**: Re-export `PlatformError`, control/menu/layout identifier types, and other public support types from the crate root; add constructor/accessor helpers for all public identifier newtypes and mark the growth-oriented public enums as `#[non_exhaustive]`.
+- **Release**: Add crates.io metadata, docs.rs target metadata, a curated package include list, a compiled `examples/hello_window.rs` example, and a GitHub Actions CI workflow.
+- **Docs**: Add crate-level/public-item rustdoc, fix the README example to use the created window's `WindowId`, and normalize the project license text to MIT-only.
+
+## 1.0.8 - 2026-04-10
 - **Feature**: Add `StyleId::MetadataText` so host applications can define a reusable label style for secondary metadata text.
 
-## 1.0.7
+## 1.0.7 - 2026-04-08
 - **Fix**: Owner-drawn list box hover changes now invalidate only the previous and current row instead of the full client, eliminating the left-edge flicker visible while moving the mouse across article rows.
 
-## 1.0.6
+## 1.0.6 - 2026-04-08
 - **Fix**: Owner-drawn list box selection now defaults to the warm visual-design palette instead of the older cool blue-gray fallback, so selected rows and the left accent bar match the app accent system out of the box.
 - **Feature**: Add `StyleId::ListBoxSelectionAccent` and let list boxes consume `ListBoxRow` / `ListBoxSelectedRow` / `ListBoxSelectionAccent` / `ListBoxHoverRow` / `ListBoxDisabledRow` directly, so host apps can theme row states without patching `CommanDuctUI`.
 
-## 1.0.5
+## 1.0.5 - 2026-04-06
 - **Feature**: Add listbox keydown forwarding so host apps can handle control-local shortcuts without routing through the generic window message path.
 - **Feature**: Extend owner-drawn listbox rows with additional badge and marker presentation hooks so hosts can attach richer row metadata without forking the control.
 - **Fix**: Restore the generic `SecondaryButton` contract, including correct enabled-state updates for demoted non-primary footer actions.
 
-## 1.0.4
+## 1.0.4 - 2026-04-06
 - **Tests**: Rewrite brittle `treeview_handler` unit tests around invariant-level assertions instead of exact pixel rectangles, packed mask literals, and exact palette values where those details are implementation choices rather than the public behavior contract.
 - **Hardening**: Keep explicit coverage for TreeView marker placement, reserved state-icon lane spacing, hidden-lane semantics, and warm/neutral marker palette intent while making harmless layout-tuning changes less likely to break the suite.
 
-## 1.0.3
+## 1.0.3 - 2026-04-06
 - **Fix**: Owner-drawn toggle switches now claim focus on click, so keyboard follow-up actions stay on the control the user just activated instead of remaining on the previous focus target.
 - **Feature**: Owner-drawn tab bars are now keyboard-accessible. They claim focus on click, request arrow-navigation dialog keys, render a focus cue, and support `Left` / `Right` / `Home` / `End` selection changes in addition to mouse clicks.
 
-## 1.0.2
+## 1.0.2 - 2026-04-06
 - **Fix**: Owner-drawn list box now claims keyboard focus on click and returns the appropriate `WM_GETDLGCODE` flags so Arrow/Page/Home/End navigation reliably reaches the control inside dialog-style window message loops without over-claiming character input.
 - **Hardening**: Add a shared `keyboard_navigation` helper for custom controls that centralizes the Win32 contract for dialog-navigation behavior (`WS_TABSTOP`, focus-on-click, and dialog-code negotiation) instead of re-encoding that behavior in each control WndProc.
 
-## 1.0.1
+## 1.0.1 - 2026-04-06
 
 - **Fix**: Badge text in the owner-drawn list box was drawn with the DC's default system font instead of `meta_font` because `SelectObject` was called to measure text width and then immediately restored before `DrawTextW` ran. Short labels such as "OK" were silently truncated to "O." at normal DPI. The font is now kept selected across both the measurement and the draw call using the new `SelectedObject` RAII guard.
 - **Fix**: Badge column was always at least 130 px wide regardless of badge content, pushing list row titles far from their badges. The minimum is now 44 px so short status badges ("OK", "ERR") leave a tight, readable gap before the title.
 - **Fix**: Owner-drawn list box scrollbar rendered in the system light theme. `try_enable_dark_mode` is now called on the list box window after creation so the native scrollbar inherits the app dark-mode policy.
 - **Hardening**: Add `SelectedObject` RAII guard in `gdi_utils` that selects a GDI object into an HDC and restores the previous selection on `Drop`. Eliminates the class of bugs where a manual `SelectObject` restore is omitted on an early return or during future edits. Applied across `listbox_handler`, `chart_handler` (which had four separate early-return restore sites), `tab_bar_handler`, and `toggle_switch_handler`.
 
-## 1.0.0
+## 1.0.0 - 2026-04-05
 
 - Add an owner-drawn `ListBox` control contract for structured multi-line rows with badge descriptors, selection events, and programmatic selection commands
 - Add `ListBoxRow` / `ListBoxSelectedRow` / `ListBoxHoverRow` / `ListBoxDisabledRow` styles plus badge styles for priority, category, status, and indirect markers

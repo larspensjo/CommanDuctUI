@@ -1,9 +1,28 @@
 [package]
 name = "commanductui"
-version = "1.0.8"
+version = "2.0.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 description = "Declarative, command-driven Win32 UI toolkit powering SourcePacker."
+repository = "https://github.com/larspensjo/CommanDuctUI"
+homepage = "https://github.com/larspensjo/CommanDuctUI"
+documentation = "https://docs.rs/commanductui"
+readme = "Readme.md"
+keywords = ["win32", "windows", "gui", "ui", "declarative"]
+categories = ["gui", "os::windows-apis"]
+rust-version = "1.85"
+include = [
+    "src/**",
+    "examples/**",
+    "Cargo.toml",
+    "LICENSE",
+    "Readme.md",
+    "CHANGELOG.md",
+]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 
 [dependencies]
 log = "0.4.28"

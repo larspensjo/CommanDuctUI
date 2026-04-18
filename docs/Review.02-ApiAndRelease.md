@@ -16,6 +16,10 @@ public surfaces in [src/types.rs](../src/types.rs),
 > strategy advice rather than defects. Affected findings: F-02-002, F-02-004,
 > F-02-005, F-02-006, F-02-008, F-02-009, F-02-012, F-02-013. One new finding
 > was added: F-02-014 (package contents hygiene).
+>
+> **Implementation note (2026-04-18).** Follow-up work fixed F-02-001,
+> F-02-002, F-02-003, F-02-004, F-02-006, F-02-007, F-02-009, F-02-010,
+> F-02-011, and F-02-014. F-02-012 remains open as future API-shaping work.
 
 ## Summary verdict
 
@@ -186,7 +190,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-001: License files do not match the `MIT OR Apache-2.0` SPDX claim
 - **Severity:** Major
 - **Dimension:** release
-- **Status:** open
+- **Status:** fixed
 - **Location:** [Cargo.toml:5](../Cargo.toml), [LICENSE](../LICENSE), [Readme.md:166-169](../Readme.md)
 - **Observation:** `Cargo.toml` declares a dual MIT-or-Apache license, but
   only a single MIT `LICENSE` file exists. `Readme.md` links to
@@ -204,7 +208,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-002: Recommended `Cargo.toml` metadata is incomplete
 - **Severity:** Minor
 - **Dimension:** release
-- **Status:** open
+- **Status:** fixed
 - **Location:** [Cargo.toml](../Cargo.toml)
 - **Observation:** `cargo package` prints one warning:
   `manifest has no documentation, homepage or repository`. These three
@@ -227,7 +231,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-003: No crate-level rustdoc; most public items use non-rustdoc comments
 - **Severity:** Major
 - **Dimension:** api
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/lib.rs:1-11](../src/lib.rs), [src/app.rs:1252-1261](../src/app.rs),
   [src/types.rs](../src/types.rs), [src/styling_primitives.rs](../src/styling_primitives.rs)
 - **Observation:** `lib.rs` opens with a `/* */` block that is not `//!`, so
@@ -248,7 +252,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-004: Growth-oriented public enums lack `#[non_exhaustive]`
 - **Severity:** Major
 - **Dimension:** api
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/types.rs:229](../src/types.rs) (`AppEvent`),
   [src/types.rs:537](../src/types.rs) (`PlatformCommand`),
   [src/styling_primitives.rs:58](../src/styling_primitives.rs) (`StyleId`),
@@ -292,7 +296,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-006: Several public types are only reachable via internal module paths
 - **Severity:** Minor
 - **Dimension:** api
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/lib.rs:36-41](../src/lib.rs), [src/types.rs](../src/types.rs)
 - **Observation:** `ControlId`, `MenuActionId`, `MenuItemConfig`, `DockStyle`,
   `LayoutRule`, `TreeItemMarkerKind`, `SplitterOrientation`, and `LabelClass`
@@ -316,7 +320,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-007: Identifier newtypes have inconsistent inner visibility and width
 - **Severity:** Minor
 - **Dimension:** api
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/types.rs:21](../src/types.rs), [src/types.rs:39](../src/types.rs),
   [src/types.rs:43](../src/types.rs), [src/types.rs:70](../src/types.rs),
   [src/types.rs:103](../src/types.rs)
@@ -347,7 +351,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-009: No `examples/` directory; README example is broken
 - **Severity:** Minor
 - **Dimension:** release
-- **Status:** open
+- **Status:** fixed
 - **Location:** repository root, [Readme.md:65-127](../Readme.md#L65)
 - **Observation:** The README embeds a 60-line working example but nothing
   compiles it. The example uses `WindowId(1)` directly, which would not
@@ -362,7 +366,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-010: No CI workflow
 - **Severity:** Minor
 - **Dimension:** release
-- **Status:** open
+- **Status:** fixed
 - **Location:** repository root (`.github/` absent)
 - **Observation:** No GitHub Actions or equivalent configuration.
 - **Why it matters:** Without CI a publish-blocking regression (clippy
@@ -376,7 +380,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-011: CHANGELOG lacks an `Unreleased` section and releases lose dates post-1.0
 - **Severity:** Nit
 - **Dimension:** release
-- **Status:** open
+- **Status:** fixed
 - **Location:** [CHANGELOG.md](../CHANGELOG.md)
 - **Observation:** Entries for 0.x releases carry dates (e.g.
   `## 0.9.0 - 2026-03-24`); entries 1.0.0-1.0.8 omit them. There is no
@@ -415,7 +419,7 @@ crates.io: `.claude/settings.local.json`, `.vscode/tasks.json`, `CLAUDE.md`,
 ### F-02-014: `cargo package` ships local editor, plan, and review material
 - **Severity:** Major
 - **Dimension:** release
-- **Status:** open
+- **Status:** fixed
 - **Location:** [Cargo.toml](../Cargo.toml), repository root
 - **Observation:** `cargo package --allow-dirty --list` includes files that
   have nothing to do with the library contract:
