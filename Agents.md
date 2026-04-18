@@ -8,14 +8,15 @@
 - When creating or saving plan documents, always save them to the `docs/` folder unless explicitly told otherwise. Use the prfix 'Plan.'.
 
 ## Architecture
-- Preserve the unidirectional data flow: input -> action -> reducer -> state -> render, with side effects isolated and fed back as actions.
-- Reducers must stay pure and unit-testable.
+- Preserve the host/library flow: native input -> `AppEvent` -> host state/update logic -> `PlatformCommand` -> native effect/render.
+- Keep application state and business logic out of the platform layer.
+- Keep native side effects isolated behind event translation and command execution seams.
 - Keep entry points (`main.rs`, `mod.rs` and `lib.rs`) files as thin wrappers only.
 - Keep shared constants and behavior DRY; prefer one source of truth over duplicated definitions.
 
 ## Testing
 - Bug fixes should include a regression test when practical.
-- Prefer tests of reducer behavior, emitted effects, and public contracts over internal details.
+- Prefer tests of event translation, emitted effects, and public contracts over internal details.
 - `use super::*;` is acceptable inside an inline `#[cfg(test)]` block, but extracted test files (e.g. `tests.rs`) must use explicit imports.
 
 ## Diary
