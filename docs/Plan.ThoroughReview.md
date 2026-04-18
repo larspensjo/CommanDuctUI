@@ -11,7 +11,7 @@ of later phases; record plan changes in the "Plan revisions" section at the bott
 ## Progress at a glance
 
 - [x] Phase 0 — Survey & framing
-- [ ] Phase 1 — Architecture & module boundaries
+- [x] Phase 1 — Architecture & module boundaries
 - [ ] Phase 2 — Public API, documentation, crates.io readiness
 - [ ] Phase 3 — Correctness & safety
 - [ ] Phase 4 — Code quality & idiomatic Rust
@@ -52,18 +52,18 @@ Optional aids: the `code-review-graph` MCP tools
 
 ### Phase 1 — Architecture & module boundaries
 
-- [ ] Trace a representative command (e.g. `CreateButton`) end-to-end
-- [ ] Trace a representative event (e.g. `ButtonClicked`) end-to-end
-- [ ] Confirm/contradict the `input → action → reducer → state → render` flow
+- [x] Trace a representative command (e.g. `CreateButton`) end-to-end
+- [x] Trace a representative event (e.g. `ButtonClicked`) end-to-end
+- [x] Confirm/contradict the `input → action → reducer → state → render` flow
   documented in [Agents.md:11](../Agents.md#L11)
-- [ ] Audit shared mutable state: grep for `Mutex`, `RefCell`, `Arc`,
+- [x] Audit shared mutable state: grep for `Mutex`, `RefCell`, `Arc`,
   `static mut`, `lazy_static`, `thread_local`
-- [ ] Review the styling platform-split
+- [x] Review the styling platform-split
   ([styling_primitives.rs](../src/styling_primitives.rs) /
   [styling_windows.rs](../src/styling_windows.rs) /
   [styling_stub.rs](../src/styling_stub.rs))
-- [ ] Identify logical seams inside each hot file and sketch proposed decompositions
-- [ ] Produce `docs/Review.01-Architecture.md` with findings and refactor targets
+- [x] Identify logical seams inside each hot file and sketch proposed decompositions
+- [x] Produce `docs/Review.01-Architecture.md` with findings and refactor targets
 
 ### Phase 2 — Public API, documentation, crates.io readiness
 
