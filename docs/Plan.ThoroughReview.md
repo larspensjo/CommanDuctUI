@@ -12,7 +12,7 @@ of later phases; record plan changes in the "Plan revisions" section at the bott
 
 - [x] Phase 0 — Survey & framing
 - [x] Phase 1 — Architecture & module boundaries
-- [ ] Phase 2 — Public API, documentation, crates.io readiness
+- [x] Phase 2 — Public API, documentation, crates.io readiness
 - [ ] Phase 3 — Correctness & safety
 - [ ] Phase 4 — Code quality & idiomatic Rust
 - [ ] Phase 5 — Testability & coverage
@@ -67,19 +67,19 @@ Optional aids: the `code-review-graph` MCP tools
 
 ### Phase 2 — Public API, documentation, crates.io readiness
 
-- [ ] Review every item re-exported from [src/lib.rs](../src/lib.rs) for
+- [x] Review every item re-exported from [src/lib.rs](../src/lib.rs) for
   necessity, naming, and discoverability
-- [ ] Run `cargo doc --no-deps --document-private-items` and audit warnings
-- [ ] Audit rustdoc quality: does each public item have an example?
-- [ ] Audit `Cargo.toml` metadata: `keywords`, `categories`, `repository`,
+- [x] Run `cargo doc --no-deps --document-private-items` and audit warnings
+- [x] Audit rustdoc quality: does each public item have an example?
+- [x] Audit `Cargo.toml` metadata: `keywords`, `categories`, `repository`,
   `documentation`, `readme`
-- [ ] Confirm `LICENSE-MIT` and `LICENSE-APACHE` files exist (currently only `LICENSE`)
-- [ ] Review [CHANGELOG.md](../CHANGELOG.md) discipline
-- [ ] Review feature-flag strategy (currently none — decide if needed)
-- [ ] Check for an `examples/` directory; add recommendation if missing
-- [ ] Review CI scaffolding (or note its absence)
-- [ ] Identify semver tripwires in the current API
-- [ ] Produce `docs/Review.02-ApiAndRelease.md` with a pre-1.0 checklist
+- [x] Confirm `LICENSE-MIT` and `LICENSE-APACHE` files exist (currently only `LICENSE`)
+- [x] Review [CHANGELOG.md](../CHANGELOG.md) discipline
+- [x] Review feature-flag strategy (currently none — decide if needed)
+- [x] Check for an `examples/` directory; add recommendation if missing
+- [x] Review CI scaffolding (or note its absence)
+- [x] Identify semver tripwires in the current API
+- [x] Produce `docs/Review.02-ApiAndRelease.md` with a pre-1.0 checklist
 
 ### Phase 3 — Correctness & safety
 
