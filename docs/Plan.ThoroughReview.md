@@ -10,7 +10,7 @@ of later phases; record plan changes in the "Plan revisions" section at the bott
 
 ## Progress at a glance
 
-- [ ] Phase 0 — Survey & framing
+- [x] Phase 0 — Survey & framing
 - [ ] Phase 1 — Architecture & module boundaries
 - [ ] Phase 2 — Public API, documentation, crates.io readiness
 - [ ] Phase 3 — Correctness & safety
@@ -38,13 +38,13 @@ crates.io readiness is folded into the public API phase since the concerns overl
 
 Produce the reference document every later phase cites. No findings yet; just the map.
 
-- [ ] Enumerate every `pub` item re-exported from [src/lib.rs](../src/lib.rs)
-- [ ] Build a module dependency diagram
-- [ ] Classify each source file by responsibility
-- [ ] Catalogue every `PlatformCommand` variant with its handler site
-- [ ] Catalogue every `AppEvent` variant with its emission site
-- [ ] List existing tests and what they cover
-- [ ] Produce `docs/Review.00-Survey.md`
+- [x] Enumerate every `pub` item re-exported from [src/lib.rs](../src/lib.rs)
+- [x] Build a module dependency diagram
+- [x] Classify each source file by responsibility
+- [x] Catalogue every `PlatformCommand` variant with its handler site
+- [x] Catalogue every `AppEvent` variant with its emission site
+- [x] List existing tests and what they cover
+- [x] Produce `docs/Review.00-Survey.md`
 
 Optional aids: the `code-review-graph` MCP tools
 (`build_or_update_graph_tool`, `get_architecture_overview_tool`,
