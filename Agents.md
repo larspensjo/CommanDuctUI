@@ -21,5 +21,6 @@
 
 ## Diary
 - Keep `docs/EngineeringDiary.md` up to date for noteworthy implementations, important decisions, and bug fixes with reusable lessons.
+- Write diary entries as durable change records: state what changed and why, without depending on plan documents or plan IDs.
 - Keep diary entries short and reference concrete artifacts.
 - Add new entries to the end.

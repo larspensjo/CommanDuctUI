@@ -45,7 +45,9 @@ use std::time::Instant;
 
 static LOAD_RICHEDIT_DLL_ONCE: Once = Once::new();
 
-// Type alias for the complex UI state provider type to reduce type complexity.
+// The host owns the strong Arc<Mutex<...>> and may replace it during tests.
+// The platform stores only a Weak behind an outer Mutex so installation/access
+// stay synchronized without creating an ownership cycle.
 type UiStateProviderHolder = Mutex<Option<Weak<Mutex<dyn UiStateProvider>>>>;
 
 /*
@@ -62,6 +64,7 @@ pub(crate) struct Win32ApiInternalState {
     next_window_id_counter: AtomicUsize, // For generating unique WindowIds
     // Central registry for all active windows, mapping WindowId to its native state.
     active_windows: RwLock<HashMap<WindowId, window_common::NativeWindowData>>,
+    // Matches UiStateProviderHolder's ownership shape for the event handler slot.
     application_event_handler: Mutex<Option<Weak<Mutex<dyn PlatformEventHandler>>>>,
     ui_state_provider: UiStateProviderHolder,
     // Stores processed, native-ready style definitions, keyed by a semantic ID.

@@ -16,9 +16,7 @@ use crate::controls::keyboard_navigation::{
 };
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
-use crate::styling::Color;
-use crate::styling_primitives::StyleId;
-use crate::styling_windows::ParsedControlStyle;
+use crate::styling::{Color, ParsedControlStyle, StyleId};
 use crate::types::{ControlId, ListBoxItemDescriptor, ListBoxItemId, WindowId};
 use crate::window_common::{
     ControlKind, WM_APP_LISTBOX_KEYDOWN, WM_APP_LISTBOX_SCROLLED, WM_APP_LISTBOX_SELECTION_CHANGED,

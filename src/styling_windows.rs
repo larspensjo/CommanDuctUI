@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Gdi::{DeleteObject, HBRUSH, HFONT, HGDIOBJ};
  * created from the platform-agnostic descriptions. This encapsulates Win32-specific
  * types and handles their cleanup via the `Drop` trait.
  */
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct ParsedControlStyle {
     pub(crate) font_handle: Option<HFONT>,
     pub(crate) text_color: Option<Color>,

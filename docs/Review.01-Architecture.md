@@ -243,7 +243,7 @@ and `Win32ApiInternalState::define_style` is ~120 lines. Proposed:
 ### F-01-002: `send_event` runs host `handle_event` synchronously on the UI thread
 - **Severity:** Minor
 - **Dimension:** arch
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/app.rs:190-207](../src/app.rs#L190)
 - **Observation:** Events are delivered to the host's `PlatformEventHandler` inline from `WndProc`. There is no queue between native notification and host reducer.
 - **Why it matters:** This is a legitimate design choice (simple, no per-event allocation, preserves message ordering), but it's a public contract that is currently undocumented on `PlatformEventHandler`. A host that performs blocking I/O in `handle_event` or re-enters the library (e.g. opens a modal dialog) can deadlock or starve input. This is the single most load-bearing invariant of the public API and must be called out.
@@ -252,7 +252,7 @@ and `Win32ApiInternalState::define_style` is ~120 lines. Proposed:
 ### F-01-003: `ParsedControlStyle` derives `Clone` while owning GDI resources via `Drop`
 - **Severity:** Critical
 - **Dimension:** correctness
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/styling_windows.rs:18-56](../src/styling_windows.rs#L18)
 - **Observation:** `#[derive(Clone)] pub(crate) struct ParsedControlStyle { font_handle: Option<HFONT>, …, background_brush: Option<HBRUSH> }` and `impl Drop for ParsedControlStyle { /* DeleteObject on both handles */ }`. No call sites currently invoke `.clone()` on it, but the derive silently permits double-free.
 - **Why it matters:** a future edit — even a trivial "let me make a copy of this palette for a test" — would compile without warning and produce a double `DeleteObject`, which is undefined behaviour (MSDN marks `DeleteObject` on an already-freed handle as UB; at best Win32 returns `FALSE`, at worst the handle has been recycled and the new owner's resource is destroyed).
@@ -312,7 +312,7 @@ and `Win32ApiInternalState::define_style` is ~120 lines. Proposed:
 ### F-01-010: `listbox_handler` imports `ParsedControlStyle` via `styling_windows` instead of the `styling` alias
 - **Severity:** Minor
 - **Dimension:** arch
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/controls/listbox_handler.rs:20-21](../src/controls/listbox_handler.rs#L20)
 - **Observation:** lists two imports: `use crate::styling_primitives::StyleId;` and `use crate::styling_windows::ParsedControlStyle;`. Every other handler imports from the target-aliased `crate::styling` module (which already re-exports `StyleId`).
 - **Why it matters:** bypasses the cfg-alias indirection that the module structure depends on. If the `styling_stub` path ever needs to expose a `ParsedControlStyle` shim (e.g. for a cross-platform test target), this import would not follow.
@@ -321,7 +321,7 @@ and `Win32ApiInternalState::define_style` is ~120 lines. Proposed:
 ### F-01-011: `Mutex<Option<Weak<Mutex<dyn …>>>>` on handler/provider slots is unusual
 - **Severity:** Nit
 - **Dimension:** arch
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/app.rs:65-67](../src/app.rs#L65)
 - **Observation:** `application_event_handler` and `ui_state_provider` are typed `Mutex<Option<Weak<Mutex<dyn Trait>>>>`. The outer `Mutex` guards a single "set once at startup" assignment; the `Weak` allows the host to own the strong reference and drop without leaking; the inner `Mutex` locks per-call.
 - **Why it matters:** the shape is load-bearing (must support the host's `Arc<Mutex<dyn Handler>>` ownership pattern) but is not documented. A future maintainer could simplify the outer `Mutex` to `OnceLock` and accidentally break the "replace during tests" scenario.

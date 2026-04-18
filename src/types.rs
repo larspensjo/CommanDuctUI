@@ -881,22 +881,26 @@ pub enum PlatformCommand {
 
 // --- Trait for App Logic to Handle Events ---
 
-// A trait to be implemented by the application logic layer to handle UI events.
-//
-// The platform layer calls methods on this trait to notify the application
-// logic about user interactions or system events.
+/// Receives platform-agnostic UI events from the native platform layer.
+///
+/// # Threading and re-entrancy
+///
+/// `handle_event` runs synchronously on the UI thread while native message
+/// dispatch is in progress. In the current Windows implementation this happens
+/// inline from `Win32ApiInternalState::send_event`, so handlers are expected
+/// not to block: blocking stalls native message dispatch and can hang the UI.
+///
+/// Handlers may enqueue `PlatformCommand` values for the platform layer to
+/// execute on the next command-drain pass. Synchronous re-entrancy back into
+/// the platform layer is unsupported.
 pub trait PlatformEventHandler: Send + Sync + 'static {
-    // Called by the platform layer when a native UI event has been processed.
-    // The implementor should handle the event and enqueue `PlatformCommand`s
-    // for the platform layer to execute.
+    /// Handles one translated native event.
     fn handle_event(&mut self, event: AppEvent);
 
-    // Called by the platform layer when the application is about to exit its main loop.
-    // This allows the application logic to perform any necessary cleanup.
+    /// Called before the platform layer exits its main loop.
     fn on_quit(&mut self) {}
 
-    // Attempts to dequeue a single `PlatformCommand` from the internal queue.
-    // This is called by the platform layer's run loop.
+    /// Attempts to dequeue one `PlatformCommand` for the platform run loop.
     fn try_dequeue_command(&mut self) -> Option<PlatformCommand>;
 }
 
