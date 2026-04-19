@@ -7,6 +7,7 @@ use crate::{
         toggle_switch_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
+    ffi_safety,
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
     types::{
         AppEvent, ControlId, PlatformCommand, PlatformEventHandler, UiStateProvider, WindowConfig,
@@ -191,16 +192,25 @@ impl Win32ApiInternalState {
     // This centralizes the logic for locking, upgrading the weak reference,
     // and calling the handler.
     pub(crate) fn send_event(self: &Arc<Self>, event: AppEvent) {
-        let event_handler_opt = self
-            .application_event_handler
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|weak_handler| weak_handler.upgrade());
+        let event_handler_opt = match self.application_event_handler.lock() {
+            Ok(guard) => guard
+                .as_ref()
+                .and_then(|weak_handler| weak_handler.upgrade()),
+            Err(err) => {
+                log::error!(
+                    "Platform: Failed to lock event handler registry to send event: {err:?}"
+                );
+                None
+            }
+        };
 
         if let Some(handler_arc) = event_handler_opt {
             if let Ok(mut handler_guard) = handler_arc.lock() {
-                handler_guard.handle_event(event);
+                ffi_safety::catch_unwind_ffi(
+                    "Win32ApiInternalState::send_event",
+                    || handler_guard.handle_event(event),
+                    || (),
+                );
             } else {
                 log::error!("Platform: Failed to lock event handler to send event.");
             }
@@ -1441,13 +1451,33 @@ impl PlatformInterface {
 mod tests {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::types::TreeItemId;
+    use crate::types::{MenuActionId, TreeItemId};
     use crate::window_common::NativeWindowData;
     use windows::Win32::{Foundation::HWND, UI::Controls::HTREEITEM};
+
+    struct PanicThenCountHandler {
+        panic_next: bool,
+        handled: usize,
+    }
+
+    impl PlatformEventHandler for PanicThenCountHandler {
+        fn handle_event(&mut self, _event: AppEvent) {
+            if self.panic_next {
+                self.panic_next = false;
+                panic!("intentional handler panic");
+            }
+            self.handled += 1;
+        }
+
+        fn try_dequeue_command(&mut self) -> Option<PlatformCommand> {
+            None
+        }
+    }
 
     // Helper function to create PathBuf from a slice of u16 (wide char buffer)
     // This is useful when dealing with paths from Win32 API calls.
@@ -1511,6 +1541,47 @@ mod tests {
         let guard = state.active_windows().read().unwrap();
         let stored = guard.get(&window_id).unwrap();
         assert_eq!(stored.get_hwnd(), test_hwnd);
+    }
+
+    #[test]
+    fn send_event_ignores_poisoned_handler_registry() {
+        let state = Win32ApiInternalState::new("PoisonTest".to_string()).unwrap();
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = state.application_event_handler.lock().unwrap();
+            panic!("poison registry");
+        }));
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            state.send_event(AppEvent::MenuActionClicked {
+                action_id: MenuActionId::new(1),
+            });
+        }));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn send_event_catches_handler_panics_without_poisoning_handler_mutex() {
+        let state = Win32ApiInternalState::new("HandlerPanicTest".to_string()).unwrap();
+        let handler = Arc::new(Mutex::new(PanicThenCountHandler {
+            panic_next: true,
+            handled: 0,
+        }));
+        *state.application_event_handler.lock().unwrap() = Some(Arc::downgrade(
+            &(handler.clone() as Arc<Mutex<dyn PlatformEventHandler>>),
+        ));
+
+        state.send_event(AppEvent::MenuActionClicked {
+            action_id: MenuActionId::new(1),
+        });
+        state.send_event(AppEvent::MenuActionClicked {
+            action_id: MenuActionId::new(2),
+        });
+
+        let guard = handler.lock().expect("handler lock should stay healthy");
+        assert_eq!(guard.handled, 1);
+        assert!(!guard.panic_next);
     }
 
     #[test]

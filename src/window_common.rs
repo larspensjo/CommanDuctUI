@@ -16,6 +16,7 @@ use super::{
         paint_router, styling_handler, treeview_handler,
     },
     error::{PlatformError, Result as PlatformResult},
+    ffi_safety,
     styling::StyleId,
     types::{AppEvent, ControlId, DockStyle, LayoutRule, MenuActionId, MessageSeverity, WindowId},
 };
@@ -1387,30 +1388,37 @@ unsafe extern "system" fn facade_wnd_proc_router(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let context_ptr = if msg == WM_NCCREATE {
-        let create_struct = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
-        let context_raw_ptr = create_struct.lpCreateParams as *mut WindowCreationContext;
-        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_raw_ptr as isize) };
-        context_raw_ptr
-    } else {
-        unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowCreationContext }
-    };
+    ffi_safety::catch_unwind_ffi(
+        "facade_wnd_proc_router",
+        || {
+            let context_ptr = if msg == WM_NCCREATE {
+                let create_struct = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
+                let context_raw_ptr = create_struct.lpCreateParams as *mut WindowCreationContext;
+                unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_raw_ptr as isize) };
+                context_raw_ptr
+            } else {
+                unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowCreationContext }
+            };
 
-    if context_ptr.is_null() {
-        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-    }
+            if context_ptr.is_null() {
+                return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+            }
 
-    let context = unsafe { &*context_ptr };
-    let internal_state_arc = &context.internal_state_arc;
-    let window_id = context.window_id;
+            let context = unsafe { &*context_ptr };
+            let internal_state_arc = &context.internal_state_arc;
+            let window_id = context.window_id;
 
-    let result = internal_state_arc.handle_window_message(hwnd, msg, wparam, lparam, window_id);
+            let result =
+                internal_state_arc.handle_window_message(hwnd, msg, wparam, lparam, window_id);
 
-    if msg == WM_NCDESTROY {
-        let _ = unsafe { Box::from_raw(context_ptr) };
-        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
-    }
-    result
+            if msg == WM_NCDESTROY {
+                let _ = unsafe { Box::from_raw(context_ptr) };
+                unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
+            }
+            result
+        },
+        || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    )
 }
 
 #[inline]
@@ -1422,12 +1430,22 @@ pub(crate) fn highord_from_wparam(wparam: WPARAM) -> i32 {
     (wparam.0 >> 16) as i32
 }
 #[inline]
-pub(crate) fn loword_from_lparam(lparam: LPARAM) -> i32 {
+pub(crate) fn loword_u16_from_lparam(lparam: LPARAM) -> i32 {
     (lparam.0 & 0xFFFF) as i32
 }
 #[inline]
-pub(crate) fn hiword_from_lparam(lparam: LPARAM) -> i32 {
+pub(crate) fn hiword_u16_from_lparam(lparam: LPARAM) -> i32 {
     ((lparam.0 >> 16) & 0xFFFF) as i32
+}
+
+#[inline]
+pub(crate) fn get_x_lparam(lparam: LPARAM) -> i32 {
+    (lparam.0 & 0xFFFF) as i16 as i32
+}
+
+#[inline]
+pub(crate) fn get_y_lparam(lparam: LPARAM) -> i32 {
+    ((lparam.0 >> 16) & 0xFFFF) as i16 as i32
 }
 
 /// App-level dark mode initialization.
@@ -2231,8 +2249,8 @@ impl Win32ApiInternalState {
         width_height: LPARAM,
         window_id: WindowId,
     ) -> Option<AppEvent> {
-        let client_width = loword_from_lparam(width_height);
-        let client_height = hiword_from_lparam(width_height);
+        let client_width = loword_u16_from_lparam(width_height);
+        let client_height = hiword_u16_from_lparam(width_height);
         log::debug!(
             "Platform: WM_SIZE for WinID {window_id:?}, HWND {hwnd:?}. Client: {client_width}x{client_height}"
         );
@@ -3416,6 +3434,24 @@ mod tests {
             "WM_APP_SPLITTER_DRAG_ENDED"
         );
         assert_eq!(Win32ApiInternalState::message_name(WM_COMMAND), "OTHER");
+    }
+
+    #[test]
+    fn lparam_word_helpers_keep_unsigned_size_contract() {
+        let lparam = LPARAM(((480u32 << 16) | 640u32) as isize);
+
+        assert_eq!(loword_u16_from_lparam(lparam), 640);
+        assert_eq!(hiword_u16_from_lparam(lparam), 480);
+    }
+
+    #[test]
+    fn lparam_coordinate_helpers_sign_extend_negative_positions() {
+        let x = -12i16 as u16 as u32;
+        let y = -34i16 as u16 as u32;
+        let lparam = LPARAM(((y << 16) | x) as isize);
+
+        assert_eq!(get_x_lparam(lparam), -12);
+        assert_eq!(get_y_lparam(lparam), -34);
     }
 
     #[test]

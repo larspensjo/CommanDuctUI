@@ -16,11 +16,12 @@ use crate::controls::keyboard_navigation::{
 };
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::ffi_safety::{self, DeferredWindowState};
 use crate::styling::{Color, ParsedControlStyle, StyleId};
 use crate::types::{ControlId, ListBoxItemDescriptor, ListBoxItemId, WindowId};
 use crate::window_common::{
     ControlKind, WM_APP_LISTBOX_KEYDOWN, WM_APP_LISTBOX_SCROLLED, WM_APP_LISTBOX_SELECTION_CHANGED,
-    try_enable_dark_mode,
+    get_x_lparam, get_y_lparam, try_enable_dark_mode,
 };
 
 use std::sync::{Arc, OnceLock};
@@ -40,9 +41,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetAncestor, GetClientRect, GetDlgCtrlID, GetWindowLongPtrW, HMENU, RegisterClassW, SB_BOTTOM,
     SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
     SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SendMessageW, SetWindowLongPtrW,
-    WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND, WM_GETDLGCODE, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_VISIBLE,
-    WS_VSCROLL,
+    WINDOW_EX_STYLE, WM_ERASEBKGND, WM_GETDLGCODE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD,
+    WS_VISIBLE, WS_VSCROLL,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -205,17 +206,13 @@ impl ListBoxState {
     }
 }
 
-unsafe fn get_or_init_state(hwnd: HWND) -> *mut ListBoxState {
-    let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
-    if ptr == 0 {
-        let state = Box::new(ListBoxState::new());
-        let raw = Box::into_raw(state);
-        unsafe {
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
-        }
-        raw
+unsafe fn get_state(hwnd: HWND) -> Option<*mut ListBoxState> {
+    let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut ListBoxState;
+    if ptr.is_null() {
+        log::warn!("ListBox state missing for hwnd {hwnd:?}.");
+        None
     } else {
-        ptr as *mut ListBoxState
+        Some(ptr)
     }
 }
 
@@ -239,108 +236,130 @@ unsafe extern "system" fn list_box_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    match msg {
-        WM_ERASEBKGND => LRESULT(1),
-        WM_PAINT => {
-            let mut ps = PAINTSTRUCT::default();
-            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
-            if !hdc.is_invalid() {
-                unsafe { paint_list_box(hwnd, hdc) };
+    ffi_safety::catch_unwind_ffi(
+        "list_box_wnd_proc",
+        || match msg {
+            WM_NCCREATE => {
+                let Some(state_ptr) = (unsafe {
+                    DeferredWindowState::<ListBoxState>::adopt_from_create_lparam(lparam)
+                }) else {
+                    log::error!("ListBox WM_NCCREATE missing initial state for hwnd {hwnd:?}.");
+                    return LRESULT(0);
+                };
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
+                }
+                LRESULT(1)
             }
-            let _ = unsafe { EndPaint(hwnd, &ps) };
-            LRESULT(0)
-        }
-        WM_SIZE => {
-            unsafe {
-                update_scroll_info(hwnd);
-                let _ = InvalidateRect(Some(hwnd), None, false);
+            WM_ERASEBKGND => LRESULT(1),
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
+                if !hdc.is_invalid() {
+                    unsafe { paint_list_box(hwnd, hdc) };
+                }
+                let _ = unsafe { EndPaint(hwnd, &ps) };
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_LBUTTONDOWN => {
-            let x = (lparam.0 & 0xFFFF) as i16 as i32;
-            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            unsafe {
-                focus_on_click(hwnd, KEYBOARD_NAVIGATION);
-                if select_row_from_point(hwnd, x, y) {
+            WM_SIZE => {
+                unsafe {
+                    update_scroll_info(hwnd);
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_MOUSEMOVE => {
-            let x = (lparam.0 & 0xFFFF) as i16 as i32;
-            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            unsafe {
-                let state = &mut *get_or_init_state(hwnd);
-                let new_hover = hit_test_row(state, y);
-                if new_hover != state.hover_index {
-                    let previous_hover = state.hover_index;
-                    state.hover_index = new_hover;
-                    invalidate_row_transition(hwnd, previous_hover, new_hover);
-                }
-                if !state.tracking_mouse {
-                    let mut tme = TRACKMOUSEEVENT {
-                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                        dwFlags: TME_LEAVE,
-                        hwndTrack: hwnd,
-                        dwHoverTime: 0,
-                    };
-                    let _ = TrackMouseEvent(&mut tme);
-                    state.tracking_mouse = true;
-                }
-                let _ = x;
-            }
-            LRESULT(0)
-        }
-        WM_MOUSELEAVE => {
-            unsafe {
-                let state = &mut *get_or_init_state(hwnd);
-                let previous_hover = state.hover_index;
-                state.hover_index = None;
-                state.tracking_mouse = false;
-                invalidate_row_transition(hwnd, previous_hover, None);
-            }
-            LRESULT(0)
-        }
-        WM_MOUSEWHEEL => {
-            unsafe {
-                let delta = ((wparam.0 >> 16) as i16) as i32;
-                let rows = if delta > 0 { -3 } else { 3 };
-                scroll_by_rows(hwnd, rows);
-            }
-            LRESULT(0)
-        }
-        WM_VSCROLL => {
-            unsafe {
-                handle_vscroll(hwnd, wparam);
-            }
-            LRESULT(0)
-        }
-        WM_KEYDOWN => {
-            unsafe {
-                // Virtual-key codes are WORD-sized in Win32, so narrowing WPARAM here is lossless.
-                let key_code = wparam.0 as u16;
-                if !handle_keydown(hwnd, key_code) {
-                    notify_keydown(hwnd, key_code);
-                }
-            }
-            LRESULT(0)
-        }
-        WM_GETDLGCODE => dialog_code(KEYBOARD_NAVIGATION)
-            .unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }),
-        WM_DESTROY => {
-            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
-            if ptr != 0 {
-                let _ = unsafe { Box::from_raw(ptr as *mut ListBoxState) };
+            WM_LBUTTONDOWN => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
                 unsafe {
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    focus_on_click(hwnd, KEYBOARD_NAVIGATION);
+                    if select_row_from_point(hwnd, x, y) {
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
                 }
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+            WM_MOUSEMOVE => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                unsafe {
+                    let Some(state_ptr) = get_state(hwnd) else {
+                        return LRESULT(0);
+                    };
+                    let state = &mut *state_ptr;
+                    let new_hover = hit_test_row(state, y);
+                    if new_hover != state.hover_index {
+                        let previous_hover = state.hover_index;
+                        state.hover_index = new_hover;
+                        invalidate_row_transition(hwnd, previous_hover, new_hover);
+                    }
+                    if !state.tracking_mouse {
+                        let mut tme = TRACKMOUSEEVENT {
+                            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                            dwFlags: TME_LEAVE,
+                            hwndTrack: hwnd,
+                            dwHoverTime: 0,
+                        };
+                        let _ = TrackMouseEvent(&mut tme);
+                        state.tracking_mouse = true;
+                    }
+                    let _ = x;
+                }
+                LRESULT(0)
+            }
+            WM_MOUSELEAVE => {
+                unsafe {
+                    let Some(state_ptr) = get_state(hwnd) else {
+                        return LRESULT(0);
+                    };
+                    let state = &mut *state_ptr;
+                    let previous_hover = state.hover_index;
+                    state.hover_index = None;
+                    state.tracking_mouse = false;
+                    invalidate_row_transition(hwnd, previous_hover, None);
+                }
+                LRESULT(0)
+            }
+            WM_MOUSEWHEEL => {
+                unsafe {
+                    let delta = ((wparam.0 >> 16) as i16) as i32;
+                    let rows = if delta > 0 { -3 } else { 3 };
+                    scroll_by_rows(hwnd, rows);
+                }
+                LRESULT(0)
+            }
+            WM_VSCROLL => {
+                unsafe {
+                    handle_vscroll(hwnd, wparam);
+                }
+                LRESULT(0)
+            }
+            WM_KEYDOWN => {
+                unsafe {
+                    // Virtual-key codes are WORD-sized in Win32, so narrowing WPARAM here is lossless.
+                    let key_code = wparam.0 as u16;
+                    if !handle_keydown(hwnd, key_code) {
+                        notify_keydown(hwnd, key_code);
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_GETDLGCODE => dialog_code(KEYBOARD_NAVIGATION)
+                .unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }),
+            WM_NCDESTROY => {
+                let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+                if ptr != 0 {
+                    let _ = unsafe { Box::from_raw(ptr as *mut ListBoxState) };
+                    unsafe {
+                        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    }
+                }
+                LRESULT(0)
+            }
+            _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        },
+        || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    )
 }
 
 unsafe fn handle_vscroll(hwnd: HWND, wparam: WPARAM) {
@@ -359,7 +378,10 @@ unsafe fn handle_vscroll(hwnd: HWND, wparam: WPARAM) {
         }
         x if x == SB_BOTTOM.0 as u32 => {
             let max = {
-                let state = &mut *get_or_init_state(hwnd);
+                let Some(state_ptr) = get_state(hwnd) else {
+                    return;
+                };
+                let state = &mut *state_ptr;
                 state.items.len().saturating_sub(visible_rows(hwnd))
             };
             set_scroll_row(hwnd, max);
@@ -381,7 +403,10 @@ fn is_navigation_key(key: u16) -> bool {
 }
 
 unsafe fn handle_keydown(hwnd: HWND, key: u16) -> bool {
-    let state = &mut *get_or_init_state(hwnd);
+    let Some(state_ptr) = get_state(hwnd) else {
+        return false;
+    };
+    let state = &mut *state_ptr;
     let len = state.items.len();
     if len == 0 {
         return false;
@@ -414,13 +439,19 @@ unsafe fn handle_keydown(hwnd: HWND, key: u16) -> bool {
 }
 
 unsafe fn scroll_by_rows(hwnd: HWND, delta: i32) {
-    let state = &mut *get_or_init_state(hwnd);
+    let Some(state_ptr) = get_state(hwnd) else {
+        return;
+    };
+    let state = &mut *state_ptr;
     let next = (state.scroll_row as i32).saturating_add(delta).max(0) as usize;
     set_scroll_row(hwnd, next);
 }
 
 unsafe fn set_scroll_row(hwnd: HWND, row: usize) {
-    let state = &mut *get_or_init_state(hwnd);
+    let Some(state_ptr) = get_state(hwnd) else {
+        return;
+    };
+    let state = &mut *state_ptr;
     let max_row = state.items.len().saturating_sub(visible_rows(hwnd));
     state.scroll_row = row.min(max_row);
     update_scroll_info(hwnd);
@@ -436,7 +467,10 @@ unsafe fn visible_rows(hwnd: HWND) -> usize {
 }
 
 unsafe fn update_scroll_info(hwnd: HWND) {
-    let state = &mut *get_or_init_state(hwnd);
+    let Some(state_ptr) = get_state(hwnd) else {
+        return;
+    };
+    let state = &mut *state_ptr;
     let visible = visible_rows(hwnd).max(1);
     let max = state.items.len().saturating_sub(visible) as i32;
     let si = SCROLLINFO {
@@ -452,7 +486,10 @@ unsafe fn update_scroll_info(hwnd: HWND) {
 }
 
 unsafe fn ensure_row_visible(hwnd: HWND, row: usize) {
-    let state = &mut *get_or_init_state(hwnd);
+    let Some(state_ptr) = get_state(hwnd) else {
+        return;
+    };
+    let state = &mut *state_ptr;
     let visible = visible_rows(hwnd).max(1);
     if row < state.scroll_row {
         set_scroll_row(hwnd, row);
@@ -483,7 +520,10 @@ fn row_rect(state: &ListBoxState, row_index: usize, width: i32) -> Option<RECT> 
 }
 
 unsafe fn invalidate_row(hwnd: HWND, row_index: usize) {
-    let state = &*get_or_init_state(hwnd);
+    let Some(state_ptr) = get_state(hwnd) else {
+        return;
+    };
+    let state = &*state_ptr;
     let mut client = RECT::default();
     let _ = GetClientRect(hwnd, &mut client);
     if let Some(rect) = row_rect(state, row_index, client.right - client.left) {
@@ -504,7 +544,10 @@ unsafe fn invalidate_row_transition(hwnd: HWND, previous: Option<usize>, current
 }
 
 unsafe fn select_row_from_point(hwnd: HWND, _x: i32, y: i32) -> bool {
-    let state = &mut *get_or_init_state(hwnd);
+    let Some(state_ptr) = get_state(hwnd) else {
+        return false;
+    };
+    let state = &mut *state_ptr;
     let Some(row) = hit_test_row(state, y) else {
         return false;
     };
@@ -944,6 +987,8 @@ pub(crate) fn handle_create_list_box_command(
         Ok(())
     })?;
 
+    let create_state = DeferredWindowState::new(ListBoxState::new());
+    let create_state_raw = create_state.into_raw();
     let hwnd = unsafe {
         match CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -957,10 +1002,11 @@ pub(crate) fn handle_create_list_box_command(
             Some(parent_hwnd),
             Some(HMENU(control_id.raw() as usize as *mut std::ffi::c_void)),
             Some(h_instance),
-            None,
+            Some(create_state_raw as *mut _),
         ) {
             Ok(hwnd) => hwnd,
             Err(err) => {
+                DeferredWindowState::<ListBoxState>::reclaim(create_state_raw);
                 let _ = internal_state.with_window_data_write(window_id, |window_data| {
                     window_data.unregister_control_kind(control_id);
                     Ok(())
@@ -969,13 +1015,11 @@ pub(crate) fn handle_create_list_box_command(
             }
         }
     };
+    unsafe {
+        DeferredWindowState::<ListBoxState>::reclaim(create_state_raw);
+    }
 
     try_enable_dark_mode(hwnd);
-
-    let state = Box::new(ListBoxState::new());
-    unsafe {
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
-    }
     internal_state.with_window_data_write(window_id, |window_data| {
         window_data.register_control_hwnd(control_id, hwnd);
         Ok(())
@@ -999,7 +1043,13 @@ pub(crate) fn handle_populate_list_box_command(
         })
     })?;
     unsafe {
-        let state = &mut *get_or_init_state(hwnd);
+        let state = get_state(hwnd).ok_or_else(|| {
+            PlatformError::OperationFailed(format!(
+                "ListBox state missing for control {} in window {window_id:?}",
+                control_id.raw()
+            ))
+        })?;
+        let state = &mut *state;
         let selected_id = state
             .selected_index
             .and_then(|index| state.items.get(index))
@@ -1035,7 +1085,13 @@ pub(crate) fn handle_set_list_box_selection_command(
         })
     })?;
     unsafe {
-        let state = &mut *get_or_init_state(hwnd);
+        let state = get_state(hwnd).ok_or_else(|| {
+            PlatformError::OperationFailed(format!(
+                "ListBox state missing for control {} in window {window_id:?}",
+                control_id.raw()
+            ))
+        })?;
+        let state = &mut *state;
         let Some(index) = state.items.iter().position(|item| item.id == item_id) else {
             return Err(PlatformError::InvalidHandle(format!(
                 "ListBox item {:?} not found for control {}",
@@ -1056,9 +1112,11 @@ pub(crate) fn handle_apply_style_command(
     parsed_style: &ParsedControlStyle,
 ) {
     unsafe {
-        let state = &mut *get_or_init_state(hwnd);
-        apply_palette_style(&mut state.palette, style_id, parsed_style);
-        let _ = InvalidateRect(Some(hwnd), None, false);
+        if let Some(state_ptr) = get_state(hwnd) {
+            let state = &mut *state_ptr;
+            apply_palette_style(&mut state.palette, style_id, parsed_style);
+            let _ = InvalidateRect(Some(hwnd), None, false);
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::app::Win32ApiInternalState;
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::ffi_safety;
 use crate::types::{ControlId, WindowId};
 use crate::window_common::{ControlKind, try_enable_dark_mode};
 
@@ -152,19 +153,25 @@ unsafe extern "system" fn rtf_stream_callback(
     requested_bytes: i32,
     written_bytes: *mut i32,
 ) -> u32 {
-    if cookie == 0 || buffer.is_null() || written_bytes.is_null() || requested_bytes < 0 {
-        return 1;
-    }
+    ffi_safety::catch_unwind_ffi(
+        "rtf_stream_callback",
+        || {
+            if cookie == 0 || buffer.is_null() || written_bytes.is_null() || requested_bytes < 0 {
+                return 1;
+            }
 
-    let context = unsafe { &mut *(cookie as *mut RtfStreamContext<'_>) };
-    let remaining = &context.data[context.position..];
-    let copy_len = remaining.len().min(requested_bytes as usize);
-    unsafe {
-        std::ptr::copy_nonoverlapping(remaining.as_ptr(), buffer, copy_len);
-        *written_bytes = copy_len as i32;
-    }
-    context.position += copy_len;
-    0
+            let context = unsafe { &mut *(cookie as *mut RtfStreamContext<'_>) };
+            let remaining = &context.data[context.position..];
+            let copy_len = remaining.len().min(requested_bytes as usize);
+            unsafe {
+                std::ptr::copy_nonoverlapping(remaining.as_ptr(), buffer, copy_len);
+                *written_bytes = copy_len as i32;
+            }
+            context.position += copy_len;
+            0
+        },
+        || 1,
+    )
 }
 
 pub(crate) fn handle_set_rich_edit_content_command(

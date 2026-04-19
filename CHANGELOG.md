@@ -6,6 +6,11 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.0.1 - 2026-04-19
+- **Fix**: Guard every Rust-owned Win32 callback behind a panic barrier so host `handle_event` panics and other callback failures no longer unwind across the FFI boundary or poison the event-handler mutex path.
+- **Fix**: Move owner-drawn list box and tab bar state installation into `WM_NCCREATE`, eliminating the post-create `GWLP_USERDATA` overwrite hazard that could orphan heap state during synchronous control creation.
+- **Fix**: Keep menu handles owned until successful attachment, close the recursive unattached-popup leak path, migrate dark-border/panel subclassing to `SetWindowSubclass`, and split LPARAM helpers into explicit unsigned-size vs signed-coordinate variants.
+
 ## 2.0.0 - 2026-04-18
 - **BREAKING**: Make `ControlId`, `TreeItemId`, `ListBoxItemId`, and `MenuActionId` opaque by standardizing construction on `::new(...)` plus `.raw()` accessors instead of public tuple-field access.
 - **BREAKING**: Mark `AppEvent`, `PlatformCommand`, `StyleId`, and `MessageSeverity` as `#[non_exhaustive]`, requiring downstream crates to include a fallback match arm for forward compatibility.

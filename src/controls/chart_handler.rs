@@ -16,6 +16,7 @@
 use crate::app::Win32ApiInternalState;
 use crate::controls::gdi_utils::SelectedObject;
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::ffi_safety;
 use crate::types::{ChartDataPacket, ChartLineEmphasis, ControlId, WindowId};
 use crate::window_common::ControlKind;
 
@@ -107,37 +108,41 @@ unsafe extern "system" fn chart_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    match msg {
-        WM_ERASEBKGND => {
-            // Suppress the default background erase to prevent flicker.
-            // The WM_PAINT handler fills the entire client area itself.
-            LRESULT(1)
-        }
-        WM_PAINT => {
-            let mut ps = PAINTSTRUCT::default();
-            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
-            if !hdc.is_invalid() {
-                unsafe { paint_chart(hdc, hwnd) };
+    ffi_safety::catch_unwind_ffi(
+        "chart_wnd_proc",
+        || match msg {
+            WM_ERASEBKGND => {
+                // Suppress the default background erase to prevent flicker.
+                // The WM_PAINT handler fills the entire client area itself.
+                LRESULT(1)
             }
-            let _ = unsafe { EndPaint(hwnd, &ps) };
-            LRESULT(0)
-        }
-        WM_SIZE => {
-            // Trigger a full repaint when the control is resized.
-            let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
-            LRESULT(0)
-        }
-        WM_DESTROY => {
-            // Free the heap-allocated ChartWindowState.
-            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
-            if ptr != 0 {
-                let _ = unsafe { Box::from_raw(ptr as *mut ChartWindowState) };
-                unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
+                if !hdc.is_invalid() {
+                    unsafe { paint_chart(hdc, hwnd) };
+                }
+                let _ = unsafe { EndPaint(hwnd, &ps) };
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+            WM_SIZE => {
+                // Trigger a full repaint when the control is resized.
+                let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+                LRESULT(0)
+            }
+            WM_DESTROY => {
+                // Free the heap-allocated ChartWindowState.
+                let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+                if ptr != 0 {
+                    let _ = unsafe { Box::from_raw(ptr as *mut ChartWindowState) };
+                    unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
+                }
+                LRESULT(0)
+            }
+            _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        },
+        || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    )
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────

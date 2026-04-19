@@ -7,6 +7,7 @@
 
 use crate::app::Win32ApiInternalState;
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::ffi_safety;
 use crate::window_common::WC_STATIC;
 use crate::{
     types::{ControlId, WindowId},
@@ -16,13 +17,15 @@ use crate::{
 use std::sync::Arc;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-    UI::WindowsAndMessaging::{
-        CallWindowProcW, CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GWLP_WNDPROC, GetParent,
-        GetWindowLongPtrW, HMENU, SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WM_COMMAND, WM_COMPAREITEM, WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLOREDIT,
-        WM_CTLCOLORLISTBOX, WM_CTLCOLORSCROLLBAR, WM_CTLCOLORSTATIC, WM_DELETEITEM, WM_DRAWITEM,
-        WM_HSCROLL, WM_MEASUREITEM, WM_NOTIFY, WM_PARENTNOTIFY, WM_VSCROLL, WNDPROC, WS_CHILD,
-        WS_CLIPCHILDREN, WS_VISIBLE,
+    UI::{
+        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+        WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetParent, HMENU, SendMessageW, WINDOW_EX_STYLE,
+            WINDOW_STYLE, WM_COMMAND, WM_COMPAREITEM, WM_CTLCOLORBTN, WM_CTLCOLORDLG,
+            WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSCROLLBAR, WM_CTLCOLORSTATIC,
+            WM_DELETEITEM, WM_DRAWITEM, WM_HSCROLL, WM_MEASUREITEM, WM_NCDESTROY, WM_NOTIFY,
+            WM_PARENTNOTIFY, WM_VSCROLL, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE,
+        },
     },
 };
 
@@ -73,23 +76,29 @@ unsafe extern "system" fn forwarding_panel_proc(
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
+    _subclass_id: usize,
+    _ref_data: usize,
 ) -> LRESULT {
-    unsafe {
-        if is_parent_notification(msg)
-            && let Ok(parent) = GetParent(hwnd)
-            && !parent.is_invalid()
-        {
-            return SendMessageW(parent, msg, Some(wparam), Some(lparam));
-        }
-
-        let prev = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-        if prev != 0 {
-            let prev_proc: WNDPROC = std::mem::transmute(prev);
-            return CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam);
-        }
-        DefWindowProcW(hwnd, msg, wparam, lparam)
-    }
+    ffi_safety::catch_unwind_ffi(
+        "forwarding_panel_proc",
+        || unsafe {
+            if is_parent_notification(msg)
+                && let Ok(parent) = GetParent(hwnd)
+                && !parent.is_invalid()
+            {
+                return SendMessageW(parent, msg, Some(wparam), Some(lparam));
+            }
+            let result = DefSubclassProc(hwnd, msg, wparam, lparam);
+            if msg == WM_NCDESTROY {
+                let _ = RemoveWindowSubclass(hwnd, Some(forwarding_panel_proc), PANEL_SUBCLASS_ID);
+            }
+            result
+        },
+        || unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
+    )
 }
+
+const PANEL_SUBCLASS_ID: usize = 1;
 
 /*
  * Executes the `CreatePanel` command by creating a STATIC control and
@@ -172,8 +181,16 @@ pub(crate) fn handle_create_panel_command(
         };
 
         unsafe {
-            let prev = SetWindowLongPtrW(hwnd_panel, GWLP_WNDPROC, forwarding_panel_proc as *const () as isize);
-            SetWindowLongPtrW(hwnd_panel, GWLP_USERDATA, prev);
+            if !SetWindowSubclass(hwnd_panel, Some(forwarding_panel_proc), PANEL_SUBCLASS_ID, 0)
+                .as_bool()
+            {
+                let _ = DestroyWindow(hwnd_panel);
+                window_data.unregister_control_kind(panel_id);
+                return Err(PlatformError::OperationFailed(format!(
+                    "Failed to install panel subclass for control {} in window {window_id:?}",
+                    panel_id.raw()
+                )));
+            }
         }
 
         window_data.register_control_hwnd(panel_id, hwnd_panel);

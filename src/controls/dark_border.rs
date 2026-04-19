@@ -6,12 +6,14 @@
  * WM_PAINT / WM_NCPAINT, and a helper to install it on any HWND.
  */
 
+use crate::ffi_safety;
+
 use windows::Win32::{
     Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Gdi::{CreateSolidBrush, DeleteObject, FrameRect, GetWindowDC, ReleaseDC},
-    UI::WindowsAndMessaging::{
-        CallWindowProcW, DefWindowProcW, GWLP_USERDATA, GWLP_WNDPROC, GetWindowLongPtrW,
-        GetWindowRect, SetWindowLongPtrW, WM_NCPAINT, WM_PAINT, WNDPROC,
+    UI::{
+        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+        WindowsAndMessaging::{GetWindowRect, WM_NCDESTROY, WM_NCPAINT, WM_PAINT},
     },
 };
 
@@ -58,6 +60,8 @@ unsafe fn paint_dark_border(hwnd: HWND) {
     }
 }
 
+const DARK_BORDER_SUBCLASS_ID: usize = 1;
+
 /// Subclass window procedure that delegates to the original proc then
 /// paints a dark gray border after WM_PAINT / WM_NCPAINT.
 unsafe extern "system" fn dark_border_subclass_proc(
@@ -65,35 +69,43 @@ unsafe extern "system" fn dark_border_subclass_proc(
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
+    _subclass_id: usize,
+    _ref_data: usize,
 ) -> LRESULT {
-    unsafe {
-        let prev = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-        let result = if prev != 0 {
-            let prev_proc: WNDPROC = std::mem::transmute(prev);
-            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
-        } else {
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        };
+    ffi_safety::catch_unwind_ffi(
+        "dark_border_subclass_proc",
+        || unsafe {
+            let result = DefSubclassProc(hwnd, msg, wparam, lparam);
 
-        if matches!(msg, WM_PAINT | WM_NCPAINT) {
-            paint_dark_border(hwnd);
-        }
+            if matches!(msg, WM_PAINT | WM_NCPAINT) {
+                paint_dark_border(hwnd);
+            }
+            if msg == WM_NCDESTROY {
+                let _ = RemoveWindowSubclass(
+                    hwnd,
+                    Some(dark_border_subclass_proc),
+                    DARK_BORDER_SUBCLASS_ID,
+                );
+            }
 
-        result
-    }
+            result
+        },
+        || unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
+    )
 }
 
 /// Installs the dark-border subclass on the given control HWND.
-/// The original window procedure is saved and restored via `GWLP_USERDATA`.
 pub(crate) fn install_dark_border_subclass(hwnd: HWND) {
     unsafe {
-        let prev = SetWindowLongPtrW(
+        if !SetWindowSubclass(
             hwnd,
-            GWLP_WNDPROC,
-            dark_border_subclass_proc as *const () as isize,
-        );
-        if prev != 0 {
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, prev);
+            Some(dark_border_subclass_proc),
+            DARK_BORDER_SUBCLASS_ID,
+            0,
+        )
+        .as_bool()
+        {
+            log::warn!("Failed to install dark-border subclass for hwnd {hwnd:?}.");
         }
     }
 }

@@ -16,10 +16,11 @@ use crate::controls::keyboard_navigation::{
 };
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::ffi_safety::{self, DeferredWindowState};
 use crate::styling::Color;
 use crate::styling_primitives::FontDescription;
 use crate::types::{ControlId, WindowId};
-use crate::window_common::{ControlKind, WM_APP_TAB_SELECTED};
+use crate::window_common::{ControlKind, WM_APP_TAB_SELECTED, get_x_lparam, get_y_lparam};
 
 use std::sync::{Arc, OnceLock};
 
@@ -40,9 +41,9 @@ use windows::Win32::{
         WindowsAndMessaging::{
             CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GET_ANCESTOR_FLAGS,
             GWLP_USERDATA, GetAncestor, GetClientRect, GetWindowLongPtrW, HMENU, RegisterClassW,
-            SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DESTROY, WM_ERASEBKGND,
-            WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT,
-            WM_SETFOCUS, WM_SIZE, WNDCLASSW, WS_CHILD, WS_VISIBLE,
+            SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_ERASEBKGND, WM_GETDLGCODE,
+            WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
+            WM_PAINT, WM_SETFOCUS, WM_SIZE, WNDCLASSW, WS_CHILD, WS_VISIBLE,
         },
     },
 };
@@ -180,18 +181,14 @@ impl Drop for TabBarState {
     }
 }
 
-/// Gets or lazily allocates state from GWLP_USERDATA (like chart_handler).
-unsafe fn get_or_init_state(hwnd: HWND) -> *mut TabBarState {
-    unsafe {
-        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-        if ptr == 0 {
-            let data = Box::new(TabBarState::new(Vec::new()));
-            let raw = Box::into_raw(data);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
-            raw
-        } else {
-            ptr as *mut TabBarState
-        }
+/// Returns the installed state from GWLP_USERDATA when the control has completed creation.
+unsafe fn get_state(hwnd: HWND) -> Option<*mut TabBarState> {
+    let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut TabBarState;
+    if ptr.is_null() {
+        log::warn!("TabBar state missing for hwnd {hwnd:?}.");
+        None
+    } else {
+        Some(ptr)
     }
 }
 
@@ -222,116 +219,150 @@ unsafe extern "system" fn tab_bar_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    match msg {
-        WM_ERASEBKGND => {
-            // The WM_PAINT handler fills the entire client area, so suppress
-            // the default erase to avoid flicker.
-            LRESULT(1)
-        }
-        WM_PAINT => {
-            let mut ps = PAINTSTRUCT::default();
-            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
-            if !hdc.is_invalid() {
-                unsafe { paint_tab_bar(hwnd, hdc) };
-            }
-            let _ = unsafe { EndPaint(hwnd, &ps) };
-            LRESULT(0)
-        }
-        WM_SIZE => {
-            let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
-            LRESULT(0)
-        }
-        WM_LBUTTONDOWN => {
-            let x = (lparam.0 & 0xFFFF) as i16 as i32;
-            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            unsafe {
-                focus_on_click(hwnd, KEYBOARD_NAVIGATION);
-                let state = get_or_init_state(hwnd);
-                let hit = hit_test(&(*state).item_rects, x, y);
-                if let Some(idx) = hit.filter(|&i| i != (*state).selected_index) {
-                    select_tab_and_notify(hwnd, &mut *state, idx);
-                    let _ = InvalidateRect(Some(hwnd), None, false);
+    ffi_safety::catch_unwind_ffi(
+        "tab_bar_wnd_proc",
+        || match msg {
+            WM_NCCREATE => {
+                let Some(state_ptr) = (unsafe {
+                    DeferredWindowState::<TabBarState>::adopt_from_create_lparam(lparam)
+                }) else {
+                    log::error!("TabBar WM_NCCREATE missing initial state for hwnd {hwnd:?}.");
+                    return LRESULT(0);
+                };
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
                 }
+                LRESULT(1)
             }
-            LRESULT(0)
-        }
-        WM_KEYDOWN => {
-            let key = wparam.0 as u16;
-            unsafe {
-                let state = get_or_init_state(hwnd);
-                if let Some(next_index) =
-                    next_selected_index_for_key((*state).selected_index, (*state).items.len(), key)
-                {
-                    if next_index != (*state).selected_index {
-                        select_tab_and_notify(hwnd, &mut *state, next_index);
-                    }
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                }
+            WM_ERASEBKGND => {
+                // The WM_PAINT handler fills the entire client area, so suppress
+                // the default erase to avoid flicker.
+                LRESULT(1)
             }
-            LRESULT(0)
-        }
-        WM_GETDLGCODE => dialog_code(KEYBOARD_NAVIGATION)
-            .unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }),
-        WM_MOUSEMOVE => {
-            let x = (lparam.0 & 0xFFFF) as i16 as i32;
-            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            unsafe {
-                let state = get_or_init_state(hwnd);
-                let new_hover = hit_test(&(*state).item_rects, x, y);
-                if new_hover != (*state).hover_index {
-                    (*state).hover_index = new_hover;
-                    let _ = InvalidateRect(Some(hwnd), None, false);
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
+                if !hdc.is_invalid() {
+                    unsafe { paint_tab_bar(hwnd, hdc) };
                 }
-                if !(*state).tracking_mouse {
-                    let mut tme = TRACKMOUSEEVENT {
-                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                        dwFlags: TME_LEAVE,
-                        hwndTrack: hwnd,
-                        dwHoverTime: 0,
+                let _ = unsafe { EndPaint(hwnd, &ps) };
+                LRESULT(0)
+            }
+            WM_SIZE => {
+                let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+                LRESULT(0)
+            }
+            WM_LBUTTONDOWN => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                unsafe {
+                    focus_on_click(hwnd, KEYBOARD_NAVIGATION);
+                    let Some(state_ptr) = get_state(hwnd) else {
+                        return LRESULT(0);
                     };
-                    let _ = TrackMouseEvent(&mut tme);
-                    (*state).tracking_mouse = true;
+                    let state = &mut *state_ptr;
+                    let hit = hit_test(&state.item_rects, x, y);
+                    if let Some(idx) = hit.filter(|&i| i != state.selected_index) {
+                        select_tab_and_notify(hwnd, state, idx);
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
                 }
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_MOUSELEAVE => {
-            unsafe {
-                let state = get_or_init_state(hwnd);
-                if (*state).hover_index.is_some() {
-                    (*state).hover_index = None;
+            WM_KEYDOWN => {
+                let key = wparam.0 as u16;
+                unsafe {
+                    let Some(state_ptr) = get_state(hwnd) else {
+                        return LRESULT(0);
+                    };
+                    let state = &mut *state_ptr;
+                    if let Some(next_index) =
+                        next_selected_index_for_key(state.selected_index, state.items.len(), key)
+                    {
+                        if next_index != state.selected_index {
+                            select_tab_and_notify(hwnd, state, next_index);
+                        }
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_GETDLGCODE => dialog_code(KEYBOARD_NAVIGATION)
+                .unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }),
+            WM_MOUSEMOVE => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                unsafe {
+                    let Some(state_ptr) = get_state(hwnd) else {
+                        return LRESULT(0);
+                    };
+                    let state = &mut *state_ptr;
+                    let new_hover = hit_test(&state.item_rects, x, y);
+                    if new_hover != state.hover_index {
+                        state.hover_index = new_hover;
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                    if !state.tracking_mouse {
+                        let mut tme = TRACKMOUSEEVENT {
+                            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                            dwFlags: TME_LEAVE,
+                            hwndTrack: hwnd,
+                            dwHoverTime: 0,
+                        };
+                        let _ = TrackMouseEvent(&mut tme);
+                        state.tracking_mouse = true;
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_MOUSELEAVE => {
+                unsafe {
+                    let Some(state_ptr) = get_state(hwnd) else {
+                        return LRESULT(0);
+                    };
+                    let state = &mut *state_ptr;
+                    if state.hover_index.is_some() {
+                        state.hover_index = None;
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                    state.tracking_mouse = false;
+                }
+                LRESULT(0)
+            }
+            WM_SETFOCUS => {
+                unsafe {
+                    let Some(state_ptr) = get_state(hwnd) else {
+                        return LRESULT(0);
+                    };
+                    let state = &mut *state_ptr;
+                    state.focused = true;
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
-                (*state).tracking_mouse = false;
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_SETFOCUS => {
-            unsafe {
-                let state = get_or_init_state(hwnd);
-                (*state).focused = true;
-                let _ = InvalidateRect(Some(hwnd), None, false);
+            WM_KILLFOCUS => {
+                unsafe {
+                    let Some(state_ptr) = get_state(hwnd) else {
+                        return LRESULT(0);
+                    };
+                    let state = &mut *state_ptr;
+                    state.focused = false;
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_KILLFOCUS => {
-            unsafe {
-                let state = get_or_init_state(hwnd);
-                (*state).focused = false;
-                let _ = InvalidateRect(Some(hwnd), None, false);
+            WM_NCDESTROY => {
+                let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+                if ptr != 0 {
+                    let _ = unsafe { Box::from_raw(ptr as *mut TabBarState) };
+                    unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
+                }
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_DESTROY => {
-            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
-            if ptr != 0 {
-                let _ = unsafe { Box::from_raw(ptr as *mut TabBarState) };
-                unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
-            }
-            LRESULT(0)
-        }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+            _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        },
+        || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    )
 }
 
 // ── Hit-test helper ───────────────────────────────────────────────────────────
@@ -611,6 +642,8 @@ pub(crate) fn handle_create_tab_bar_command(
         Ok(())
     })?;
 
+    let create_state = DeferredWindowState::new(TabBarState::new(items));
+    let create_state_raw = create_state.into_raw();
     // Phase 3: Create native HWND outside any lock.
     let hwnd_tab_bar = unsafe {
         match CreateWindowExW(
@@ -625,10 +658,11 @@ pub(crate) fn handle_create_tab_bar_command(
             Some(parent_hwnd),
             Some(HMENU(control_id.raw() as *mut _)),
             Some(h_instance),
-            None,
+            Some(create_state_raw as *mut _),
         ) {
             Ok(hwnd) => hwnd,
             Err(err) => {
+                DeferredWindowState::<TabBarState>::reclaim(create_state_raw);
                 let _ = internal_state.with_window_data_write(window_id, |window_data| {
                     window_data.unregister_control_kind(control_id);
                     Ok(())
@@ -637,11 +671,8 @@ pub(crate) fn handle_create_tab_bar_command(
             }
         }
     };
-
-    // Initialise GWLP_USERDATA with items.
-    let state = Box::new(TabBarState::new(items));
     unsafe {
-        SetWindowLongPtrW(hwnd_tab_bar, GWLP_USERDATA, Box::into_raw(state) as isize);
+        DeferredWindowState::<TabBarState>::reclaim(create_state_raw);
     }
 
     // Phase 4: Write-lock — store the HWND.
@@ -673,10 +704,16 @@ pub(crate) fn handle_set_tab_bar_items(
         })
     })?;
     unsafe {
-        let state = get_or_init_state(hwnd);
-        (*state).items = items;
-        (*state).selected_index = 0;
-        (*state).item_rects.clear();
+        let state = get_state(hwnd).ok_or_else(|| {
+            PlatformError::OperationFailed(format!(
+                "[TabBar] state missing for control {} in window {window_id:?}",
+                control_id.raw()
+            ))
+        })?;
+        let state = &mut *state;
+        state.items = items;
+        state.selected_index = 0;
+        state.item_rects.clear();
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
     Ok(())
@@ -698,10 +735,16 @@ pub(crate) fn handle_set_tab_bar_selection(
         })
     })?;
     unsafe {
-        let state = get_or_init_state(hwnd);
-        let clamped = selected_index.min((*state).items.len().saturating_sub(1));
-        if (*state).selected_index != clamped {
-            (*state).selected_index = clamped;
+        let state = get_state(hwnd).ok_or_else(|| {
+            PlatformError::OperationFailed(format!(
+                "[TabBar] state missing for control {} in window {window_id:?}",
+                control_id.raw()
+            ))
+        })?;
+        let state = &mut *state;
+        let clamped = selected_index.min(state.items.len().saturating_sub(1));
+        if state.selected_index != clamped {
+            state.selected_index = clamped;
             let _ = InvalidateRect(Some(hwnd), None, false);
         }
     }
@@ -740,13 +783,19 @@ pub(crate) fn handle_set_tab_bar_style(
     };
 
     unsafe {
-        let state = get_or_init_state(hwnd);
+        let state = get_state(hwnd).ok_or_else(|| {
+            PlatformError::OperationFailed(format!(
+                "[TabBar] state missing for control {} in window {window_id:?}",
+                control_id.raw()
+            ))
+        })?;
+        let state = &mut *state;
         // Drop old font if any.
-        if let Some(old_font) = (*state).font.take().filter(|f| !f.is_invalid()) {
+        if let Some(old_font) = state.font.take().filter(|f| !f.is_invalid()) {
             let _ = DeleteObject(old_font.into());
         }
-        (*state).palette = TabBarPalette::new(background_color, text_color, accent_color);
-        (*state).font = new_font;
+        state.palette = TabBarPalette::new(background_color, text_color, accent_color);
+        state.font = new_font;
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
     Ok(())

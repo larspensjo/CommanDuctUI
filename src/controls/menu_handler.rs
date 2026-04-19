@@ -26,6 +26,35 @@ use windows::{
     },
     core::HSTRING,
 };
+
+#[derive(Debug)]
+struct OwnedHMenu(HMENU);
+
+impl OwnedHMenu {
+    fn new(menu: HMENU) -> Self {
+        Self(menu)
+    }
+
+    fn handle(&self) -> HMENU {
+        self.0
+    }
+
+    fn disarm(mut self) -> HMENU {
+        let handle = self.0;
+        self.0 = HMENU::default();
+        handle
+    }
+}
+
+impl Drop for OwnedHMenu {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                DestroyMenu(self.0).unwrap_or_default();
+            }
+        }
+    }
+}
 /*
  * Handles the `CreateMainMenu` command by constructing the native menu
  * structure for the given window.
@@ -41,7 +70,7 @@ pub(crate) fn handle_create_main_menu_command(
 ) -> PlatformResult<()> {
     log::debug!("MenuHandler: creating main menu for WinID {window_id:?}");
 
-    let h_main_menu = unsafe { CreateMenu()? };
+    let h_main_menu = OwnedHMenu::new(unsafe { CreateMenu()? });
 
     let hwnd_owner = internal_state.with_window_data_write(window_id, |window_data| {
         let hwnd = window_data.get_hwnd();
@@ -55,11 +84,14 @@ pub(crate) fn handle_create_main_menu_command(
         }
 
         for item_config in &menu_items {
-            unsafe { add_menu_item_recursive_impl(h_main_menu, item_config, window_data)? };
+            unsafe {
+                add_menu_item_recursive_impl(h_main_menu.handle(), item_config, window_data)?
+            };
         }
         Ok(hwnd)
     })?;
 
+    let h_main_menu = h_main_menu.disarm();
     if unsafe { SetMenu(hwnd_owner, Some(h_main_menu)) }.is_err() {
         let last_error = unsafe { GetLastError() };
         unsafe {
@@ -110,18 +142,19 @@ pub(crate) unsafe fn add_menu_item_recursive_impl(
             );
         }
     } else {
-        let h_submenu = unsafe { CreatePopupMenu()? };
+        let h_submenu = OwnedHMenu::new(unsafe { CreatePopupMenu()? });
         for child_config in &item_config.children {
-            unsafe { add_menu_item_recursive_impl(h_submenu, child_config, window_data)? };
+            unsafe { add_menu_item_recursive_impl(h_submenu.handle(), child_config, window_data)? };
         }
         unsafe {
             AppendMenuW(
                 parent_menu_handle,
                 MF_POPUP,
-                h_submenu.0 as usize,
+                h_submenu.handle().0 as usize,
                 &HSTRING::from(item_config.text.as_str()),
             )?
         };
+        let _ = h_submenu.disarm();
     }
     Ok(())
 }

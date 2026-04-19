@@ -60,7 +60,7 @@ Where the cracks are — see findings below.
 ### F-03-001: Host `handle_event` panic can unwind across the FFI boundary (UB)
 - **Severity:** Critical
 - **Dimension:** correctness
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/app.rs:193-210](../src/app.rs#L193), [src/window_common.rs:1384](../src/window_common.rs#L1384)
 - **Observation:** `send_event` is called from inside `facade_wnd_proc_router`, an `extern "system" fn`. Inside `send_event` the host's `handle_event` runs synchronously ([app.rs:203](../src/app.rs#L203)), and no `catch_unwind` wraps the WndProc (`rg catch_unwind src/` returns no matches). A panic in host code — or any panic in the surrounding Rust code — therefore unwinds through the C ABI. The mutex story is narrower than "poisoning breaks everything": the outer `application_event_handler.lock().unwrap()` ([app.rs:197](../src/app.rs#L197)) is taken and released *before* `handle_event` runs, and the inner `handler_arc.lock()` ([app.rs:202](../src/app.rs#L202)) already uses `if let Ok(_)` with a logged fallback. So a host panic will poison `handler_arc`, but subsequent events will log and return rather than panicking again — the acute bug is the first panic unwinding through the FFI boundary, not a cascading poison-amplification.
 - **Why it matters:** Rust's [FFI unwinding rules](https://doc.rust-lang.org/nomicon/ffi.html#ffi-and-unwinding) make panicking out of an `extern "system"` function undefined behaviour. In practice Win32 tears the process down with a confusing crash (and the user's window classes leak). The `.unwrap()` on the outer mutex at [app.rs:197](../src/app.rs#L197) is a separate, small latent panic source — if that mutex ever *does* get poisoned (e.g. by a future panic between `register_event_handler` and the upgrade), every subsequent event panics through the FFI boundary rather than degrading gracefully like the inner path already does.
@@ -69,7 +69,7 @@ Where the cracks are — see findings below.
 ### F-03-002: `listbox_handler` has a latent post-create GWLP_USERDATA overwrite hazard
 - **Severity:** Major
 - **Dimension:** correctness
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/controls/listbox_handler.rs:975-978](../src/controls/listbox_handler.rs#L975), [src/controls/listbox_handler.rs:208](../src/controls/listbox_handler.rs#L208), [src/controls/listbox_handler.rs:253](../src/controls/listbox_handler.rs#L253)
 - **Observation:** `handle_create_list_box_command` unconditionally writes `Box::into_raw(ListBoxState::new())` into `GWLP_USERDATA` *after* `CreateWindowExW` returns. Any earlier `GWLP_USERDATA` value is overwritten without being reclaimed. The lazy-init helper `get_or_init_state` allocates a default state when `GWLP_USERDATA == 0`, and it is called from several on-message paths. Windows dispatches `WM_NCCREATE`/`WM_CREATE`/`WM_SIZE` **synchronously inside `CreateWindowExW`**, so any message routed through `get_or_init_state` during creation would leave behind an orphan `Box<ListBoxState>` that the subsequent `SetWindowLongPtrW` silently overwrites. Auditing the current WndProc shows no state-touching message is guaranteed to land before the post-create overwrite on every Windows build, so this is a *hazard* — a bug waiting on the right timing or a future edit — rather than a reproducibly demonstrated leak today.
 - **Why it matters:** `ListBoxState` owns no GDI handles today, so even the worst-case live leak is small. But the shape is the correctness foundation that future fields (fonts, brushes, bitmaps) will rest on; any hardening of the struct will turn a latent orphan into a real resource leak. The `WM_DESTROY` cleanup ([listbox_handler.rs:332-341](../src/controls/listbox_handler.rs#L332)) only frees the *currently-installed* pointer, so an orphaned box is unreachable from teardown.
@@ -78,7 +78,7 @@ Where the cracks are — see findings below.
 ### F-03-003: `tab_bar_handler` has the same post-create GWLP_USERDATA overwrite hazard
 - **Severity:** Major
 - **Dimension:** correctness
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/controls/tab_bar_handler.rs:642-645](../src/controls/tab_bar_handler.rs#L642), [src/controls/tab_bar_handler.rs:184](../src/controls/tab_bar_handler.rs#L184), [src/controls/tab_bar_handler.rs:240](../src/controls/tab_bar_handler.rs#L240), [src/controls/tab_bar_handler.rs:173](../src/controls/tab_bar_handler.rs#L173)
 - **Observation:** Same shape as F-03-002: `handle_create_tab_bar_command` unconditionally writes `Box::into_raw(TabBarState::new(items))` into `GWLP_USERDATA` after `CreateWindowExW`; `get_or_init_state` lazy-initialises a default state on any message that lands there first. Unlike listbox, `TabBarState::Drop` *does* delete an `HFONT`, so if the hazard ever resolves into a real orphan, the leak includes an `HFONT`. Current message handlers on the tab bar don't touch state inside the synchronous-create window (`WM_SIZE` calls only `InvalidateRect`), so today this is latent — it becomes live the moment any `WM_NCCALCSIZE`, theme-change, or custom-draw hook starts reading state during creation.
 - **Why it matters:** latent `HFONT` + `Box<TabBarState>` leak class that flips from hazard to bug with any future state-touching message handler added on the create path. Fix naturally pairs with F-03-002.
@@ -87,7 +87,7 @@ Where the cracks are — see findings below.
 ### F-03-004: Menu creation leaks `HMENU`s on two separate error paths
 - **Severity:** Minor
 - **Dimension:** correctness
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/controls/menu_handler.rs:44-82](../src/controls/menu_handler.rs#L44), [src/controls/menu_handler.rs:90-127](../src/controls/menu_handler.rs#L90)
 - **Observation:** Two distinct leak shapes live in this file.
 
@@ -103,7 +103,7 @@ Where the cracks are — see findings below.
 ### F-03-005: LOWORD/HIWORD helpers on LPARAM do not sign-extend
 - **Severity:** Minor
 - **Dimension:** correctness
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/window_common.rs:1425-1431](../src/window_common.rs#L1425)
 - **Observation:** `loword_from_lparam` and `hiword_from_lparam` return `(lparam.0 & 0xFFFF) as i32` / `((lparam.0 >> 16) & 0xFFFF) as i32`. Win32 mouse messages (`WM_MOUSEMOVE`, `WM_LBUTTONDOWN`, …) encode `(x, y)` as *signed* 16-bit coordinates in LPARAM — with multi-monitor setups they can be negative. The current helpers return 0..65535 for what should be -32768..32767. Inspection of callers shows both helpers are currently used only for WM_SIZE width/height (always non-negative), so there is no live bug, but the helpers' name signals "general LOWORD/HIWORD extraction" and any mouse-path caller added later will silently misbehave on a monitor placed to the left/above the primary.
 - **Why it matters:** trap door for a future-added feature. Dark Windows multi-monitor is a real shipping configuration; the failure mode is a one-pixel-off-by-65k jump and is painful to track down.
@@ -112,7 +112,7 @@ Where the cracks are — see findings below.
 ### F-03-006: `dark_border` and `panel_handler` subclasses both alias GWLP_USERDATA for the prev-wndproc
 - **Severity:** Nit
 - **Dimension:** correctness
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/controls/dark_border.rs:63-84](../src/controls/dark_border.rs#L63), [src/controls/panel_handler.rs:80-110](../src/controls/panel_handler.rs#L80)
 - **Observation:** Both subclass installers save the original `WNDPROC` into `GWLP_USERDATA` via `SetWindowLongPtrW(hwnd, GWLP_USERDATA, prev_proc as isize)` and recover it in their subclass procs via `transmute`. This is fine per-control, but the two subclasses collide if ever installed on the same HWND: the second install would overwrite the first's prev-proc pointer, leaving a dangling WNDPROC and breaking the chain. Today dark_border is applied only to combobox/progress-bar HWNDs and panel_handler only to `Static` class panels, so no HWND receives both — but the convention is fragile and not called out anywhere in code or comment.
 - **Why it matters:** defence in depth. A future "dark-border on a panel" request will compile, run, and produce a subtly broken WndProc chain. Both installers should be using `SetWindowSubclass`/`DefSubclassProc` from `comctl32` (the Win32-recommended way to stack subclasses) which carries its own per-subclass storage slot, or at minimum use distinct `GetProp`/`SetProp` string keys.

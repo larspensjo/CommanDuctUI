@@ -16,6 +16,8 @@ pub(crate) mod command_executor;
 #[cfg(target_os = "windows")]
 pub(crate) mod controls;
 pub mod error;
+#[cfg(target_os = "windows")]
+pub(crate) mod ffi_safety;
 pub(crate) mod styling_primitives;
 #[cfg(not(target_os = "windows"))]
 pub(crate) mod styling_stub;

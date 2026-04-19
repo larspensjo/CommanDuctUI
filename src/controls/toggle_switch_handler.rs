@@ -17,6 +17,7 @@ use crate::controls::keyboard_navigation::{
 };
 use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::ffi_safety;
 use crate::styling::Color;
 use crate::types::{ControlId, WindowId};
 use crate::window_common::{ControlKind, WM_APP_TOGGLE_SWITCH_CLICKED, try_enable_dark_mode};
@@ -153,48 +154,27 @@ unsafe extern "system" fn toggle_switch_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    match msg {
-        WM_ERASEBKGND => {
-            // Suppress default erase — WM_PAINT fills everything, prevents flicker.
-            LRESULT(1)
-        }
-        WM_PAINT => {
-            let mut ps = PAINTSTRUCT::default();
-            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
-            if !hdc.is_invalid() {
-                unsafe { paint_toggle_switch(hwnd, hdc) };
+    ffi_safety::catch_unwind_ffi(
+        "toggle_switch_wnd_proc",
+        || match msg {
+            WM_ERASEBKGND => {
+                // Suppress default erase — WM_PAINT fills everything, prevents flicker.
+                LRESULT(1)
             }
-            let _ = unsafe { EndPaint(hwnd, &ps) };
-            LRESULT(0)
-        }
-        WM_LBUTTONUP => {
-            // Toggle on mouse button release — standard Windows control behavior:
-            // the user can cancel by moving the cursor away before releasing.
-            unsafe {
-                focus_on_click(hwnd, KEYBOARD_NAVIGATION);
-                let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if ptr != 0 {
-                    let state = ptr as *mut ToggleSwitchState;
-                    (*state).checked = !(*state).checked;
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                    let new_checked = (*state).checked;
-                    let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)); // GA_ROOT
-                    if !root.is_invalid() {
-                        let _ = SendMessageW(
-                            root,
-                            WM_APP_TOGGLE_SWITCH_CLICKED,
-                            Some(WPARAM(hwnd.0 as usize)),
-                            Some(LPARAM(new_checked as isize)),
-                        );
-                    }
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
+                if !hdc.is_invalid() {
+                    unsafe { paint_toggle_switch(hwnd, hdc) };
                 }
+                let _ = unsafe { EndPaint(hwnd, &ps) };
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_KEYDOWN => {
-            let vk = wparam.0 as u16;
-            if vk == VK_SPACE.0 || vk == VK_RETURN.0 {
+            WM_LBUTTONUP => {
+                // Toggle on mouse button release — standard Windows control behavior:
+                // the user can cancel by moving the cursor away before releasing.
                 unsafe {
+                    focus_on_click(hwnd, KEYBOARD_NAVIGATION);
                     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                     if ptr != 0 {
                         let state = ptr as *mut ToggleSwitchState;
@@ -213,40 +193,65 @@ unsafe extern "system" fn toggle_switch_wnd_proc(
                     }
                 }
                 LRESULT(0)
-            } else {
-                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
-        }
-        WM_SETFOCUS => {
-            unsafe {
-                let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if ptr != 0 {
-                    (*(ptr as *mut ToggleSwitchState)).focused = true;
+            WM_KEYDOWN => {
+                let vk = wparam.0 as u16;
+                if vk == VK_SPACE.0 || vk == VK_RETURN.0 {
+                    unsafe {
+                        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                        if ptr != 0 {
+                            let state = ptr as *mut ToggleSwitchState;
+                            (*state).checked = !(*state).checked;
+                            let _ = InvalidateRect(Some(hwnd), None, false);
+                            let new_checked = (*state).checked;
+                            let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)); // GA_ROOT
+                            if !root.is_invalid() {
+                                let _ = SendMessageW(
+                                    root,
+                                    WM_APP_TOGGLE_SWITCH_CLICKED,
+                                    Some(WPARAM(hwnd.0 as usize)),
+                                    Some(LPARAM(new_checked as isize)),
+                                );
+                            }
+                        }
+                    }
+                    LRESULT(0)
+                } else {
+                    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
                 }
-                let _ = InvalidateRect(Some(hwnd), None, false);
             }
-            LRESULT(0)
-        }
-        WM_KILLFOCUS => {
-            unsafe {
-                let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if ptr != 0 {
-                    (*(ptr as *mut ToggleSwitchState)).focused = false;
+            WM_SETFOCUS => {
+                unsafe {
+                    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                    if ptr != 0 {
+                        (*(ptr as *mut ToggleSwitchState)).focused = true;
+                    }
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 }
-                let _ = InvalidateRect(Some(hwnd), None, false);
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        WM_DESTROY => {
-            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
-            if ptr != 0 {
-                let _ = unsafe { Box::from_raw(ptr as *mut ToggleSwitchState) };
-                unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
+            WM_KILLFOCUS => {
+                unsafe {
+                    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                    if ptr != 0 {
+                        (*(ptr as *mut ToggleSwitchState)).focused = false;
+                    }
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                LRESULT(0)
             }
-            LRESULT(0)
-        }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+            WM_DESTROY => {
+                let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+                if ptr != 0 {
+                    let _ = unsafe { Box::from_raw(ptr as *mut ToggleSwitchState) };
+                    unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
+                }
+                LRESULT(0)
+            }
+            _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        },
+        || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    )
 }
 
 // ── Paint ─────────────────────────────────────────────────────────────────────

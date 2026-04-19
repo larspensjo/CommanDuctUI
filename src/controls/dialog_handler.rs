@@ -8,6 +8,7 @@
 
 use crate::app::Win32ApiInternalState;
 use crate::error::{PlatformError, Result as PlatformResult};
+use crate::ffi_safety;
 use crate::types::{
     AppEvent, FormButtons, FormDialogDescriptor, FormField, FormFieldValue, FormFileExistsWarning,
     FormRow, FormTextValidation, MessageSeverity, WindowId,
@@ -273,108 +274,122 @@ unsafe extern "system" fn profile_dialog_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
-    match msg {
-        WM_INITDIALOG => {
-            let dialog_data = unsafe { &*(lparam.0 as *const ProfileDialogData) };
-            unsafe { SetWindowLongPtrW(hdlg, GWLP_USERDATA, lparam.0) };
+    ffi_safety::catch_unwind_ffi(
+        "profile_dialog_proc",
+        || match msg {
+            WM_INITDIALOG => {
+                let dialog_data = unsafe { &*(lparam.0 as *const ProfileDialogData) };
+                unsafe { SetWindowLongPtrW(hdlg, GWLP_USERDATA, lparam.0) };
 
-            // Set prompt text
-            let h_prompt = HSTRING::from(dialog_data.prompt_text.as_str());
-            unsafe {
-                SetDlgItemTextW(hdlg, ID_DIALOG_PROFILE_PROMPT, &h_prompt).unwrap_or_default();
-            }
-
-            // Populate listbox
-            if let Ok(hwnd_listbox) = unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_PROFILE_LISTBOX) } {
-                for profile_name in &dialog_data.available_profiles {
-                    let h_name = HSTRING::from(profile_name.as_str());
-                    unsafe {
-                        SendMessageW(
-                            hwnd_listbox,
-                            LB_ADDSTRING,
-                            None,
-                            Some(LPARAM(h_name.as_ptr() as isize)),
-                        );
-                    }
+                // Set prompt text
+                let h_prompt = HSTRING::from(dialog_data.prompt_text.as_str());
+                unsafe {
+                    SetDlgItemTextW(hdlg, ID_DIALOG_PROFILE_PROMPT, &h_prompt).unwrap_or_default();
                 }
-                // Select the first item by default if any exist
-                if !dialog_data.available_profiles.is_empty() {
-                    unsafe {
-                        SendMessageW(hwnd_listbox, LB_SETCURSEL, Some(WPARAM(0)), Some(LPARAM(0)));
-                    }
-                }
-            }
-            TRUE.0 as isize
-        }
-        WM_COMMAND => {
-            let command_id = window_common::loword_from_wparam(wparam) as u16;
-            let notification_code = window_common::highord_from_wparam(wparam) as u32;
 
-            let dialog_data_ptr =
-                unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut ProfileDialogData;
-            if dialog_data_ptr.is_null() {
-                return FALSE.0 as isize;
-            }
-            let dialog_data = unsafe { &mut *dialog_data_ptr };
-
-            let mut handle_selection = || {
+                // Populate listbox
                 if let Ok(hwnd_listbox) =
                     unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_PROFILE_LISTBOX) }
                 {
-                    let selected_idx =
-                        unsafe { SendMessageW(hwnd_listbox, LB_GETCURSEL, None, None) }.0 as i32;
-                    if selected_idx >= 0 {
-                        let text_len = unsafe {
-                            SendMessageW(
-                                hwnd_listbox,
-                                LB_GETTEXTLEN,
-                                Some(WPARAM(selected_idx as usize)),
-                                None,
-                            )
-                        }
-                        .0 as usize;
-                        let mut buffer: Vec<u16> = vec![0; text_len + 1];
+                    for profile_name in &dialog_data.available_profiles {
+                        let h_name = HSTRING::from(profile_name.as_str());
                         unsafe {
                             SendMessageW(
                                 hwnd_listbox,
-                                LB_GETTEXT,
-                                Some(WPARAM(selected_idx as usize)),
-                                Some(LPARAM(buffer.as_mut_ptr() as isize)),
+                                LB_ADDSTRING,
+                                None,
+                                Some(LPARAM(h_name.as_ptr() as isize)),
                             );
                         }
-                        dialog_data.selected_profile =
-                            Some(String::from_utf16_lossy(&buffer[..text_len]));
+                    }
+                    // Select the first item by default if any exist
+                    if !dialog_data.available_profiles.is_empty() {
+                        unsafe {
+                            SendMessageW(
+                                hwnd_listbox,
+                                LB_SETCURSEL,
+                                Some(WPARAM(0)),
+                                Some(LPARAM(0)),
+                            );
+                        }
                     }
                 }
-                unsafe { EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default() };
-            };
-
-            match command_id {
-                x if x == IDOK.0 as u16 => {
-                    handle_selection();
-                    TRUE.0 as isize
-                }
-                x if x == IDCANCEL.0 as u16 => {
-                    unsafe { EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default() };
-                    TRUE.0 as isize
-                }
-                x if x == ID_DIALOG_PROFILE_CREATE_NEW_BUTTON as u16 => {
-                    dialog_data.create_new_pressed = true;
-                    unsafe {
-                        EndDialog(hdlg, ID_DIALOG_PROFILE_CREATE_NEW_BUTTON as isize)
-                            .unwrap_or_default()
-                    };
-                    TRUE.0 as isize
-                }
-                x if x == ID_DIALOG_PROFILE_LISTBOX as u16 && notification_code == LBN_DBLCLK => {
-                    handle_selection();
-                    TRUE.0 as isize
-                }
-                _ => FALSE.0 as isize,
+                TRUE.0 as isize
             }
-        }
-        _ => FALSE.0 as isize,
-    }
+            WM_COMMAND => {
+                let command_id = window_common::loword_from_wparam(wparam) as u16;
+                let notification_code = window_common::highord_from_wparam(wparam) as u32;
+
+                let dialog_data_ptr =
+                    unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut ProfileDialogData;
+                if dialog_data_ptr.is_null() {
+                    return FALSE.0 as isize;
+                }
+                let dialog_data = unsafe { &mut *dialog_data_ptr };
+
+                let mut handle_selection = || {
+                    if let Ok(hwnd_listbox) =
+                        unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_PROFILE_LISTBOX) }
+                    {
+                        let selected_idx =
+                            unsafe { SendMessageW(hwnd_listbox, LB_GETCURSEL, None, None) }.0
+                                as i32;
+                        if selected_idx >= 0 {
+                            let text_len = unsafe {
+                                SendMessageW(
+                                    hwnd_listbox,
+                                    LB_GETTEXTLEN,
+                                    Some(WPARAM(selected_idx as usize)),
+                                    None,
+                                )
+                            }
+                            .0 as usize;
+                            let mut buffer: Vec<u16> = vec![0; text_len + 1];
+                            unsafe {
+                                SendMessageW(
+                                    hwnd_listbox,
+                                    LB_GETTEXT,
+                                    Some(WPARAM(selected_idx as usize)),
+                                    Some(LPARAM(buffer.as_mut_ptr() as isize)),
+                                );
+                            }
+                            dialog_data.selected_profile =
+                                Some(String::from_utf16_lossy(&buffer[..text_len]));
+                        }
+                    }
+                    unsafe { EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default() };
+                };
+
+                match command_id {
+                    x if x == IDOK.0 as u16 => {
+                        handle_selection();
+                        TRUE.0 as isize
+                    }
+                    x if x == IDCANCEL.0 as u16 => {
+                        unsafe { EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default() };
+                        TRUE.0 as isize
+                    }
+                    x if x == ID_DIALOG_PROFILE_CREATE_NEW_BUTTON as u16 => {
+                        dialog_data.create_new_pressed = true;
+                        unsafe {
+                            EndDialog(hdlg, ID_DIALOG_PROFILE_CREATE_NEW_BUTTON as isize)
+                                .unwrap_or_default()
+                        };
+                        TRUE.0 as isize
+                    }
+                    x if x == ID_DIALOG_PROFILE_LISTBOX as u16
+                        && notification_code == LBN_DBLCLK =>
+                    {
+                        handle_selection();
+                        TRUE.0 as isize
+                    }
+                    _ => FALSE.0 as isize,
+                }
+            }
+            _ => FALSE.0 as isize,
+        },
+        || FALSE.0 as isize,
+    )
 }
 
 /*
@@ -739,72 +754,76 @@ unsafe extern "system" fn input_dialog_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
-    match msg {
-        WM_INITDIALOG => {
-            unsafe {
-                SetWindowLongPtrW(hdlg, GWLP_USERDATA, lparam.0);
-            }
-            let dialog_data = unsafe { &*(lparam.0 as *const InputDialogData) };
-            let h_prompt = HSTRING::from(dialog_data.prompt_text.as_str());
-            unsafe {
-                SetDlgItemTextW(
-                    hdlg,
-                    window_common::ID_DIALOG_INPUT_PROMPT_STATIC,
-                    &h_prompt,
-                )
-                .unwrap_or_default();
-            }
-            if !dialog_data.input_text.is_empty() {
-                let h_edit_text = HSTRING::from(dialog_data.input_text.as_str());
+    ffi_safety::catch_unwind_ffi(
+        "input_dialog_proc",
+        || match msg {
+            WM_INITDIALOG => {
                 unsafe {
-                    SetDlgItemTextW(hdlg, window_common::ID_DIALOG_INPUT_EDIT, &h_edit_text)
-                        .unwrap_or_default();
+                    SetWindowLongPtrW(hdlg, GWLP_USERDATA, lparam.0);
                 }
+                let dialog_data = unsafe { &*(lparam.0 as *const InputDialogData) };
+                let h_prompt = HSTRING::from(dialog_data.prompt_text.as_str());
+                unsafe {
+                    SetDlgItemTextW(
+                        hdlg,
+                        window_common::ID_DIALOG_INPUT_PROMPT_STATIC,
+                        &h_prompt,
+                    )
+                    .unwrap_or_default();
+                }
+                if !dialog_data.input_text.is_empty() {
+                    let h_edit_text = HSTRING::from(dialog_data.input_text.as_str());
+                    unsafe {
+                        SetDlgItemTextW(hdlg, window_common::ID_DIALOG_INPUT_EDIT, &h_edit_text)
+                            .unwrap_or_default();
+                    }
+                }
+                TRUE.0 as isize
             }
-            TRUE.0 as isize
-        }
-        WM_COMMAND => {
-            let command_id = loword_from_wparam(wparam);
-            match command_id {
-                x if x == IDOK.0 as u16 => {
-                    let dialog_data_ptr =
-                        unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut InputDialogData;
-                    if !dialog_data_ptr.is_null() {
-                        let dialog_data = unsafe { &mut *dialog_data_ptr };
-                        if let Ok(hwnd_edit_ok) =
-                            unsafe { GetDlgItem(Some(hdlg), window_common::ID_DIALOG_INPUT_EDIT) }
-                        {
-                            match window_common::read_edit_control_text(hwnd_edit_ok) {
-                                Ok(text) => dialog_data.input_text = text,
-                                Err(err) => {
-                                    log::error!(
-                                        "DialogHandler: Failed to read input dialog text: {err}"
-                                    );
-                                    dialog_data.input_text.clear();
+            WM_COMMAND => {
+                let command_id = loword_from_wparam(wparam);
+                match command_id {
+                    x if x == IDOK.0 as u16 => {
+                        let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
+                            as *mut InputDialogData;
+                        if !dialog_data_ptr.is_null() {
+                            let dialog_data = unsafe { &mut *dialog_data_ptr };
+                            if let Ok(hwnd_edit_ok) = unsafe {
+                                GetDlgItem(Some(hdlg), window_common::ID_DIALOG_INPUT_EDIT)
+                            } {
+                                match window_common::read_edit_control_text(hwnd_edit_ok) {
+                                    Ok(text) => dialog_data.input_text = text,
+                                    Err(err) => {
+                                        log::error!(
+                                            "DialogHandler: Failed to read input dialog text: {err}"
+                                        );
+                                        dialog_data.input_text.clear();
+                                    }
                                 }
                             }
+                            dialog_data.success = true;
                         }
-                        dialog_data.success = true;
+                        unsafe {
+                            EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default();
+                        }
+                        TRUE.0 as isize
                     }
-                    unsafe {
-                        EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default();
+                    x if x == IDCANCEL.0 as u16 => {
+                        let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
+                            as *mut InputDialogData;
+                        if !dialog_data_ptr.is_null() {
+                            unsafe { (*dialog_data_ptr).success = false };
+                        }
+                        unsafe { EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default() };
+                        TRUE.0 as isize
                     }
-                    TRUE.0 as isize
+                    _ => FALSE.0 as isize,
                 }
-                x if x == IDCANCEL.0 as u16 => {
-                    let dialog_data_ptr =
-                        unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut InputDialogData;
-                    if !dialog_data_ptr.is_null() {
-                        unsafe { (*dialog_data_ptr).success = false };
-                    }
-                    unsafe { EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default() };
-                    TRUE.0 as isize
-                }
-                _ => FALSE.0 as isize,
             }
-        }
-        _ => FALSE.0 as isize,
-    }
+            _ => FALSE.0 as isize,
+        },
+        || FALSE.0 as isize,
+    )
 }
 
 /*
@@ -817,84 +836,92 @@ unsafe extern "system" fn exclude_patterns_dialog_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
-    match msg {
-        WM_INITDIALOG => {
-            unsafe {
-                SetWindowLongPtrW(hdlg, GWLP_USERDATA, lparam.0);
-            }
-            let dialog_data = unsafe { &*(lparam.0 as *const ExcludePatternsDialogData) };
-            let prompt_text =
-                HSTRING::from("Enter patterns to exclude (one per line, gitignore syntax).");
-            unsafe {
-                SetDlgItemTextW(
-                    hdlg,
-                    window_common::ID_DIALOG_EXCLUDE_PATTERNS_PROMPT_STATIC,
-                    &prompt_text,
-                )
-                .unwrap_or_default();
-            }
-
-            let seeded_text = dialog_data
-                .initial_text
-                .replace("\r\n", "\n")
-                .replace('\n', "\r\n");
-            if !seeded_text.is_empty() {
-                let edit_text = HSTRING::from(seeded_text);
+    ffi_safety::catch_unwind_ffi(
+        "exclude_patterns_dialog_proc",
+        || match msg {
+            WM_INITDIALOG => {
+                unsafe {
+                    SetWindowLongPtrW(hdlg, GWLP_USERDATA, lparam.0);
+                }
+                let dialog_data = unsafe { &*(lparam.0 as *const ExcludePatternsDialogData) };
+                let prompt_text =
+                    HSTRING::from("Enter patterns to exclude (one per line, gitignore syntax).");
                 unsafe {
                     SetDlgItemTextW(
                         hdlg,
-                        window_common::ID_DIALOG_EXCLUDE_PATTERNS_EDIT,
-                        &edit_text,
+                        window_common::ID_DIALOG_EXCLUDE_PATTERNS_PROMPT_STATIC,
+                        &prompt_text,
                     )
                     .unwrap_or_default();
                 }
-            }
 
-            TRUE.0 as isize
-        }
-        WM_COMMAND => {
-            let command_id = loword_from_wparam(wparam);
-            match command_id {
-                x if x == IDOK.0 as u16 => {
-                    let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
-                        as *mut ExcludePatternsDialogData;
-                    if !dialog_data_ptr.is_null()
-                        && let Ok(edit_hwnd) = unsafe {
-                            GetDlgItem(Some(hdlg), window_common::ID_DIALOG_EXCLUDE_PATTERNS_EDIT)
-                        }
-                    {
-                        let text_len = unsafe { GetWindowTextLengthW(edit_hwnd) } as usize;
-                        let mut buffer: Vec<u16> = vec![0; text_len + 1];
-                        let written = unsafe { GetWindowTextW(edit_hwnd, buffer.as_mut_slice()) };
-                        buffer.truncate(written as usize);
-                        let mut result = String::from_utf16_lossy(&buffer);
-                        result = result.replace("\r\n", "\n");
-                        unsafe {
-                            (*dialog_data_ptr).result_text = result;
-                            (*dialog_data_ptr).saved = true;
-                        }
+                let seeded_text = dialog_data
+                    .initial_text
+                    .replace("\r\n", "\n")
+                    .replace('\n', "\r\n");
+                if !seeded_text.is_empty() {
+                    let edit_text = HSTRING::from(seeded_text);
+                    unsafe {
+                        SetDlgItemTextW(
+                            hdlg,
+                            window_common::ID_DIALOG_EXCLUDE_PATTERNS_EDIT,
+                            &edit_text,
+                        )
+                        .unwrap_or_default();
                     }
-                    unsafe { EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default() };
-                    TRUE.0 as isize
                 }
-                x if x == IDCANCEL.0 as u16 => {
-                    let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
-                        as *mut ExcludePatternsDialogData;
-                    if !dialog_data_ptr.is_null() {
-                        unsafe { (*dialog_data_ptr).saved = false };
-                    }
-                    unsafe { EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default() };
-                    TRUE.0 as isize
-                }
-                _ => FALSE.0 as isize,
+
+                TRUE.0 as isize
             }
-        }
-        WM_CLOSE => {
-            unsafe { EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default() };
-            TRUE.0 as isize
-        }
-        _ => FALSE.0 as isize,
-    }
+            WM_COMMAND => {
+                let command_id = loword_from_wparam(wparam);
+                match command_id {
+                    x if x == IDOK.0 as u16 => {
+                        let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
+                            as *mut ExcludePatternsDialogData;
+                        if !dialog_data_ptr.is_null()
+                            && let Ok(edit_hwnd) = unsafe {
+                                GetDlgItem(
+                                    Some(hdlg),
+                                    window_common::ID_DIALOG_EXCLUDE_PATTERNS_EDIT,
+                                )
+                            }
+                        {
+                            let text_len = unsafe { GetWindowTextLengthW(edit_hwnd) } as usize;
+                            let mut buffer: Vec<u16> = vec![0; text_len + 1];
+                            let written =
+                                unsafe { GetWindowTextW(edit_hwnd, buffer.as_mut_slice()) };
+                            buffer.truncate(written as usize);
+                            let mut result = String::from_utf16_lossy(&buffer);
+                            result = result.replace("\r\n", "\n");
+                            unsafe {
+                                (*dialog_data_ptr).result_text = result;
+                                (*dialog_data_ptr).saved = true;
+                            }
+                        }
+                        unsafe { EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default() };
+                        TRUE.0 as isize
+                    }
+                    x if x == IDCANCEL.0 as u16 => {
+                        let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
+                            as *mut ExcludePatternsDialogData;
+                        if !dialog_data_ptr.is_null() {
+                            unsafe { (*dialog_data_ptr).saved = false };
+                        }
+                        unsafe { EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default() };
+                        TRUE.0 as isize
+                    }
+                    _ => FALSE.0 as isize,
+                }
+            }
+            WM_CLOSE => {
+                unsafe { EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default() };
+                TRUE.0 as isize
+            }
+            _ => FALSE.0 as isize,
+        },
+        || FALSE.0 as isize,
+    )
 }
 
 fn form_dialog_control_id(base: i32, index: usize) -> i32 {
@@ -1132,59 +1159,66 @@ unsafe extern "system" fn form_dialog_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
-    match msg {
-        WM_INITDIALOG => {
-            unsafe {
-                SetWindowLongPtrW(hdlg, GWLP_USERDATA, lparam.0);
-            }
-            let dialog_data = unsafe { &*(lparam.0 as *const FormDialogData) };
-            window_common::try_enable_dark_mode(hdlg);
+    ffi_safety::catch_unwind_ffi(
+        "form_dialog_proc",
+        || match msg {
+            WM_INITDIALOG => {
+                unsafe {
+                    SetWindowLongPtrW(hdlg, GWLP_USERDATA, lparam.0);
+                }
+                let dialog_data = unsafe { &*(lparam.0 as *const FormDialogData) };
+                window_common::try_enable_dark_mode(hdlg);
 
-            for field in &dialog_data.fields {
-                match field {
-                    FormFieldRuntime::TextInput {
-                        field_id: runtime_field_id,
-                        edit_control_id,
-                        warning_control_id,
-                        live_warning,
-                        validation: _,
-                        ..
-                    } => {
-                        if let Ok(hwnd_edit) = unsafe { GetDlgItem(Some(hdlg), *edit_control_id) } {
-                            let initial_text = dialog_data
-                                .field_values
-                                .iter()
-                                .find_map(|value| match value {
-                                    FormFieldValue::Text { field_id, value }
-                                        if field_id == runtime_field_id =>
-                                    {
-                                        Some(value.clone())
-                                    }
-                                    _ => None,
-                                })
-                                .unwrap_or_default();
-                            if !initial_text.is_empty() {
-                                set_dialog_item_text(hdlg, *edit_control_id, &initial_text);
+                for field in &dialog_data.fields {
+                    match field {
+                        FormFieldRuntime::TextInput {
+                            field_id: runtime_field_id,
+                            edit_control_id,
+                            warning_control_id,
+                            live_warning,
+                            validation: _,
+                            ..
+                        } => {
+                            if let Ok(hwnd_edit) =
+                                unsafe { GetDlgItem(Some(hdlg), *edit_control_id) }
+                            {
+                                let initial_text = dialog_data
+                                    .field_values
+                                    .iter()
+                                    .find_map(|value| match value {
+                                        FormFieldValue::Text { field_id, value }
+                                            if field_id == runtime_field_id =>
+                                        {
+                                            Some(value.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .unwrap_or_default();
+                                if !initial_text.is_empty() {
+                                    set_dialog_item_text(hdlg, *edit_control_id, &initial_text);
+                                }
+                                window_common::try_enable_dark_mode(hwnd_edit);
                             }
-                            window_common::try_enable_dark_mode(hwnd_edit);
-                        }
-                        if let Some(warning_control_id) = warning_control_id
-                            && let Ok(hwnd_warning) =
-                                unsafe { GetDlgItem(Some(hdlg), *warning_control_id) }
-                        {
-                            window_common::try_enable_dark_mode(hwnd_warning);
-                            if let Some(warning) = live_warning {
-                                set_dialog_item_text(hdlg, *warning_control_id, &warning.message);
+                            if let Some(warning_control_id) = warning_control_id
+                                && let Ok(hwnd_warning) =
+                                    unsafe { GetDlgItem(Some(hdlg), *warning_control_id) }
+                            {
+                                window_common::try_enable_dark_mode(hwnd_warning);
+                                if let Some(warning) = live_warning {
+                                    set_dialog_item_text(
+                                        hdlg,
+                                        *warning_control_id,
+                                        &warning.message,
+                                    );
+                                }
                             }
                         }
-                    }
-                    FormFieldRuntime::CheckBox {
-                        field_id: runtime_field_id,
-                        control_id,
-                    } => {
-                        if let Ok(hwnd_check) = unsafe { GetDlgItem(Some(hdlg), *control_id) } {
-                            if let Some(initial_checked) =
-                                dialog_data
+                        FormFieldRuntime::CheckBox {
+                            field_id: runtime_field_id,
+                            control_id,
+                        } => {
+                            if let Ok(hwnd_check) = unsafe { GetDlgItem(Some(hdlg), *control_id) } {
+                                if let Some(initial_checked) = dialog_data
                                     .field_values
                                     .iter()
                                     .find_map(|value| match value {
@@ -1195,139 +1229,141 @@ unsafe extern "system" fn form_dialog_proc(
                                         }
                                         _ => None,
                                     })
-                            {
-                                unsafe {
-                                    SendMessageW(
-                                        hwnd_check,
-                                        BM_SETCHECK,
-                                        Some(WPARAM(if initial_checked { 1 } else { 0 })),
-                                        Some(LPARAM(0)),
-                                    );
+                                {
+                                    unsafe {
+                                        SendMessageW(
+                                            hwnd_check,
+                                            BM_SETCHECK,
+                                            Some(WPARAM(if initial_checked { 1 } else { 0 })),
+                                            Some(LPARAM(0)),
+                                        );
+                                    }
                                 }
+                                window_common::apply_button_dark_mode_classic_render(hwnd_check);
                             }
-                            window_common::apply_button_dark_mode_classic_render(hwnd_check);
                         }
                     }
                 }
-            }
 
-            if let Ok(hwnd_ok) = unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_FORM_OK) } {
-                window_common::apply_button_dark_mode_classic_render(hwnd_ok);
-                unsafe {
-                    let _ = EnableWindow(hwnd_ok, dialog_data.buttons.confirm_enabled);
+                if let Ok(hwnd_ok) = unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_FORM_OK) } {
+                    window_common::apply_button_dark_mode_classic_render(hwnd_ok);
+                    unsafe {
+                        let _ = EnableWindow(hwnd_ok, dialog_data.buttons.confirm_enabled);
+                    }
                 }
-            }
-            if let Ok(hwnd_cancel) = unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_FORM_CANCEL) } {
-                window_common::apply_button_dark_mode_classic_render(hwnd_cancel);
-            }
+                if let Ok(hwnd_cancel) = unsafe { GetDlgItem(Some(hdlg), ID_DIALOG_FORM_CANCEL) } {
+                    window_common::apply_button_dark_mode_classic_render(hwnd_cancel);
+                }
 
-            update_form_dialog_live_state(hdlg);
-            TRUE.0 as isize
-        }
-        WM_COMMAND => {
-            let command_id = window_common::loword_from_wparam(wparam);
-            let notification_code = window_common::highord_from_wparam(wparam);
-            match command_id {
-                x if x == ID_DIALOG_FORM_OK => {
-                    let dialog_data_ptr =
-                        unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
-                    if !dialog_data_ptr.is_null() {
+                update_form_dialog_live_state(hdlg);
+                TRUE.0 as isize
+            }
+            WM_COMMAND => {
+                let command_id = window_common::loword_from_wparam(wparam);
+                let notification_code = window_common::highord_from_wparam(wparam);
+                match command_id {
+                    x if x == ID_DIALOG_FORM_OK => {
+                        let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
+                            as *mut FormDialogData;
+                        if !dialog_data_ptr.is_null() {
+                            let dialog_data = unsafe { &mut *dialog_data_ptr };
+                            dialog_data.confirmed = true;
+                            dialog_data.field_values = collect_form_field_values(hdlg, dialog_data);
+                        }
+                        unsafe {
+                            EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default();
+                        }
+                        TRUE.0 as isize
+                    }
+                    x if x == ID_DIALOG_FORM_CANCEL => {
+                        let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
+                            as *mut FormDialogData;
+                        if !dialog_data_ptr.is_null() {
+                            unsafe { (*dialog_data_ptr).confirmed = false };
+                        }
+                        unsafe {
+                            EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default();
+                        }
+                        TRUE.0 as isize
+                    }
+                    _ => {
+                        let dialog_data_ptr = unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) }
+                            as *mut FormDialogData;
+                        if dialog_data_ptr.is_null() {
+                            return FALSE.0 as isize;
+                        }
                         let dialog_data = unsafe { &mut *dialog_data_ptr };
-                        dialog_data.confirmed = true;
-                        dialog_data.field_values = collect_form_field_values(hdlg, dialog_data);
+                        let mut needs_refresh = false;
+                        for field in &dialog_data.fields {
+                            match field {
+                                FormFieldRuntime::TextInput {
+                                    edit_control_id, ..
+                                } if command_id == *edit_control_id
+                                    && notification_code == EN_CHANGE as i32 =>
+                                {
+                                    needs_refresh = true;
+                                }
+                                FormFieldRuntime::CheckBox { control_id, .. }
+                                    if command_id == *control_id && notification_code == 0 =>
+                                {
+                                    needs_refresh = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if needs_refresh {
+                            update_form_dialog_live_state(hdlg);
+                            return TRUE.0 as isize;
+                        }
+                        FALSE.0 as isize
                     }
-                    unsafe {
-                        EndDialog(hdlg, IDOK.0 as isize).unwrap_or_default();
-                    }
-                    TRUE.0 as isize
                 }
-                x if x == ID_DIALOG_FORM_CANCEL => {
-                    let dialog_data_ptr =
-                        unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
-                    if !dialog_data_ptr.is_null() {
-                        unsafe { (*dialog_data_ptr).confirmed = false };
-                    }
-                    unsafe {
-                        EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default();
-                    }
-                    TRUE.0 as isize
-                }
-                _ => {
-                    let dialog_data_ptr =
-                        unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
-                    if dialog_data_ptr.is_null() {
-                        return FALSE.0 as isize;
-                    }
+            }
+            WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORBTN => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let hwnd_control = HWND(lparam.0 as *mut c_void);
+                let dialog_data_ptr =
+                    unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
+                if !dialog_data_ptr.is_null() {
                     let dialog_data = unsafe { &mut *dialog_data_ptr };
-                    let mut needs_refresh = false;
-                    for field in &dialog_data.fields {
-                        match field {
-                            FormFieldRuntime::TextInput {
-                                edit_control_id, ..
-                            } if command_id == *edit_control_id
-                                && notification_code == EN_CHANGE as i32 =>
-                            {
-                                needs_refresh = true;
-                            }
-                            FormFieldRuntime::CheckBox { control_id, .. }
-                                if command_id == *control_id && notification_code == 0 =>
-                            {
-                                needs_refresh = true;
-                            }
-                            _ => {}
+                    unsafe {
+                        SetBkColor(hdc, COLOR_DIALOG_BG);
+                        SetTextColor(hdc, COLOR_DIALOG_TEXT);
+                        SetBkMode(hdc, TRANSPARENT);
+                    }
+                    let control_id_raw = unsafe { GetDlgCtrlID(hwnd_control) };
+                    if let Some(severity) = dialog_data.note_severities.get(&control_id_raw) {
+                        unsafe {
+                            SetTextColor(
+                                hdc,
+                                match severity {
+                                    MessageSeverity::Warning => COLOR_DIALOG_WARNING,
+                                    MessageSeverity::Error => COLORREF(0x0000_66FF),
+                                    _ => COLOR_DIALOG_TEXT,
+                                },
+                            );
                         }
                     }
-                    if needs_refresh {
-                        update_form_dialog_live_state(hdlg);
-                        return TRUE.0 as isize;
-                    }
-                    FALSE.0 as isize
-                }
-            }
-        }
-        WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORBTN => {
-            let hdc = HDC(wparam.0 as *mut c_void);
-            let hwnd_control = HWND(lparam.0 as *mut c_void);
-            let dialog_data_ptr =
-                unsafe { GetWindowLongPtrW(hdlg, GWLP_USERDATA) } as *mut FormDialogData;
-            if !dialog_data_ptr.is_null() {
-                let dialog_data = unsafe { &mut *dialog_data_ptr };
-                unsafe {
-                    SetBkColor(hdc, COLOR_DIALOG_BG);
-                    SetTextColor(hdc, COLOR_DIALOG_TEXT);
-                    SetBkMode(hdc, TRANSPARENT);
-                }
-                let control_id_raw = unsafe { GetDlgCtrlID(hwnd_control) };
-                if let Some(severity) = dialog_data.note_severities.get(&control_id_raw) {
+                } else {
                     unsafe {
-                        SetTextColor(
-                            hdc,
-                            match severity {
-                                MessageSeverity::Warning => COLOR_DIALOG_WARNING,
-                                MessageSeverity::Error => COLORREF(0x0000_66FF),
-                                _ => COLOR_DIALOG_TEXT,
-                            },
-                        );
+                        SetBkColor(hdc, COLOR_DIALOG_BG);
+                        SetTextColor(hdc, COLOR_DIALOG_TEXT);
+                        SetBkMode(hdc, TRANSPARENT);
                     }
                 }
-            } else {
+                let _ = hwnd_control;
+                form_background_brush().0 as isize
+            }
+            WM_CLOSE => {
                 unsafe {
-                    SetBkColor(hdc, COLOR_DIALOG_BG);
-                    SetTextColor(hdc, COLOR_DIALOG_TEXT);
-                    SetBkMode(hdc, TRANSPARENT);
+                    EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default();
                 }
+                TRUE.0 as isize
             }
-            let _ = hwnd_control;
-            form_background_brush().0 as isize
-        }
-        WM_CLOSE => {
-            unsafe {
-                EndDialog(hdlg, IDCANCEL.0 as isize).unwrap_or_default();
-            }
-            TRUE.0 as isize
-        }
-        _ => FALSE.0 as isize,
-    }
+            _ => FALSE.0 as isize,
+        },
+        || FALSE.0 as isize,
+    )
 }
 
 pub(crate) fn handle_show_form_dialog_command(
