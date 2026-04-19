@@ -1,3 +1,6 @@
+#![allow(clippy::redundant_pub_crate)]
+// Keep `pub(crate)` explicit even inside crate-private modules so internal visibility stays obvious.
+
 //! CommanDuctUI is a declarative, command-driven Win32 UI toolkit.
 //!
 //! Host applications describe native UI work by enqueueing [`PlatformCommand`] values and
@@ -28,6 +31,8 @@ pub(crate) use styling_stub as styling;
 #[cfg(target_os = "windows")]
 pub(crate) use styling_windows as styling;
 pub mod types;
+#[cfg(target_os = "windows")]
+pub(crate) mod win32_cast;
 #[cfg(target_os = "windows")]
 pub(crate) mod window_common;
 

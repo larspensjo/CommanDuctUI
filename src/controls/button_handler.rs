@@ -225,11 +225,11 @@ pub(crate) fn handle_wm_drawitem(
         // Resolve colors: style values or system defaults as fallback
         let base_bg = style
             .as_ref()
-            .and_then(|s| s.background_color.clone())
+            .and_then(|s| s.background_color)
             .unwrap_or_else(|| colorref_to_color(COLORREF(GetSysColor(COLOR_BTNFACE))));
         let base_fg = style
             .as_ref()
-            .and_then(|s| s.text_color.clone())
+            .and_then(|s| s.text_color)
             .unwrap_or_else(|| colorref_to_color(COLORREF(GetSysColor(COLOR_BTNTEXT))));
 
         // Determine final colors based on button state

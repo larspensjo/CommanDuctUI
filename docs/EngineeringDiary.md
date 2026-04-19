@@ -47,3 +47,11 @@ Change: Added a shared FFI panic barrier, caught host panics inside `send_event`
 Lessons Learned: Win32 callback safety depends as much on ownership transfer timing and panic boundaries as on the local message logic itself.
 Prevention: Review every new `extern "system"` entry point and every `GWLP_USERDATA` write for explicit unwind handling and single-owner state transfer before landing control code.
 Refs: src/ffi_safety.rs, src/app.rs, src/window_common.rs, src/controls/listbox_handler.rs, src/controls/tab_bar_handler.rs, src/controls/menu_handler.rs, src/controls/dark_border.rs, src/controls/panel_handler.rs
+
+## 2026-04-19 - Pedantic lint debt trimmed around style copies and Win32 casts
+Type: Bug Fix
+Context: The phase 4 code-quality review identified a few low-risk issues that were cheap to fix directly: stale `dead_code` attributes, noisy `redundant_pub_crate` warnings, real `usize -> i32` truncation risks at Win32 boundaries, and unnecessary `Color` clones in paint-adjacent code.
+Change: Derived `Copy` for `Color` and `FontWeight`, removed `clone()` calls that were only copying style colors, introduced `src/win32_cast.rs` for named saturating Win32 conversions, removed inert `#[allow(dead_code)]` annotations from public enums, and documented the crate-wide `redundant_pub_crate` policy in `src/lib.rs`.
+Lessons Learned: The best way to keep pedantic lint runs useful is to fix the genuinely risky conversions and silence only the noise that encodes an intentional project convention.
+Prevention: When a review item points at a specific cast or lint family, add a named helper or crate-level policy comment rather than spreading ad hoc `as` casts and `#[allow]`s through the codebase.
+Refs: src/styling_primitives.rs, src/lib.rs, src/types.rs, src/win32_cast.rs, src/controls/listbox_handler.rs, src/controls/treeview_handler.rs, src/controls/button_handler.rs, docs/Review.04-CodeQuality.md, docs/Review.Backlog.md

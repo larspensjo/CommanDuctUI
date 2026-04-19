@@ -114,7 +114,7 @@ re-run before citing:
 ### F-04-004: `Color` does not implement `Copy`, forcing `.clone()` inside paint loops
 - **Severity:** Minor
 - **Dimension:** quality
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/styling_primitives.rs:4-12](../src/styling_primitives.rs#L4), [src/controls/listbox_handler.rs:141-167](../src/controls/listbox_handler.rs#L141), [src/controls/listbox_handler.rs:787-821](../src/controls/listbox_handler.rs#L787)
 - **Observation:** `Color { r: u8, g: u8, b: u8 }` derives `Clone` but not `Copy`, even though all fields are `Copy`. Every paint path that needs to pass a color by value writes `.clone()` — the listbox row-paint picks palette colors with `.clone()` branches that would be free copies. `ListBoxState` palette setters also write `.clone()` on the way in. The crate-internal `ColorPair` in listbox_handler has the same shape.
 - **Why it matters:** adding `Copy` to a public struct of three `u8`s is a fully SemVer-compatible, one-line change that removes nine `.clone()` calls in the hot paint paths and prevents a reviewer from wondering "is this `.clone()` load-bearing?" at every site. `FontWeight` (unit-variant enum) has the same shape.
@@ -133,7 +133,7 @@ re-run before citing:
 ### F-04-006: `#[allow(dead_code)]` on four `pub` enums is meaningless and misleading
 - **Severity:** Minor
 - **Dimension:** quality
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/types.rs:192](../src/types.rs#L192), [src/types.rs:366](../src/types.rs#L366), [src/types.rs:381](../src/types.rs#L381), [src/types.rs:511](../src/types.rs#L511)
 - **Observation:** `#[allow(dead_code)]` annotates `DockStyle`, `MessageSeverity`, `LabelClass`, and `PlatformCommand`. The `dead_code` lint does not fire on `pub` items in a library crate, so the attribute is inert. It does, however, carry signalling weight — a reader concludes "this type has unused variants the author wants the compiler to ignore", which is not actually true of these types (they each have in-crate use sites or are reachable from consumers).
 - **Why it matters:** readers rely on attributes being meaningful. A stale `#[allow]` erodes that trust and hides the question the attribute was originally answering. `PlatformCommand` especially shouldn't wear this — the crate is months away from a crates.io release and the docs-team sweep will flag it.
@@ -142,7 +142,7 @@ re-run before citing:
 ### F-04-007: 170 `redundant_pub_crate` warnings add noise without structural value
 - **Severity:** Nit
 - **Dimension:** quality
-- **Status:** open
+- **Status:** fixed
 - **Location:** whole tree; densest in `src/window_common.rs` and `src/controls/dialog_handler.rs`
 - **Observation:** `pub(crate) fn`/`pub(crate) struct` inside `mod` items that are already private to the crate generates redundant-pub-crate warnings. They are harmless but dominate the pedantic output (170/929 warnings) and make scanning the real findings harder.
 - **Why it matters:** pure noise that buries signal. At the same time, a crate-wide `#[allow(clippy::redundant_pub_crate)]` in `lib.rs` isn't obviously the right call — Phase 1 already flagged that several types were only reachable via internal paths (Phase 2 [F-02-006](Review.02-ApiAndRelease.md#f-02-006-several-public-types-are-only-reachable-via-internal-module-paths)), and keeping `pub(crate)` on the in-crate surface keeps that discipline visible.
@@ -151,7 +151,7 @@ re-run before citing:
 ### F-04-008: Cast-family lints hide a handful of real truncation sites
 - **Severity:** Minor
 - **Dimension:** quality
-- **Status:** open
+- **Status:** fixed
 - **Location:** [src/controls/treeview_handler.rs:131](../src/controls/treeview_handler.rs#L131), [src/controls/treeview_handler.rs:509](../src/controls/treeview_handler.rs#L509), [src/controls/listbox_handler.rs:446](../src/controls/listbox_handler.rs#L446), [src/controls/listbox_handler.rs:475](../src/controls/listbox_handler.rs#L475); ~230 further instances across the tree (most benign)
 - **Observation:** Clippy's `cast_possible_truncation` / `cast_possible_wrap` / `cast_sign_loss` / `cast_lossless` family fires on the order of 230 times. The vast majority are Win32 API coercions (`i32` ↔ `u32` ↔ `usize` at the Win32 boundary) where the types are dictated by the Win32 ABI and the value ranges are OS-constrained. A handful are genuinely risky, all sitting at `usize → i32` conversions feeding Win32 counters: `text_buffer.len() as i32` feeding `TVITEMEXW::cchTextMax` in `treeview_handler` (two sites), and `state.items.len().saturating_sub(visible) as i32` / `state.scroll_row as i32` feeding `SCROLLINFO::nMax` / `nPos` in `listbox_handler`. A pathological list or tree item would truncate silently to `i32::MAX`, then wrap.
 - **Why it matters:** buried-in-noise truncation. Blanket-silencing the whole cast family at crate level masks the real finds; leaving them on makes future `cargo clippy -W pedantic` passes useless. The cited sites need explicit `i32::try_from(len).unwrap_or(i32::MAX)` or equivalent — a contract assertion rather than silent loss.

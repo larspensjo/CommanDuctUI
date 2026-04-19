@@ -5,6 +5,7 @@ Update it together with `Cargo.toml` when cutting a new version.
 Skip changelog entries for internal-only refactors, plans, review docs, diary updates, and doc-only or test-only changes unless they ship as part of a user-visible release.
 
 ## Unreleased
+- **API**: Derive `Copy` for public `Color` and `FontWeight`, making style values cheaper and clearer to pass through hot paint paths without load-bearing `.clone()` calls.
 
 ## 2.0.1 - 2026-04-19
 - **Fix**: Guard every Rust-owned Win32 callback behind a panic barrier so host `handle_event` panics and other callback failures no longer unwind across the FFI boundary or poison the event-handler mutex path.

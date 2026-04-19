@@ -94,18 +94,20 @@ impl Win32ApiInternalState {
      */
     pub(crate) fn prepare_new_window(&self) -> PlatformResult<WindowId> {
         let window_id = self.generate_unique_window_id();
-        let mut windows_map = self.active_windows.write().map_err(|e| {
-            log::error!(
-                "Win32ApiInternalState: Failed to lock active_windows for preliminary insert of WinID {window_id:?}: {e:?}"
-            );
-            PlatformError::OperationFailed(
-                "Failed to lock active_windows for new window preparation".into(),
-            )
-        })?;
+        let previous_entry = {
+            let mut windows_map = self.active_windows.write().map_err(|e| {
+                log::error!(
+                    "Win32ApiInternalState: Failed to lock active_windows for preliminary insert of WinID {window_id:?}: {e:?}"
+                );
+                PlatformError::OperationFailed(
+                    "Failed to lock active_windows for new window preparation".into(),
+                )
+            })?;
 
-        if let Some(previous_entry) =
             windows_map.insert(window_id, window_common::NativeWindowData::new(window_id))
-        {
+        };
+
+        if let Some(previous_entry) = previous_entry {
             log::error!(
                 "Win32ApiInternalState: Replaced existing NativeWindowData while preparing WinID {window_id:?}. Old data will be dropped."
             );
@@ -388,33 +390,54 @@ impl Win32ApiInternalState {
     }
 
     pub(crate) fn describe_hwnd(&self, hwnd: HWND) -> String {
-        let windows_map = match self.active_windows.read() {
-            Ok(guard) => guard,
-            Err(poisoned_err) => {
-                return format!(
-                    "hwnd={hwnd:?} resolve_error=poisoned_active_windows:{poisoned_err:?}"
-                );
-            }
-        };
-
-        for (window_id, window_data) in windows_map.iter() {
-            if window_data.get_hwnd() == hwnd {
-                return format!("hwnd={hwnd:?} target=window window_id={window_id:?}");
-            }
-
-            if let Some(control_id) = window_data.find_control_id_by_hwnd(hwnd) {
-                let control_kind = window_data
-                    .get_control_kind(control_id)
-                    .map(|kind| format!("{kind:?}"))
-                    .unwrap_or_else(|| "Unknown".to_string());
-                return format!(
-                    "hwnd={hwnd:?} target=control window_id={window_id:?} control_id={} kind={control_kind}",
-                    control_id.raw()
-                );
-            }
+        enum ResolvedHwndTarget {
+            Poisoned(String),
+            Window(WindowId),
+            Control(WindowId, ControlId, Option<window_common::ControlKind>),
+            Unresolved,
         }
 
-        format!("hwnd={hwnd:?} target=unresolved")
+        let target = match self.active_windows.read() {
+            Ok(guard) => {
+                let mut resolved = ResolvedHwndTarget::Unresolved;
+                for (window_id, window_data) in guard.iter() {
+                    if window_data.get_hwnd() == hwnd {
+                        resolved = ResolvedHwndTarget::Window(*window_id);
+                        break;
+                    }
+
+                    if let Some(control_id) = window_data.find_control_id_by_hwnd(hwnd) {
+                        resolved = ResolvedHwndTarget::Control(
+                            *window_id,
+                            control_id,
+                            window_data.get_control_kind(control_id),
+                        );
+                        break;
+                    }
+                }
+                resolved
+            }
+            Err(poisoned_err) => ResolvedHwndTarget::Poisoned(format!("{poisoned_err:?}")),
+        };
+
+        match target {
+            ResolvedHwndTarget::Poisoned(error) => {
+                format!("hwnd={hwnd:?} resolve_error=poisoned_active_windows:{error}")
+            }
+            ResolvedHwndTarget::Window(window_id) => {
+                format!("hwnd={hwnd:?} target=window window_id={window_id:?}")
+            }
+            ResolvedHwndTarget::Control(window_id, control_id, control_kind) => {
+                let control_kind = control_kind
+                    .map(|kind| format!("{kind:?}"))
+                    .unwrap_or_else(|| "Unknown".to_string());
+                format!(
+                    "hwnd={hwnd:?} target=control window_id={window_id:?} control_id={} kind={control_kind}",
+                    control_id.raw()
+                )
+            }
+            ResolvedHwndTarget::Unresolved => format!("hwnd={hwnd:?} target=unresolved"),
+        }
     }
 
     /*

@@ -1,7 +1,7 @@
 //! Platform-agnostic styling primitives shared by host logic and the platform layer.
 
 /// RGB color used by public styling commands and descriptors.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Color {
     /// Red channel.
     pub r: u8,
@@ -12,7 +12,7 @@ pub struct Color {
 }
 
 /// Font-weight hint for a resolved control font.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FontWeight {
     /// Default or regular weight.
     #[default]

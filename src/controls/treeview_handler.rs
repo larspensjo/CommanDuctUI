@@ -17,6 +17,7 @@ use crate::styling_primitives::Color;
 use crate::types::{
     AppEvent, CheckState, ControlId, TreeItemDescriptor, TreeItemId, TreeItemMarkerKind, WindowId,
 };
+use crate::win32_cast::i32_from_usize_saturating;
 use crate::window_common::{ControlKind, try_enable_dark_mode};
 
 use windows::{
@@ -128,7 +129,7 @@ impl TreeViewInternalState {
             mask: TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN,
             hItem: HTREEITEM::default(), // Will be filled by the system if successful
             pszText: PWSTR(text_buffer.as_mut_ptr()),
-            cchTextMax: text_buffer.len() as i32,
+            cchTextMax: i32_from_usize_saturating(text_buffer.len()),
             lParam: LPARAM(item_desc.id.0 as isize), // Store app-specific TreeItemId
             cChildren: TVITEMEXW_CHILDREN(if item_desc.is_folder { 1 } else { 0 }), // Hint if it has children
             ..Default::default()
@@ -506,7 +507,7 @@ pub(crate) fn update_treeview_item_text(
         mask: TVIF_TEXT,
         hItem: h_item_native,
         pszText: PWSTR(text_buffer.as_mut_ptr()),
-        cchTextMax: text_buffer.len() as i32,
+        cchTextMax: i32_from_usize_saturating(text_buffer.len()),
         ..Default::default()
     };
 
@@ -1130,19 +1131,19 @@ fn resolve_item_colors(
     // 2. Per-item override wins over base
     let has_item_text_override = override_text.is_some();
     if let Some(c) = override_text {
-        text = Some(c.clone());
+        text = Some(*c);
     }
     if let Some(c) = override_bg {
-        bg = Some(c.clone());
+        bg = Some(*c);
     }
 
     // 3. Selection: bg always wins; text wins unless per-item override set custom text
     if is_selected {
         if let Some(c) = selection_bg {
-            bg = Some(c.clone());
+            bg = Some(*c);
         }
         if !has_item_text_override && let Some(c) = selection_text {
-            text = Some(c.clone());
+            text = Some(*c);
         }
     }
 
@@ -1240,13 +1241,7 @@ pub(crate) fn handle_nm_customdraw(
             let mut selected_font: Option<HFONT> = None;
             let (base_text, base_bg, base_font) = base_style_id
                 .and_then(|sid| internal_state.get_parsed_style(sid))
-                .map(|s| {
-                    (
-                        s.text_color.clone(),
-                        s.background_color.clone(),
-                        s.font_handle,
-                    )
-                })
+                .map(|s| (s.text_color, s.background_color, s.font_handle))
                 .unwrap_or((None, None, None));
             if let Some(f) = base_font {
                 selected_font = Some(f);
@@ -1263,13 +1258,7 @@ pub(crate) fn handle_nm_customdraw(
 
             let (override_text, override_bg, override_font) = style_override
                 .and_then(|sid| internal_state.get_parsed_style(sid))
-                .map(|s| {
-                    (
-                        s.text_color.clone(),
-                        s.background_color.clone(),
-                        s.font_handle,
-                    )
-                })
+                .map(|s| (s.text_color, s.background_color, s.font_handle))
                 .unwrap_or((None, None, None));
             if let Some(f) = override_font {
                 selected_font = Some(f);
@@ -1279,7 +1268,7 @@ pub(crate) fn handle_nm_customdraw(
             let selection_style = internal_state.get_parsed_style(StyleId::TreeViewSelectedRow);
             let (selection_text, selection_bg) = selection_style
                 .as_ref()
-                .map(|s| (s.text_color.clone(), s.background_color.clone()))
+                .map(|s| (s.text_color, s.background_color))
                 .unwrap_or((None, None));
 
             // Detect selection
@@ -1356,7 +1345,7 @@ pub(crate) fn handle_nm_customdraw(
 
             let selection_accent_color = internal_state
                 .get_parsed_style(StyleId::TreeViewSelectionAccent)
-                .and_then(|style| style.background_color.clone());
+                .and_then(|style| style.background_color);
             let draws_selection_accent =
                 should_draw_selection_accent(is_selected, selection_accent_color.is_some());
             let hides_state_icon = check_state == CheckState::Hidden;
@@ -1482,7 +1471,7 @@ pub(crate) fn handle_nm_customdraw(
                 caret_item == h_item_native,
                 internal_state
                     .get_parsed_style(StyleId::TreeViewSelectionAccent)
-                    .and_then(|style| style.background_color.clone())
+                    .and_then(|style| style.background_color)
                     .is_some(),
             ) && let Some(accent_style) =
                 internal_state.get_parsed_style(StyleId::TreeViewSelectionAccent)

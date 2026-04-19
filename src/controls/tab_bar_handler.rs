@@ -824,7 +824,7 @@ mod tests {
             g: 0x80,
             b: 0xFF,
         };
-        let palette = TabBarPalette::new(bg.clone(), text.clone(), accent.clone());
+        let palette = TabBarPalette::new(bg, text, accent);
 
         // text_inactive = 40% text + 60% background
         let expected_inactive_r = ((0xE0u16 * 40 + 0x2Eu16 * 60) / 100) as u8;

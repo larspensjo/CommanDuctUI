@@ -189,7 +189,6 @@ pub struct MenuItemConfig {
 }
 
 /// Docking rule used by the built-in layout engine.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DockStyle {
     /// No docking. Positioning is handled elsewhere.
@@ -363,7 +362,6 @@ pub enum AppEvent {
 }
 
 /// Severity level used by status and message-box surfaces.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum MessageSeverity {
@@ -378,7 +376,6 @@ pub enum MessageSeverity {
 }
 
 /// Semantic classification for label controls.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelClass {
     Default,
@@ -508,7 +505,6 @@ pub enum FormFieldValue {
 }
 
 /// Platform-agnostic commands sent from host logic to the platform layer.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PlatformCommand {

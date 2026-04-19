@@ -19,6 +19,7 @@ use crate::error::{PlatformError, Result as PlatformResult};
 use crate::ffi_safety::{self, DeferredWindowState};
 use crate::styling::{Color, ParsedControlStyle, StyleId};
 use crate::types::{ControlId, ListBoxItemDescriptor, ListBoxItemId, WindowId};
+use crate::win32_cast::{i32_from_usize_saturating, u32_from_usize_saturating};
 use crate::window_common::{
     ControlKind, WM_APP_LISTBOX_KEYDOWN, WM_APP_LISTBOX_SCROLLED, WM_APP_LISTBOX_SELECTION_CHANGED,
     get_x_lparam, get_y_lparam, try_enable_dark_mode,
@@ -65,7 +66,7 @@ const BADGE_RADIUS: i32 = 3;
 const ACCENT_WIDTH: i32 = 3;
 const DEFAULT_BADGE_COLUMN_WIDTH: i32 = 130;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct ColorPair {
     background: Color,
     text: Color,
@@ -138,33 +139,33 @@ fn apply_palette_style(
     match style_id {
         StyleId::ListBoxRow => {
             if let Some(color) = style.background_color.as_ref() {
-                palette.row_background = color.clone();
+                palette.row_background = *color;
             }
             if let Some(color) = style.text_color.as_ref() {
-                palette.row_text = color.clone();
+                palette.row_text = *color;
             }
         }
         StyleId::ListBoxSelectedRow => {
             if let Some(color) = style.background_color.as_ref() {
-                palette.selected_background = color.clone();
+                palette.selected_background = *color;
             }
         }
         StyleId::ListBoxSelectionAccent => {
             if let Some(color) = style.background_color.as_ref() {
-                palette.accent = color.clone();
+                palette.accent = *color;
             }
         }
         StyleId::ListBoxHoverRow => {
             if let Some(color) = style.background_color.as_ref() {
-                palette.hover_background = color.clone();
+                palette.hover_background = *color;
             }
         }
         StyleId::ListBoxDisabledRow => {
             if let Some(color) = style.background_color.as_ref() {
-                palette.disabled_background = color.clone();
+                palette.disabled_background = *color;
             }
             if let Some(color) = style.text_color.as_ref() {
-                palette.disabled_text = color.clone();
+                palette.disabled_text = *color;
             }
         }
         _ => {}
@@ -456,7 +457,7 @@ unsafe fn set_scroll_row(hwnd: HWND, row: usize) {
     state.scroll_row = row.min(max_row);
     update_scroll_info(hwnd);
     let _ = InvalidateRect(Some(hwnd), None, false);
-    notify_scroll_changed(hwnd, state.scroll_row as u32);
+    notify_scroll_changed(hwnd, u32_from_usize_saturating(state.scroll_row));
 }
 
 unsafe fn visible_rows(hwnd: HWND) -> usize {
@@ -472,14 +473,14 @@ unsafe fn update_scroll_info(hwnd: HWND) {
     };
     let state = &mut *state_ptr;
     let visible = visible_rows(hwnd).max(1);
-    let max = state.items.len().saturating_sub(visible) as i32;
+    let max = i32_from_usize_saturating(state.items.len().saturating_sub(visible));
     let si = SCROLLINFO {
         cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
         fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
         nMin: 0,
         nMax: max,
-        nPage: visible as u32,
-        nPos: state.scroll_row as i32,
+        nPage: u32_from_usize_saturating(visible),
+        nPos: i32_from_usize_saturating(state.scroll_row),
         ..Default::default()
     };
     let _ = SetScrollInfo(hwnd, SB_VERT, &si, true);
@@ -784,13 +785,13 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
             bottom: top + ROW_HEIGHT,
         };
         let bg = if state.selected_index == Some(row_index) {
-            state.palette.selected_background.clone()
+            state.palette.selected_background
         } else if state.hover_index == Some(row_index) {
-            state.palette.hover_background.clone()
+            state.palette.hover_background
         } else if !item.enabled {
-            state.palette.disabled_background.clone()
+            state.palette.disabled_background
         } else {
-            state.palette.row_background.clone()
+            state.palette.row_background
         };
         let row_brush = unsafe { CreateSolidBrush(color_to_colorref(&bg)) };
         let _ = unsafe { FillRect(hdc, &row_rect, row_brush) };
@@ -811,14 +812,14 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
         draw_badges(hdc, state, item, top);
 
         let title_color = if item.enabled {
-            state.palette.row_text.clone()
+            state.palette.row_text
         } else {
-            state.palette.disabled_text.clone()
+            state.palette.disabled_text
         };
         let meta_color = if item.enabled {
-            state.palette.row_metadata.clone()
+            state.palette.row_metadata
         } else {
-            state.palette.disabled_text.clone()
+            state.palette.disabled_text
         };
         let title_rect = RECT {
             left: state.badge_column_width + ROW_PAD_LEFT,
