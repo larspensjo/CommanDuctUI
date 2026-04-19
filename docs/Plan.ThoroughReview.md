@@ -13,7 +13,7 @@ of later phases; record plan changes in the "Plan revisions" section at the bott
 - [x] Phase 0 — Survey & framing
 - [x] Phase 1 — Architecture & module boundaries
 - [x] Phase 2 — Public API, documentation, crates.io readiness
-- [ ] Phase 3 — Correctness & safety
+- [x] Phase 3 — Correctness & safety
 - [ ] Phase 4 — Code quality & idiomatic Rust
 - [ ] Phase 5 — Testability & coverage
 - [ ] Phase 6 — Consolidation & release-readiness
@@ -83,23 +83,23 @@ Optional aids: the `code-review-graph` MCP tools
 
 ### Phase 3 — Correctness & safety
 
-- [ ] Audit every `unsafe` block
-- [ ] Verify paired lifetimes for each Win32 resource type:
-  - [ ] HWND / DestroyWindow
-  - [ ] HFONT / DeleteObject
-  - [ ] HBRUSH / DeleteObject
-  - [ ] HMENU / DestroyMenu
-  - [ ] HDC acquisition / release
-  - [ ] HBITMAP / DeleteObject
-  - [ ] HRGN / DeleteObject
-- [ ] Audit `Drop` implementations for correctness
-- [ ] Thread-safety review of shared state under the message loop
-- [ ] Scan `unwrap` / `expect` sites in non-infallible positions
-- [ ] Review integer/handle conversions: `as i32`, `as u32`, `as usize`,
+- [x] Audit every `unsafe` block
+- [x] Verify paired lifetimes for each Win32 resource type:
+  - [x] HWND / DestroyWindow
+  - [x] HFONT / DeleteObject
+  - [x] HBRUSH / DeleteObject
+  - [x] HMENU / DestroyMenu
+  - [x] HDC acquisition / release
+  - [x] HBITMAP / DeleteObject
+  - [x] HRGN / DeleteObject
+- [x] Audit `Drop` implementations for correctness
+- [x] Thread-safety review of shared state under the message loop
+- [x] Scan `unwrap` / `expect` sites in non-infallible positions
+- [x] Review integer/handle conversions: `as i32`, `as u32`, `as usize`,
   `transmute`
-- [ ] Review message-loop reentrancy (what happens if a handler posts a
+- [x] Review message-loop reentrancy (what happens if a handler posts a
   message that re-enters the reducer?)
-- [ ] Produce `docs/Review.03-Correctness.md`
+- [x] Produce `docs/Review.03-Correctness.md`
 
 ### Phase 4 — Code quality & idiomatic Rust
 
