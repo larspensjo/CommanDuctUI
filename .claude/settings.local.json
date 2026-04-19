@@ -7,7 +7,11 @@
       "Bash(cargo doc *)",
       "Bash(grep -cE '^///' src/types.rs src/app.rs src/lib.rs src/error.rs src/styling_primitives.rs)",
       "Bash(grep -cE '^//[^/!]' src/types.rs src/app.rs src/lib.rs src/error.rs src/styling_primitives.rs)",
-      "Bash(cargo package *)"
+      "Bash(cargo package *)",
+      "Bash(cargo --version)",
+      "Bash(rustc --version)",
+      "Bash(tee /tmp/clippy-phase4.txt)",
+      "Bash(awk '/significant_drop_tightening/ {for\\(i=NR-10;i<NR;i++\\) print lines[i % 20]} {lines[NR % 20]=$0}' /tmp/clippy-phase4.txt)"
     ]
   }
 }

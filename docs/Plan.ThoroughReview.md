@@ -14,7 +14,7 @@ of later phases; record plan changes in the "Plan revisions" section at the bott
 - [x] Phase 1 — Architecture & module boundaries
 - [x] Phase 2 — Public API, documentation, crates.io readiness
 - [x] Phase 3 — Correctness & safety
-- [ ] Phase 4 — Code quality & idiomatic Rust
+- [x] Phase 4 — Code quality & idiomatic Rust
 - [ ] Phase 5 — Testability & coverage
 - [ ] Phase 6 — Consolidation & release-readiness
 
@@ -103,16 +103,16 @@ Optional aids: the `code-review-graph` MCP tools
 
 ### Phase 4 — Code quality & idiomatic Rust
 
-- [ ] Run `cargo clippy --all-targets -- -W clippy::pedantic -W clippy::nursery`
+- [x] Run `cargo clippy --all-targets -- -W clippy::pedantic -W clippy::nursery`
   and triage output
-- [ ] Review error-handling consistency: `PlatformResult` propagation vs.
+- [x] Review error-handling consistency: `PlatformResult` propagation vs.
   silent fallback
-- [ ] Identify DRY violations across control handlers
-- [ ] Identify dead code
-- [ ] Audit allocation hotspots in paint/message paths (e.g. `format!` inside
+- [x] Identify DRY violations across control handlers
+- [x] Identify dead code
+- [x] Audit allocation hotspots in paint/message paths (e.g. `format!` inside
   `WM_PAINT`)
-- [ ] Review trait usage ergonomics for `PlatformEventHandler`, `UiStateProvider`
-- [ ] Produce `docs/Review.04-CodeQuality.md`
+- [x] Review trait usage ergonomics for `PlatformEventHandler`, `UiStateProvider`
+- [x] Produce `docs/Review.04-CodeQuality.md`
 
 ### Phase 5 — Testability & coverage
 
