@@ -23,6 +23,7 @@
 ## Testing
 - Bug fixes should include a regression test when practical.
 - Prefer tests of event translation, emitted effects, and public contracts over internal details.
+- Reducer seam before Win32 syscall. When a function both (a) decides something from its inputs and (b) calls Win32 to act on that decision, split (a) into a pure function and test it. Event-translation handlers should be callable with `HWND::default()` — if they can't, the reduction is still entangled.
 - `use super::*;` is acceptable inside an inline `#[cfg(test)]` block, but extracted test files (e.g. `tests.rs`) must use explicit imports.
 
 ## Diary

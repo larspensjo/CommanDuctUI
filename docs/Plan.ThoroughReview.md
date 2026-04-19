@@ -15,7 +15,7 @@ of later phases; record plan changes in the "Plan revisions" section at the bott
 - [x] Phase 2 — Public API, documentation, crates.io readiness
 - [x] Phase 3 — Correctness & safety
 - [x] Phase 4 — Code quality & idiomatic Rust
-- [ ] Phase 5 — Testability & coverage
+- [x] Phase 5 — Testability & coverage
 - [ ] Phase 6 — Consolidation & release-readiness
 
 ## Approach
@@ -116,13 +116,13 @@ Optional aids: the `code-review-graph` MCP tools
 
 ### Phase 5 — Testability & coverage
 
-- [ ] Inventory existing tests via `cargo test`
-- [ ] Map each `PlatformCommand` variant to whether its handling is tested
-- [ ] Identify pure logic currently entangled with Win32 calls that could be
+- [x] Inventory existing tests via `cargo test`
+- [x] Map each `PlatformCommand` variant to whether its handling is tested
+- [x] Identify pure logic currently entangled with Win32 calls that could be
   extracted for reducer-style unit tests (per [Agents.md:17-19](../Agents.md#L17-L19))
-- [ ] Identify surfaces that are hard to test and document why
-- [ ] Recommend test additions ordered by payoff
-- [ ] Produce `docs/Review.05-Testability.md`
+- [x] Identify surfaces that are hard to test and document why
+- [x] Recommend test additions ordered by payoff
+- [x] Produce `docs/Review.05-Testability.md`
 
 ### Phase 6 — Consolidation & release-readiness
 
