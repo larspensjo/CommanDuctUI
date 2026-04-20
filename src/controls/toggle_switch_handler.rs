@@ -113,6 +113,10 @@ impl ToggleSwitchState {
             palette: ToggleSwitchPalette::default(),
         }
     }
+
+    fn toggle(&mut self) {
+        self.checked = !self.checked;
+    }
 }
 
 // ── Window class ──────────────────────────────────────────────────────────────
@@ -177,10 +181,10 @@ unsafe extern "system" fn toggle_switch_wnd_proc(
                     focus_on_click(hwnd, KEYBOARD_NAVIGATION);
                     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                     if ptr != 0 {
-                        let state = ptr as *mut ToggleSwitchState;
-                        (*state).checked = !(*state).checked;
+                        let state = &mut *(ptr as *mut ToggleSwitchState);
+                        state.toggle();
                         let _ = InvalidateRect(Some(hwnd), None, false);
-                        let new_checked = (*state).checked;
+                        let new_checked = state.checked;
                         let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)); // GA_ROOT
                         if !root.is_invalid() {
                             let _ = SendMessageW(
@@ -200,10 +204,10 @@ unsafe extern "system" fn toggle_switch_wnd_proc(
                     unsafe {
                         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                         if ptr != 0 {
-                            let state = ptr as *mut ToggleSwitchState;
-                            (*state).checked = !(*state).checked;
+                            let state = &mut *(ptr as *mut ToggleSwitchState);
+                            state.toggle();
                             let _ = InvalidateRect(Some(hwnd), None, false);
-                            let new_checked = (*state).checked;
+                            let new_checked = state.checked;
                             let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)); // GA_ROOT
                             if !root.is_invalid() {
                                 let _ = SendMessageW(
@@ -524,4 +528,33 @@ pub(crate) fn handle_set_toggle_switch_style_command(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_palette_has_distinct_on_off_colors() {
+        let p = ToggleSwitchPalette::default();
+        assert_ne!(p.pill_off, p.pill_on, "on/off pill colors must differ");
+    }
+
+    #[test]
+    fn state_new_sets_checked_and_label() {
+        let s = ToggleSwitchState::new("Dark mode".to_string(), true);
+        assert!(s.checked);
+        assert_eq!(s.label, "Dark mode");
+        assert!(!s.focused);
+    }
+
+    #[test]
+    fn toggle_flips_checked() {
+        let mut s = ToggleSwitchState::new("Feature".to_string(), false);
+        assert!(!s.checked);
+        s.toggle();
+        assert!(s.checked);
+        s.toggle();
+        assert!(!s.checked);
+    }
 }

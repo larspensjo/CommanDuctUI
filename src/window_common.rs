@@ -2557,11 +2557,11 @@ impl Win32ApiInternalState {
                     control_id.raw(),
                     desired_left_width_px
                 );
-                Some(AppEvent::SplitterDragging {
+                Some(translate_splitter_dragging(
                     window_id,
                     control_id,
                     desired_left_width_px,
-                })
+                ))
             }
             WM_APP_SPLITTER_DRAG_ENDED => {
                 let _ = self.with_window_data_write(window_id, |window_data| {
@@ -2574,11 +2574,11 @@ impl Win32ApiInternalState {
                     control_id.raw(),
                     desired_left_width_px
                 );
-                Some(AppEvent::SplitterDragEnded {
+                Some(translate_splitter_drag_ended(
                     window_id,
                     control_id,
                     desired_left_width_px,
-                })
+                ))
             }
             _ => None,
         }
@@ -2613,11 +2613,11 @@ impl Win32ApiInternalState {
             "[TabBar] Tab selected: control_id={} selected_index={selected_index}",
             control_id.raw()
         );
-        Some(AppEvent::TabBarSelectionChanged {
+        Some(translate_tab_bar_selection_changed(
             window_id,
             control_id,
             selected_index,
-        })
+        ))
     }
 
     fn handle_wm_app_listbox_selection_changed(
@@ -2637,11 +2637,11 @@ impl Win32ApiInternalState {
             return None;
         }
 
-        Some(AppEvent::ListBoxItemSelectionChanged {
+        Some(translate_listbox_selection_changed(
             window_id,
-            control_id: ControlId::new(control_id_raw),
-            item_id: crate::types::ListBoxItemId(lparam.0 as u64),
-        })
+            ControlId::new(control_id_raw),
+            lparam.0 as u64,
+        ))
     }
 
     fn handle_wm_app_listbox_scrolled(
@@ -2661,11 +2661,11 @@ impl Win32ApiInternalState {
             return None;
         }
 
-        Some(AppEvent::ListBoxScrolled {
+        Some(translate_listbox_scrolled(
             window_id,
-            control_id: ControlId::new(control_id_raw),
-            position: lparam.0 as u32,
-        })
+            ControlId::new(control_id_raw),
+            lparam.0 as u32,
+        ))
     }
 
     fn handle_wm_app_listbox_keydown(
@@ -2685,12 +2685,11 @@ impl Win32ApiInternalState {
             return None;
         }
 
-        Some(AppEvent::ListBoxItemKeyDown {
+        Some(translate_listbox_keydown(
             window_id,
-            control_id: ControlId::new(control_id_raw),
-            // WM_APP_LISTBOX_KEYDOWN stores the original WORD-sized virtual-key in LPARAM.
-            key_code: lparam.0 as u16,
-        })
+            ControlId::new(control_id_raw),
+            lparam.0 as u16,
+        ))
     }
 
     /*
@@ -2720,11 +2719,9 @@ impl Win32ApiInternalState {
             "[ToggleSwitch] Toggled: control_id={} checked={checked}",
             control_id.raw()
         );
-        Some(AppEvent::ToggleSwitchToggled {
-            window_id,
-            control_id,
-            checked,
-        })
+        Some(translate_toggle_switch_toggled(
+            window_id, control_id, checked,
+        ))
     }
 
     fn resolve_ctlcolor_route(
@@ -3175,6 +3172,96 @@ pub(crate) fn destroy_native_window(
     };
     // This function's purpose is to *try* to destroy, so don't bubble up "not found" as an error.
     Ok(())
+}
+
+// ── Pure event-translation reducers (F-05-003) ───────────────────────────────
+//
+// Each function below translates already-resolved parameters into an `AppEvent`.
+// The Win32 `GetDlgCtrlID` lookup lives in the calling handler method; these
+// functions are free of Win32 dependencies and directly unit-testable.
+
+fn translate_listbox_selection_changed(
+    window_id: WindowId,
+    control_id: ControlId,
+    raw_item_id: u64,
+) -> AppEvent {
+    AppEvent::ListBoxItemSelectionChanged {
+        window_id,
+        control_id,
+        item_id: crate::types::ListBoxItemId(raw_item_id),
+    }
+}
+
+fn translate_listbox_scrolled(
+    window_id: WindowId,
+    control_id: ControlId,
+    position: u32,
+) -> AppEvent {
+    AppEvent::ListBoxScrolled {
+        window_id,
+        control_id,
+        position,
+    }
+}
+
+fn translate_listbox_keydown(
+    window_id: WindowId,
+    control_id: ControlId,
+    key_code: u16,
+) -> AppEvent {
+    AppEvent::ListBoxItemKeyDown {
+        window_id,
+        control_id,
+        key_code,
+    }
+}
+
+fn translate_splitter_dragging(
+    window_id: WindowId,
+    control_id: ControlId,
+    desired_left_width_px: i32,
+) -> AppEvent {
+    AppEvent::SplitterDragging {
+        window_id,
+        control_id,
+        desired_left_width_px,
+    }
+}
+
+fn translate_splitter_drag_ended(
+    window_id: WindowId,
+    control_id: ControlId,
+    desired_left_width_px: i32,
+) -> AppEvent {
+    AppEvent::SplitterDragEnded {
+        window_id,
+        control_id,
+        desired_left_width_px,
+    }
+}
+
+fn translate_toggle_switch_toggled(
+    window_id: WindowId,
+    control_id: ControlId,
+    checked: bool,
+) -> AppEvent {
+    AppEvent::ToggleSwitchToggled {
+        window_id,
+        control_id,
+        checked,
+    }
+}
+
+fn translate_tab_bar_selection_changed(
+    window_id: WindowId,
+    control_id: ControlId,
+    selected_index: usize,
+) -> AppEvent {
+    AppEvent::TabBarSelectionChanged {
+        window_id,
+        control_id,
+        selected_index,
+    }
 }
 
 #[cfg(test)]
@@ -3755,5 +3842,84 @@ mod tests {
         let result = data.effective_native_height_for_control(checkbox_id, 16);
 
         assert!(result >= checkbox_handler::fallback_min_checkbox_height_px());
+    }
+
+    // ── F-05-003: event-translation reducer tests ─────────────────────────
+
+    #[test]
+    fn translate_listbox_selection_produces_correct_event() {
+        let wid = WindowId::new(1);
+        let cid = ControlId::new(42);
+        let event = translate_listbox_selection_changed(wid, cid, 99);
+        assert!(
+            matches!(event, AppEvent::ListBoxItemSelectionChanged { window_id, control_id, item_id }
+                if window_id == wid && control_id == cid && item_id == crate::types::ListBoxItemId(99))
+        );
+    }
+
+    #[test]
+    fn translate_listbox_scrolled_produces_correct_event() {
+        let wid = WindowId::new(2);
+        let cid = ControlId::new(10);
+        let event = translate_listbox_scrolled(wid, cid, 75);
+        assert!(
+            matches!(event, AppEvent::ListBoxScrolled { window_id, control_id, position }
+                if window_id == wid && control_id == cid && position == 75)
+        );
+    }
+
+    #[test]
+    fn translate_listbox_keydown_produces_correct_event() {
+        let wid = WindowId::new(3);
+        let cid = ControlId::new(5);
+        let event = translate_listbox_keydown(wid, cid, 0x0D); // VK_RETURN
+        assert!(
+            matches!(event, AppEvent::ListBoxItemKeyDown { window_id, control_id, key_code }
+                if window_id == wid && control_id == cid && key_code == 0x0D)
+        );
+    }
+
+    #[test]
+    fn translate_splitter_dragging_produces_correct_event() {
+        let wid = WindowId::new(1);
+        let cid = ControlId::new(50);
+        let event = translate_splitter_dragging(wid, cid, 320);
+        assert!(
+            matches!(event, AppEvent::SplitterDragging { window_id, control_id, desired_left_width_px }
+                if window_id == wid && control_id == cid && desired_left_width_px == 320)
+        );
+    }
+
+    #[test]
+    fn translate_splitter_drag_ended_produces_correct_event() {
+        let wid = WindowId::new(1);
+        let cid = ControlId::new(50);
+        let event = translate_splitter_drag_ended(wid, cid, 400);
+        assert!(
+            matches!(event, AppEvent::SplitterDragEnded { window_id, control_id, desired_left_width_px }
+                if window_id == wid && control_id == cid && desired_left_width_px == 400)
+        );
+    }
+
+    #[test]
+    fn translate_toggle_switch_toggled_produces_correct_event() {
+        let wid = WindowId::new(2);
+        let cid = ControlId::new(77);
+        let event = translate_toggle_switch_toggled(wid, cid, true);
+        assert!(
+            matches!(event, AppEvent::ToggleSwitchToggled { window_id, control_id, checked }
+                if window_id == wid && control_id == cid && checked)
+        );
+    }
+
+    #[test]
+    fn translate_tab_bar_selection_changed_produces_correct_event() {
+        let wid = WindowId::new(3);
+        let cid = ControlId::new(88);
+        let event = translate_tab_bar_selection_changed(wid, cid, 2);
+        assert!(
+            matches!(event, AppEvent::TabBarSelectionChanged { window_id, control_id, selected_index }
+                if window_id == wid && control_id == cid && selected_index == 2)
+        );
     }
 }

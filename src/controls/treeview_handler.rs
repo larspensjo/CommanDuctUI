@@ -88,6 +88,32 @@ impl TreeViewInternalState {
         }
     }
 
+    /// Register an item in the bi-directional map. Called during tree population.
+    fn register_item(&mut self, item_id: TreeItemId, htreeitem: HTREEITEM) {
+        self.item_id_to_htreeitem.insert(item_id, htreeitem);
+        self.htreeitem_to_item_id.insert(htreeitem.0, item_id);
+    }
+
+    /// Look up the native `HTREEITEM` for an application-defined `TreeItemId`.
+    #[cfg(test)]
+    fn lookup_htreeitem(&self, item_id: TreeItemId) -> Option<HTREEITEM> {
+        self.item_id_to_htreeitem.get(&item_id).copied()
+    }
+
+    /// Look up the application-defined `TreeItemId` for a native `HTREEITEM`.
+    #[cfg(test)]
+    fn lookup_item_id(&self, htreeitem: HTREEITEM) -> Option<TreeItemId> {
+        self.htreeitem_to_item_id.get(&htreeitem.0).copied()
+    }
+
+    /// Clear all items from the maps (pure part of repopulation).
+    fn clear_maps(&mut self) {
+        self.item_id_to_htreeitem.clear();
+        self.htreeitem_to_item_id.clear();
+        self.check_states.clear();
+        self.style_overrides.clear();
+    }
+
     fn clear_items_impl(&mut self, hwnd_treeview: HWND) {
         // [CDU-TreeView-PopulationV1] Clearing all nodes guarantees PopulateTreeView commands rebuild the hierarchy without leftovers.
         if hwnd_treeview.is_invalid() {
@@ -102,10 +128,7 @@ impl TreeViewInternalState {
                 Some(LPARAM(HTREEITEM(0).0)), // Passing TVI_ROOT (0) or NULL deletes all items
             );
         }
-        self.item_id_to_htreeitem.clear();
-        self.htreeitem_to_item_id.clear();
-        self.check_states.clear();
-        self.style_overrides.clear();
+        self.clear_maps();
         log::debug!("TreeViewInternalState::clear_items_impl completed for HWND {hwnd_treeview:?}");
     }
 
@@ -162,10 +185,7 @@ impl TreeViewInternalState {
             )));
         }
 
-        self.item_id_to_htreeitem
-            .insert(item_desc.id, h_current_item_native);
-        self.htreeitem_to_item_id
-            .insert(h_current_item_native.0, item_desc.id);
+        self.register_item(item_desc.id, h_current_item_native);
         self.check_states.insert(item_desc.id, item_desc.state);
         if let Some(style_id) = item_desc.style_override {
             self.style_overrides.insert(item_desc.id, style_id);
@@ -2007,5 +2027,60 @@ mod tests {
     fn user_treeview_selection_action_accepts_mouse_and_keyboard() {
         assert!(is_user_treeview_selection_action(TVC_BYMOUSE));
         assert!(is_user_treeview_selection_action(TVC_BYKEYBOARD));
+    }
+
+    // ── F-05-006: TreeViewInternalState map contract ──────────────────────
+
+    #[test]
+    fn register_item_creates_bidirectional_mapping() {
+        let mut state = TreeViewInternalState::new();
+        let item_id = TreeItemId(42);
+        let htreeitem = HTREEITEM(0x1234isize);
+
+        state.register_item(item_id, htreeitem);
+
+        assert_eq!(state.lookup_htreeitem(item_id), Some(htreeitem));
+        assert_eq!(state.lookup_item_id(htreeitem), Some(item_id));
+    }
+
+    #[test]
+    fn lookup_returns_none_for_unknown_ids() {
+        let state = TreeViewInternalState::new();
+        assert_eq!(state.lookup_htreeitem(TreeItemId(999)), None);
+        assert_eq!(state.lookup_item_id(HTREEITEM(0x9999isize)), None);
+    }
+
+    #[test]
+    fn clear_maps_removes_all_entries() {
+        let mut state = TreeViewInternalState::new();
+        state.register_item(TreeItemId(1), HTREEITEM(0x10isize));
+        state.register_item(TreeItemId(2), HTREEITEM(0x20isize));
+        state
+            .check_states
+            .insert(TreeItemId(1), CheckState::Checked);
+        state
+            .style_overrides
+            .insert(TreeItemId(2), StyleId::DefaultText);
+
+        state.clear_maps();
+
+        assert_eq!(state.lookup_htreeitem(TreeItemId(1)), None);
+        assert_eq!(state.lookup_item_id(HTREEITEM(0x10isize)), None);
+        assert!(state.check_states.is_empty());
+        assert!(state.style_overrides.is_empty());
+    }
+
+    #[test]
+    fn re_register_same_item_id_updates_mapping() {
+        let mut state = TreeViewInternalState::new();
+        let item_id = TreeItemId(5);
+        let old_h = HTREEITEM(0xAAAAisize);
+        let new_h = HTREEITEM(0xBBBBisize);
+
+        state.register_item(item_id, old_h);
+        state.register_item(item_id, new_h);
+
+        assert_eq!(state.lookup_htreeitem(item_id), Some(new_h));
+        assert_eq!(state.lookup_item_id(new_h), Some(item_id));
     }
 }

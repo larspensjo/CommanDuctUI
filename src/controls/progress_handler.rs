@@ -117,8 +117,7 @@ pub(crate) fn handle_set_progress_bar_range(
         })
     })?;
 
-    let capped_max = max.max(min).min(i32::MAX as u32);
-    let capped_min = min.min(capped_max);
+    let (capped_min, capped_max) = clamp_progress_range(min, max);
 
     unsafe {
         SendMessageW(
@@ -147,7 +146,7 @@ pub(crate) fn handle_set_progress_bar_position(
         })
     })?;
 
-    let capped_pos = position.min(i32::MAX as u32);
+    let capped_pos = clamp_progress_position(position);
     unsafe {
         SendMessageW(
             hwnd,
@@ -158,4 +157,58 @@ pub(crate) fn handle_set_progress_bar_position(
     }
 
     Ok(())
+}
+
+/// Clamp a progress-bar range so that `max >= min` and both fit in `i32`.
+fn clamp_progress_range(min: u32, max: u32) -> (u32, u32) {
+    let capped_max = max.max(min).min(i32::MAX as u32);
+    let capped_min = min.min(capped_max);
+    (capped_min, capped_max)
+}
+
+/// Clamp a progress-bar position to the `i32` range required by `PBM_SETPOS`.
+fn clamp_progress_position(position: u32) -> u32 {
+    position.min(i32::MAX as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_range_normal() {
+        assert_eq!(clamp_progress_range(0, 100), (0, 100));
+    }
+
+    #[test]
+    fn clamp_range_min_exceeds_max_swaps() {
+        // When min > max, capped_max becomes min (via .max(min)), then capped_min stays at min.
+        assert_eq!(clamp_progress_range(50, 10), (50, 50));
+    }
+
+    #[test]
+    fn clamp_range_max_above_i32_max() {
+        let big = u32::MAX;
+        let (capped_min, capped_max) = clamp_progress_range(0, big);
+        assert_eq!(capped_max, i32::MAX as u32);
+        assert_eq!(capped_min, 0);
+    }
+
+    #[test]
+    fn clamp_range_both_above_i32_max() {
+        let big = i32::MAX as u32 + 100;
+        let (capped_min, capped_max) = clamp_progress_range(big, big);
+        assert_eq!(capped_max, i32::MAX as u32);
+        assert_eq!(capped_min, i32::MAX as u32);
+    }
+
+    #[test]
+    fn clamp_position_normal() {
+        assert_eq!(clamp_progress_position(42), 42);
+    }
+
+    #[test]
+    fn clamp_position_above_i32_max() {
+        assert_eq!(clamp_progress_position(u32::MAX), i32::MAX as u32);
+    }
 }

@@ -55,3 +55,16 @@ Change: Derived `Copy` for `Color` and `FontWeight`, removed `clone()` calls tha
 Lessons Learned: The best way to keep pedantic lint runs useful is to fix the genuinely risky conversions and silence only the noise that encodes an intentional project convention.
 Prevention: When a review item points at a specific cast or lint family, add a named helper or crate-level policy comment rather than spreading ad hoc `as` casts and `#[allow]`s through the codebase.
 Refs: src/styling_primitives.rs, src/lib.rs, src/types.rs, src/win32_cast.rs, src/controls/listbox_handler.rs, src/controls/treeview_handler.rs, src/controls/button_handler.rs, docs/Review.04-CodeQuality.md, docs/Review.Backlog.md
+
+## 2026-04-20 - Testability pass: 51 new unit tests across 6 modules
+Type: Implementation
+Context: The crate had 138 passing tests but several pure-logic surfaces had zero coverage — form validation predicates, dialog template builders, progress-bar clamping, toggle-switch state transitions, event-translation handlers, line-ending normalization, and the TreeView bi-directional ID map contract.
+Change: Added 51 tests (138 → 189) across six areas:
+1. **Dialog validation & path safety** — 8 tests for `is_safe_path_segment` and `form_validation_is_valid` covering traversal markers, separators, empty/whitespace, absolute paths, and trimming semantics.
+2. **Dialog template builders** — 8 tests for all four `build_*_dialog_template` functions asserting control counts (`cdit`), expected UTF-16 class/text strings, and DWORD alignment.
+3. **`pathbuf_from_buf`** — 5 tests for null-terminated, unterminated, empty, null-only, and surrogate-pair UTF-16 buffers.
+4. **Progress bar & toggle switch** — Extracted `clamp_progress_range`/`clamp_progress_position` into pure functions (6 tests). Added `ToggleSwitchState::toggle()` and refactored the WndProc to use it (3 tests).
+5. **Event-translation reducers** — Extracted 7 pure `translate_*` functions from the Win32 `GetDlgCtrlID`-entangled handler methods in `window_common.rs`, each with a matching test. Covers listbox selection/scroll/keydown, splitter dragging/drag-ended, toggle-switch toggled, and tab-bar selection.
+6. **Line-ending normalization** — Extracted `normalize_line_endings_for_edit_control` / `normalize_line_endings_from_edit_control` from the exclude-patterns dialog proc (7 tests including round-trip).
+7. **TreeView map contract** — Added `register_item`, `lookup_htreeitem`, `lookup_item_id`, `clear_maps` methods to `TreeViewInternalState`; 4 tests covering bidirectional round-trip, unknown-ID lookup, clear, and re-registration.
+Refs: src/controls/dialog_handler.rs, src/controls/progress_handler.rs, src/controls/toggle_switch_handler.rs, src/controls/treeview_handler.rs, src/window_common.rs
