@@ -7,6 +7,10 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 ## Unreleased
 - **API**: Derive `Copy` for public `Color` and `FontWeight`, making style values cheaper and clearer to pass through hot paint paths without load-bearing `.clone()` calls.
 
+## 2.1.0 - 2026-04-27
+- **Feature**: Add `ListBoxRowDensity` plus `PlatformCommand::SetListBoxRowDensity`, letting host apps choose compact vs expanded owner-drawn list rows explicitly instead of relying on content-based heuristics.
+- **Fix**: Let owner-drawn list boxes render title-only lists in a compact single-line height, reclaiming vertical space for dense scanning workflows.
+
 ## 2.0.1 - 2026-04-19
 - **Fix**: Guard every Rust-owned Win32 callback behind a panic barrier so host `handle_event` panics and other callback failures no longer unwind across the FFI boundary or poison the event-handler mutex path.
 - **Fix**: Move owner-drawn list box and tab bar state installation into `WM_NCCREATE`, eliminating the post-create `GWLP_USERDATA` overwrite hazard that could orphan heap state during synchronous control creation.

@@ -484,6 +484,13 @@ impl Win32ApiInternalState {
                 items,
                 badge_column_width,
             ),
+            PlatformCommand::SetListBoxRowDensity {
+                window_id,
+                control_id,
+                density,
+            } => command_executor::execute_set_list_box_row_density(
+                self, window_id, control_id, density,
+            ),
             PlatformCommand::UpdateTreeItemVisualState {
                 window_id,
                 control_id,

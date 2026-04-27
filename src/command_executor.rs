@@ -14,7 +14,8 @@ use super::controls::{listbox_handler, richedit_handler, treeview_handler};
 use super::error::{PlatformError, Result as PlatformResult};
 use super::styling::StyleId;
 use super::types::{
-    CheckState, ControlId, LayoutRule, ListBoxItemDescriptor, ListBoxItemId, TreeItemId, WindowId,
+    CheckState, ControlId, LayoutRule, ListBoxItemDescriptor, ListBoxItemId, ListBoxRowDensity,
+    TreeItemId, WindowId,
 };
 use super::window_common::{ControlKind, ProgrammaticScrollGuard, try_enable_dark_mode};
 
@@ -218,6 +219,20 @@ pub(crate) fn execute_populate_list_box(
         control_id,
         items,
         badge_column_width,
+    )
+}
+
+pub(crate) fn execute_set_list_box_row_density(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    control_id: ControlId,
+    density: ListBoxRowDensity,
+) -> PlatformResult<()> {
+    listbox_handler::handle_set_list_box_row_density_command(
+        internal_state,
+        window_id,
+        control_id,
+        density,
     )
 }
 

@@ -44,7 +44,7 @@ pub use types::{
     AppEvent, BadgeDescriptor, ChartDataPacket, ChartLineData, ChartLineEmphasis, CheckState,
     ControlId, DockStyle, FormButtons, FormDialogDescriptor, FormField, FormFieldValue,
     FormFileExistsWarning, FormRow, FormTextValidation, LabelClass, LayoutRule,
-    ListBoxItemDescriptor, ListBoxItemId, MenuActionId, MenuItemConfig, MessageSeverity,
-    PlatformCommand, PlatformEventHandler, SplitterOrientation, TreeItemDescriptor, TreeItemId,
-    TreeItemMarkerKind, UiStateProvider, WindowConfig, WindowId,
+    ListBoxItemDescriptor, ListBoxItemId, ListBoxRowDensity, MenuActionId, MenuItemConfig,
+    MessageSeverity, PlatformCommand, PlatformEventHandler, SplitterOrientation,
+    TreeItemDescriptor, TreeItemId, TreeItemMarkerKind, UiStateProvider, WindowConfig, WindowId,
 };

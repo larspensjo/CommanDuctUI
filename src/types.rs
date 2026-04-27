@@ -70,6 +70,13 @@ pub struct ListBoxItemDescriptor {
     pub enabled: bool,
 }
 
+/// Controls whether a list box renders standard two-line rows or a compact title-only density.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListBoxRowDensity {
+    Expanded,
+    Compact,
+}
+
 /// Logical identifier for a control managed by the platform layer.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -614,6 +621,11 @@ pub enum PlatformCommand {
         control_id: ControlId,
         items: Vec<ListBoxItemDescriptor>,
         badge_column_width: u16,
+    },
+    SetListBoxRowDensity {
+        window_id: WindowId,
+        control_id: ControlId,
+        density: ListBoxRowDensity,
     },
     SignalMainWindowUISetupComplete {
         window_id: WindowId,

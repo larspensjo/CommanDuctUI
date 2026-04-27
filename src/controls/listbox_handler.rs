@@ -18,7 +18,7 @@ use crate::controls::styling_handler::color_to_colorref;
 use crate::error::{PlatformError, Result as PlatformResult};
 use crate::ffi_safety::{self, DeferredWindowState};
 use crate::styling::{Color, ParsedControlStyle, StyleId};
-use crate::types::{ControlId, ListBoxItemDescriptor, ListBoxItemId, WindowId};
+use crate::types::{ControlId, ListBoxItemDescriptor, ListBoxItemId, ListBoxRowDensity, WindowId};
 use crate::win32_cast::{i32_from_usize_saturating, u32_from_usize_saturating};
 use crate::window_common::{
     ControlKind, WM_APP_LISTBOX_KEYDOWN, WM_APP_LISTBOX_SCROLLED, WM_APP_LISTBOX_SELECTION_CHANGED,
@@ -55,7 +55,8 @@ const KEYBOARD_NAVIGATION: KeyboardNavigation = KeyboardNavigation::DIALOG_NAVIG
 const LIST_BOX_CLASS_NAME: PCWSTR = w!("CommanDuctUIOwnerDrawnListBox");
 static LIST_BOX_CLASS_REGISTERED: OnceLock<()> = OnceLock::new();
 
-const ROW_HEIGHT: i32 = 44;
+const EXPANDED_ROW_HEIGHT: i32 = 44;
+const COMPACT_ROW_HEIGHT: i32 = 30;
 const ROW_PAD_TOP: i32 = 6;
 const ROW_PAD_LEFT: i32 = 12;
 const ROW_PAD_RIGHT: i32 = 12;
@@ -179,6 +180,7 @@ struct ListBoxState {
     hover_index: Option<usize>,
     tracking_mouse: bool,
     scroll_row: usize,
+    row_height: i32,
     badge_column_width: i32,
     palette: ListBoxPalette,
     title_font: HGDIOBJ,
@@ -199,11 +201,19 @@ impl ListBoxState {
             hover_index: None,
             tracking_mouse: false,
             scroll_row: 0,
+            row_height: EXPANDED_ROW_HEIGHT,
             badge_column_width: DEFAULT_BADGE_COLUMN_WIDTH,
             palette: ListBoxPalette::default(),
             title_font: font,
             meta_font: font,
         }
+    }
+}
+
+fn row_height_for_density(density: ListBoxRowDensity) -> i32 {
+    match density {
+        ListBoxRowDensity::Expanded => EXPANDED_ROW_HEIGHT,
+        ListBoxRowDensity::Compact => COMPACT_ROW_HEIGHT,
     }
 }
 
@@ -464,7 +474,10 @@ unsafe fn visible_rows(hwnd: HWND) -> usize {
     let mut client = RECT::default();
     let _ = GetClientRect(hwnd, &mut client);
     let height = client.bottom - client.top;
-    (height / ROW_HEIGHT).max(1) as usize
+    let row_height = get_state(hwnd)
+        .map(|state_ptr| (&*state_ptr).row_height.max(1))
+        .unwrap_or(EXPANDED_ROW_HEIGHT);
+    (height / row_height).max(1) as usize
 }
 
 unsafe fn update_scroll_info(hwnd: HWND) {
@@ -500,7 +513,7 @@ unsafe fn ensure_row_visible(hwnd: HWND, row: usize) {
 }
 
 fn hit_test_row(state: &ListBoxState, y: i32) -> Option<usize> {
-    let row = (y / ROW_HEIGHT).max(0) as usize + state.scroll_row;
+    let row = (y / state.row_height.max(1)).max(0) as usize + state.scroll_row;
     (row < state.items.len()).then_some(row)
 }
 
@@ -509,14 +522,15 @@ fn row_rect(state: &ListBoxState, row_index: usize, width: i32) -> Option<RECT> 
         return None;
     }
     let visible_offset = row_index - state.scroll_row;
+    let row_height = state.row_height.max(1);
     let top = i32::try_from(visible_offset)
         .ok()?
-        .saturating_mul(ROW_HEIGHT);
+        .saturating_mul(row_height);
     Some(RECT {
         left: 0,
         top,
         right: width.max(0),
-        bottom: top + ROW_HEIGHT,
+        bottom: top + row_height,
     })
 }
 
@@ -775,14 +789,15 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
 
     let start = state.scroll_row.min(state.items.len());
     let end = (start + visible_rows(hwnd).max(1)).min(state.items.len());
+    let row_height = state.row_height.max(1);
     for (offset, item) in state.items[start..end].iter().enumerate() {
         let row_index = start + offset;
-        let top = (offset as i32) * ROW_HEIGHT;
+        let top = (offset as i32) * row_height;
         let row_rect = RECT {
             left: 0,
             top,
             right: width,
-            bottom: top + ROW_HEIGHT,
+            bottom: top + row_height,
         };
         let bg = if state.selected_index == Some(row_index) {
             state.palette.selected_background
@@ -803,7 +818,7 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
                 left: 0,
                 top,
                 right: ACCENT_WIDTH,
-                bottom: top + ROW_HEIGHT,
+                bottom: top + row_height,
             };
             let _ = unsafe { FillRect(hdc, &accent_rect, accent) };
             let _ = unsafe { DeleteObject(accent.into()) };
@@ -811,6 +826,7 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
 
         draw_badges(hdc, state, item, top);
 
+        let has_metadata = !item.metadata.trim().is_empty();
         let title_color = if item.enabled {
             state.palette.row_text
         } else {
@@ -823,15 +839,13 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
         };
         let title_rect = RECT {
             left: state.badge_column_width + ROW_PAD_LEFT,
-            top: top + ROW_PAD_TOP,
+            top: if has_metadata { top + ROW_PAD_TOP } else { top },
             right: width - ROW_PAD_RIGHT,
-            bottom: top + ROW_PAD_TOP + 18,
-        };
-        let meta_rect = RECT {
-            left: state.badge_column_width + ROW_PAD_LEFT,
-            top: top + ROW_PAD_TOP + 18,
-            right: width - ROW_PAD_RIGHT,
-            bottom: top + ROW_HEIGHT - 5,
+            bottom: if has_metadata {
+                top + ROW_PAD_TOP + 18
+            } else {
+                top + row_height
+            },
         };
 
         unsafe {
@@ -848,19 +862,27 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
                     | windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS,
             );
         }
-        unsafe {
-            let _meta_font = SelectedObject::select(hdc, state.meta_font);
-            SetTextColor(hdc, color_to_colorref(&meta_color));
-            let mut meta: Vec<u16> = item.metadata.encode_utf16().collect();
-            let _ = DrawTextW(
-                hdc,
-                &mut meta[..],
-                &mut RECT { ..meta_rect },
-                windows::Win32::Graphics::Gdi::DT_SINGLELINE
-                    | windows::Win32::Graphics::Gdi::DT_VCENTER
-                    | windows::Win32::Graphics::Gdi::DT_NOPREFIX
-                    | windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS,
-            );
+        if has_metadata {
+            let meta_rect = RECT {
+                left: state.badge_column_width + ROW_PAD_LEFT,
+                top: top + ROW_PAD_TOP + 18,
+                right: width - ROW_PAD_RIGHT,
+                bottom: top + row_height - 5,
+            };
+            unsafe {
+                let _meta_font = SelectedObject::select(hdc, state.meta_font);
+                SetTextColor(hdc, color_to_colorref(&meta_color));
+                let mut meta: Vec<u16> = item.metadata.encode_utf16().collect();
+                let _ = DrawTextW(
+                    hdc,
+                    &mut meta[..],
+                    &mut RECT { ..meta_rect },
+                    windows::Win32::Graphics::Gdi::DT_SINGLELINE
+                        | windows::Win32::Graphics::Gdi::DT_VCENTER
+                        | windows::Win32::Graphics::Gdi::DT_NOPREFIX
+                        | windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS,
+                );
+            }
         }
     }
 }
@@ -871,7 +893,7 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
     }
     let mut x = ROW_PAD_LEFT;
     let badge_column_right = ROW_PAD_LEFT + state.badge_column_width - BADGE_GAP;
-    let y = top + (ROW_HEIGHT - BADGE_HEIGHT) / 2;
+    let y = top + (state.row_height.max(1) - BADGE_HEIGHT) / 2;
     for badge in &item.badges {
         if x >= badge_column_right {
             break;
@@ -1071,6 +1093,41 @@ pub(crate) fn handle_populate_list_box_command(
     Ok(())
 }
 
+pub(crate) fn handle_set_list_box_row_density_command(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    control_id: ControlId,
+    density: ListBoxRowDensity,
+) -> PlatformResult<()> {
+    let hwnd = internal_state.with_window_data_read(window_id, |window_data| {
+        window_data.get_control_hwnd(control_id).ok_or_else(|| {
+            PlatformError::InvalidHandle(format!(
+                "ListBox control {} not found in window {window_id:?}",
+                control_id.raw()
+            ))
+        })
+    })?;
+    unsafe {
+        let state = get_state(hwnd).ok_or_else(|| {
+            PlatformError::OperationFailed(format!(
+                "ListBox state missing for control {} in window {window_id:?}",
+                control_id.raw()
+            ))
+        })?;
+        let state = &mut *state;
+        state.row_height = row_height_for_density(density);
+        if state.items.is_empty() {
+            state.scroll_row = 0;
+        } else {
+            let max = state.items.len().saturating_sub(visible_rows(hwnd));
+            state.scroll_row = state.scroll_row.min(max);
+        }
+        update_scroll_info(hwnd);
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+    Ok(())
+}
+
 pub(crate) fn handle_set_list_box_selection_command(
     internal_state: &Arc<Win32ApiInternalState>,
     window_id: WindowId,
@@ -1211,9 +1268,21 @@ mod tests {
         let rect = row_rect(&state, 7, 320).expect("visible row rect");
 
         assert_eq!(rect.left, 0);
-        assert_eq!(rect.top, 2 * ROW_HEIGHT);
+        assert_eq!(rect.top, 2 * EXPANDED_ROW_HEIGHT);
         assert_eq!(rect.right, 320);
-        assert_eq!(rect.bottom, 3 * ROW_HEIGHT);
+        assert_eq!(rect.bottom, 3 * EXPANDED_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn row_density_maps_to_expected_height() {
+        assert_eq!(
+            row_height_for_density(ListBoxRowDensity::Compact),
+            COMPACT_ROW_HEIGHT
+        );
+        assert_eq!(
+            row_height_for_density(ListBoxRowDensity::Expanded),
+            EXPANDED_ROW_HEIGHT
+        );
     }
 
     #[test]
