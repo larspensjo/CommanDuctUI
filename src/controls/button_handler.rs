@@ -7,28 +7,37 @@
 use crate::app::Win32ApiInternalState;
 use crate::controls::styling_handler::{color_to_colorref, colorref_to_color};
 use crate::error::{PlatformError, Result as PlatformResult};
-use crate::styling::{Color, TextAlignment};
+use crate::ffi_safety;
+use crate::styling::{Color, StyleId, TextAlignment};
 use crate::types::{AppEvent, ControlId, WindowId};
 use crate::window_common::ControlKind;
 
 use std::sync::Arc;
 use windows::Win32::{
-    Foundation::{COLORREF, HWND, LRESULT},
+    Foundation::{COLORREF, HANDLE, HWND, LPARAM, LRESULT, WPARAM},
     Graphics::Gdi::{
-        COLOR_BTNFACE, COLOR_BTNTEXT, CreateSolidBrush, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT,
-        DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor,
-        HDC, HGDIOBJ, InflateRect, OPAQUE, SelectObject, SetBkColor, SetBkMode, SetTextColor,
+        COLOR_BTNFACE, COLOR_BTNTEXT, CreatePen, CreateSolidBrush, DT_CENTER, DT_END_ELLIPSIS,
+        DT_LEFT, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect,
+        GetSysColor, GetTextExtentPoint32W, HDC, HGDIOBJ, InflateRect, InvalidateRect, LineTo,
+        MoveToEx, OPAQUE, PS_SOLID, SelectObject, SetBkColor, SetBkMode, SetTextColor,
         TRANSPARENT,
     },
-    UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED},
+    UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_HOTLIGHT, ODS_SELECTED},
+    UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
+    UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
     UI::WindowsAndMessaging::{
         BS_PUSHBUTTON, CreateWindowExW, DestroyWindow, GetDlgCtrlID, GetWindowTextLengthW,
-        GetWindowTextW, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE,
+        GetWindowTextW, HMENU, RemovePropW, SetPropW, WINDOW_EX_STYLE, WINDOW_STYLE,
+        WM_MOUSEMOVE, WM_NCDESTROY, WS_CHILD, WS_VISIBLE,
     },
 };
 use windows::core::{HSTRING, PCWSTR};
 
 const WC_BUTTON: PCWSTR = windows::core::w!("BUTTON");
+const BUTTON_HOVER_PROP: PCWSTR = windows::core::w!("CommanDuctUI.ButtonHover");
+const BUTTON_HOVER_SUBCLASS_ID: usize = 1;
+// WM_MOUSELEAVE is not exported by windows-rs in this crate version.
+const WM_MOUSELEAVE: u32 = 0x02A3;
 const DISABLED_BG_TARGET: Color = Color {
     r: 0x1E,
     g: 0x1E,
@@ -149,6 +158,8 @@ pub(crate) fn handle_create_button_command(
             }
         }
     };
+
+    install_button_hover_subclass(hwnd_button);
 
     // Phase 3: Acquire a write lock only to register the new HWND.
     internal_state.with_window_data_write(window_id, |window_data| {
@@ -289,6 +300,10 @@ pub(crate) fn handle_wm_drawitem(
             text_flags,
         );
 
+        if should_underline_button(style_id, dis.itemState.0, is_button_hovered(dis.hwndItem)) {
+            draw_text_underline(dis.hDC, &text_buf[..text_len as usize], rect, text_color);
+        }
+
         // Restore original font to avoid leaking GDI selection state
         if let Some(prev_font) = old_font {
             SelectObject(dis.hDC, prev_font);
@@ -339,6 +354,111 @@ pub(crate) fn handle_wm_ctlcolorbtn(
         });
 
     result.ok().flatten()
+}
+
+unsafe extern "system" fn button_hover_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _subclass_id: usize,
+    _ref_data: usize,
+) -> LRESULT {
+    ffi_safety::catch_unwind_ffi(
+        "button_hover_subclass_proc",
+        || unsafe {
+            match msg {
+                WM_MOUSEMOVE => {
+                    if !is_button_hovered(hwnd) {
+                        let _ = SetPropW(hwnd, BUTTON_HOVER_PROP, Some(HANDLE(1 as *mut _)));
+                        let mut tme = TRACKMOUSEEVENT {
+                            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                            dwFlags: TME_LEAVE,
+                            hwndTrack: hwnd,
+                            dwHoverTime: 0,
+                        };
+                        let _ = TrackMouseEvent(&mut tme);
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                }
+                WM_MOUSELEAVE => {
+                    if is_button_hovered(hwnd) {
+                        let _ = RemovePropW(hwnd, BUTTON_HOVER_PROP);
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                }
+                WM_NCDESTROY => {
+                    let _ = RemovePropW(hwnd, BUTTON_HOVER_PROP);
+                    let _ = RemoveWindowSubclass(
+                        hwnd,
+                        Some(button_hover_subclass_proc),
+                        BUTTON_HOVER_SUBCLASS_ID,
+                    );
+                }
+                _ => {}
+            }
+
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        },
+        || unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
+    )
+}
+
+fn install_button_hover_subclass(hwnd: HWND) {
+    unsafe {
+        if !SetWindowSubclass(
+            hwnd,
+            Some(button_hover_subclass_proc),
+            BUTTON_HOVER_SUBCLASS_ID,
+            0,
+        )
+        .as_bool()
+        {
+            log::warn!("Failed to install button hover subclass for hwnd {hwnd:?}.");
+        }
+    }
+}
+
+fn is_button_hovered(hwnd: HWND) -> bool {
+    unsafe { !windows::Win32::UI::WindowsAndMessaging::GetPropW(hwnd, BUTTON_HOVER_PROP).0.is_null() }
+}
+
+fn should_underline_button(style_id: Option<StyleId>, item_state: u32, is_hovered: bool) -> bool {
+    matches!(style_id, Some(StyleId::LinkButton))
+        && (is_hovered || (item_state & (ODS_FOCUS.0 | ODS_HOTLIGHT.0)) != 0)
+}
+
+fn draw_text_underline(hdc: HDC, text: &[u16], text_rect: windows::Win32::Foundation::RECT, color: Color) {
+    if text.is_empty() || text_rect.right <= text_rect.left || text_rect.bottom <= text_rect.top {
+        return;
+    }
+
+    let mut size = windows::Win32::Foundation::SIZE::default();
+    unsafe {
+        let _ = GetTextExtentPoint32W(hdc, text, &mut size);
+    }
+
+    let underline_width = (text_rect.right - text_rect.left).min(size.cx).max(0);
+    if underline_width <= 0 {
+        return;
+    }
+
+    let text_height = size.cy.max(1);
+    let vertical_padding = ((text_rect.bottom - text_rect.top - text_height).max(0)) / 2;
+    let underline_y = (text_rect.top + vertical_padding + text_height).min(text_rect.bottom - 1);
+
+    unsafe {
+        let pen = CreatePen(PS_SOLID, 1, color_to_colorref(&color));
+        if pen.is_invalid() {
+            return;
+        }
+
+        let old_pen = SelectObject(hdc, HGDIOBJ(pen.0));
+        let _ = MoveToEx(hdc, text_rect.left, underline_y, None);
+        let _ = LineTo(hdc, text_rect.left + underline_width, underline_y);
+        SelectObject(hdc, old_pen);
+        let _ = DeleteObject(pen.into());
+    }
 }
 
 fn resolve_disabled_button_colors(base_bg: Color, base_fg: Color) -> (Color, Color) {
@@ -436,5 +556,41 @@ mod tests {
                 b: 0x54,
             }
         );
+    }
+
+    #[test]
+    fn link_buttons_underline_when_focused() {
+        assert!(should_underline_button(
+            Some(StyleId::LinkButton),
+            ODS_FOCUS.0,
+            false
+        ));
+    }
+
+    #[test]
+    fn link_buttons_underline_when_hotlighted() {
+        assert!(should_underline_button(
+            Some(StyleId::LinkButton),
+            ODS_HOTLIGHT.0,
+            false
+        ));
+    }
+
+    #[test]
+    fn link_buttons_underline_when_hovered() {
+        assert!(should_underline_button(
+            Some(StyleId::LinkButton),
+            0,
+            true
+        ));
+    }
+
+    #[test]
+    fn non_link_buttons_do_not_underline_on_focus() {
+        assert!(!should_underline_button(
+            Some(StyleId::SecondaryButton),
+            ODS_FOCUS.0,
+            true
+        ));
     }
 }
