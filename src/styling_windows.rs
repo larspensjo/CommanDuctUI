@@ -5,7 +5,7 @@
  * regardless of target platform.
  */
 
-pub use super::styling_primitives::{Color, ControlStyle, FontWeight, StyleId};
+pub use super::styling_primitives::{Color, ControlStyle, FontWeight, StyleId, TextAlignment};
 
 use windows::Win32::Graphics::Gdi::{DeleteObject, HBRUSH, HFONT, HGDIOBJ};
 
@@ -15,11 +15,12 @@ use windows::Win32::Graphics::Gdi::{DeleteObject, HBRUSH, HFONT, HGDIOBJ};
  * created from the platform-agnostic descriptions. This encapsulates Win32-specific
  * types and handles their cleanup via the `Drop` trait.
  */
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct ParsedControlStyle {
     pub(crate) font_handle: Option<HFONT>,
     pub(crate) text_color: Option<Color>,
     pub(crate) background_color: Option<Color>,
+    pub(crate) text_alignment: TextAlignment,
     pub(crate) background_brush: Option<HBRUSH>,
     // ... other parsed properties ...
 }

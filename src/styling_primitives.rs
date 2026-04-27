@@ -32,6 +32,16 @@ pub struct FontDescription {
     pub weight: Option<FontWeight>,
 }
 
+/// Horizontal text alignment hint for controls that render their own text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextAlignment {
+    /// Left-align the control's text.
+    Left,
+    /// Center the control's text.
+    #[default]
+    Center,
+}
+
 /// Collection of style properties that may be applied to a control.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ControlStyle {
@@ -41,6 +51,8 @@ pub struct ControlStyle {
     pub text_color: Option<Color>,
     /// Optional background fill color.
     pub background_color: Option<Color>,
+    /// Optional text alignment override for owner-drawn controls.
+    pub text_alignment: Option<TextAlignment>,
 }
 
 /// Semantic identifier for a reusable style definition.
@@ -105,4 +117,5 @@ pub enum StyleId {
     PrimaryButton,
     SecondaryButton,
     DestructiveButton,
+    LinkButton,
 }

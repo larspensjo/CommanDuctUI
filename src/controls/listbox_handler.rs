@@ -1194,14 +1194,12 @@ mod tests {
     fn apply_palette_style_updates_selection_accent() {
         let mut palette = ListBoxPalette::default();
         let style = ParsedControlStyle {
-            font_handle: None,
-            text_color: None,
             background_color: Some(Color {
                 r: 0xC9,
                 g: 0x64,
                 b: 0x42,
             }),
-            background_brush: None,
+            ..Default::default()
         };
 
         apply_palette_style(&mut palette, StyleId::ListBoxSelectionAccent, &style);

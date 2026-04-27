@@ -7,6 +7,10 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 ## Unreleased
 - **API**: Derive `Copy` for public `Color` and `FontWeight`, making style values cheaper and clearer to pass through hot paint paths without load-bearing `.clone()` calls.
 
+## 2.2.0 - 2026-04-27
+- **Feature**: Add `StyleId::LinkButton` plus `ControlStyle::text_alignment`, so host apps can define flat, left-aligned owner-drawn link-like buttons without custom controls.
+- **Fix**: Let owner-drawn buttons ellipsize long captions instead of clipping them abruptly in constrained layouts.
+
 ## 2.1.0 - 2026-04-27
 - **Feature**: Add `ListBoxRowDensity` plus `PlatformCommand::SetListBoxRowDensity`, letting host apps choose compact vs expanded owner-drawn list rows explicitly instead of relying on content-based heuristics.
 - **Fix**: Let owner-drawn list boxes render title-only lists in a compact single-line height, reclaiming vertical space for dense scanning workflows.

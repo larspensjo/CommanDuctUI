@@ -4,4 +4,6 @@
  * without pulling in any Win32-specific dependencies.
  */
 
-pub use super::styling_primitives::{Color, ControlStyle, FontDescription, FontWeight, StyleId};
+pub use super::styling_primitives::{
+    Color, ControlStyle, FontDescription, FontWeight, StyleId, TextAlignment,
+};

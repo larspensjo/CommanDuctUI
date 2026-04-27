@@ -8,7 +8,7 @@ use crate::{
     },
     error::{PlatformError, Result as PlatformResult},
     ffi_safety,
-    styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId},
+    styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId, TextAlignment},
     types::{
         AppEvent, ControlId, PlatformCommand, PlatformEventHandler, UiStateProvider, WindowConfig,
         WindowId,
@@ -1067,6 +1067,7 @@ impl Win32ApiInternalState {
             font_handle,
             text_color: style.text_color,
             background_color: style.background_color,
+            text_alignment: style.text_alignment.unwrap_or(TextAlignment::Center),
             background_brush,
         };
 
@@ -1629,6 +1630,24 @@ mod tests {
             .expect("style stored");
         assert!(parsed.font_handle.is_none());
         assert!(parsed.background_brush.is_none());
+        assert_eq!(parsed.text_alignment, TextAlignment::Center);
+    }
+
+    #[test]
+    fn define_style_preserves_text_alignment() {
+        let state = Win32ApiInternalState::new("StyleAlignmentTest".to_string()).unwrap();
+        let style = ControlStyle {
+            text_alignment: Some(TextAlignment::Left),
+            ..ControlStyle::default()
+        };
+
+        let result = state.define_style(StyleId::LinkButton, style);
+
+        assert!(result.is_ok());
+        let parsed = state
+            .get_parsed_style(StyleId::LinkButton)
+            .expect("style stored");
+        assert_eq!(parsed.text_alignment, TextAlignment::Left);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 use crate::app::Win32ApiInternalState;
 use crate::controls::styling_handler::{color_to_colorref, colorref_to_color};
 use crate::error::{PlatformError, Result as PlatformResult};
-use crate::styling::Color;
+use crate::styling::{Color, TextAlignment};
 use crate::types::{AppEvent, ControlId, WindowId};
 use crate::window_common::ControlKind;
 
@@ -15,9 +15,10 @@ use std::sync::Arc;
 use windows::Win32::{
     Foundation::{COLORREF, HWND, LRESULT},
     Graphics::Gdi::{
-        COLOR_BTNFACE, COLOR_BTNTEXT, CreateSolidBrush, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
-        DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor, HDC, HGDIOBJ, InflateRect,
-        OPAQUE, SelectObject, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
+        COLOR_BTNFACE, COLOR_BTNTEXT, CreateSolidBrush, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT,
+        DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect, GetSysColor,
+        HDC, HGDIOBJ, InflateRect, OPAQUE, SelectObject, SetBkColor, SetBkMode, SetTextColor,
+        TRANSPARENT,
     },
     UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED},
     UI::WindowsAndMessaging::{
@@ -271,11 +272,21 @@ pub(crate) fn handle_wm_drawitem(
             .map(|font| SelectObject(dis.hDC, HGDIOBJ(font.0)));
 
         let mut rect = dis.rcItem;
+        let text_flags = match style
+            .as_ref()
+            .map(|parsed_style| parsed_style.text_alignment)
+        {
+            Some(TextAlignment::Left) => {
+                let _ = InflateRect(&mut rect, -8, 0);
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS
+            }
+            _ => DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+        };
         DrawTextW(
             dis.hDC,
             &mut text_buf[..text_len as usize],
             &mut rect,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            text_flags,
         );
 
         // Restore original font to avoid leaking GDI selection state
