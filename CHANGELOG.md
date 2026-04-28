@@ -7,6 +7,9 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 ## Unreleased
 - **API**: Derive `Copy` for public `Color` and `FontWeight`, making style values cheaper and clearer to pass through hot paint paths without load-bearing `.clone()` calls.
 
+## 2.2.2 - 2026-04-28
+- **Fix**: Replace the owner-drawn button hover marker with `std::ptr::dangling_mut()` so strict clippy checks no longer flag the Win32 property sentinel.
+
 ## 2.2.1 - 2026-04-27
 - **Fix**: Track real pointer hover for owner-drawn `LinkButton` controls so inline link-style buttons underline on hover as well as focus instead of relying on inconsistent hotlight state from the native button control.
 

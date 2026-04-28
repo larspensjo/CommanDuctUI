@@ -19,16 +19,15 @@ use windows::Win32::{
         COLOR_BTNFACE, COLOR_BTNTEXT, CreatePen, CreateSolidBrush, DT_CENTER, DT_END_ELLIPSIS,
         DT_LEFT, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect,
         GetSysColor, GetTextExtentPoint32W, HDC, HGDIOBJ, InflateRect, InvalidateRect, LineTo,
-        MoveToEx, OPAQUE, PS_SOLID, SelectObject, SetBkColor, SetBkMode, SetTextColor,
-        TRANSPARENT,
+        MoveToEx, OPAQUE, PS_SOLID, SelectObject, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
     },
     UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_HOTLIGHT, ODS_SELECTED},
     UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
     UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
     UI::WindowsAndMessaging::{
         BS_PUSHBUTTON, CreateWindowExW, DestroyWindow, GetDlgCtrlID, GetWindowTextLengthW,
-        GetWindowTextW, HMENU, RemovePropW, SetPropW, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WM_MOUSEMOVE, WM_NCDESTROY, WS_CHILD, WS_VISIBLE,
+        GetWindowTextW, HMENU, RemovePropW, SetPropW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_MOUSEMOVE,
+        WM_NCDESTROY, WS_CHILD, WS_VISIBLE,
     },
 };
 use windows::core::{HSTRING, PCWSTR};
@@ -370,7 +369,11 @@ unsafe extern "system" fn button_hover_subclass_proc(
             match msg {
                 WM_MOUSEMOVE => {
                     if !is_button_hovered(hwnd) {
-                        let _ = SetPropW(hwnd, BUTTON_HOVER_PROP, Some(HANDLE(1 as *mut _)));
+                        let _ = SetPropW(
+                            hwnd,
+                            BUTTON_HOVER_PROP,
+                            Some(HANDLE(std::ptr::dangling_mut())),
+                        );
                         let mut tme = TRACKMOUSEEVENT {
                             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                             dwFlags: TME_LEAVE,
@@ -420,7 +423,11 @@ fn install_button_hover_subclass(hwnd: HWND) {
 }
 
 fn is_button_hovered(hwnd: HWND) -> bool {
-    unsafe { !windows::Win32::UI::WindowsAndMessaging::GetPropW(hwnd, BUTTON_HOVER_PROP).0.is_null() }
+    unsafe {
+        !windows::Win32::UI::WindowsAndMessaging::GetPropW(hwnd, BUTTON_HOVER_PROP)
+            .0
+            .is_null()
+    }
 }
 
 fn should_underline_button(style_id: Option<StyleId>, item_state: u32, is_hovered: bool) -> bool {
@@ -428,7 +435,12 @@ fn should_underline_button(style_id: Option<StyleId>, item_state: u32, is_hovere
         && (is_hovered || (item_state & (ODS_FOCUS.0 | ODS_HOTLIGHT.0)) != 0)
 }
 
-fn draw_text_underline(hdc: HDC, text: &[u16], text_rect: windows::Win32::Foundation::RECT, color: Color) {
+fn draw_text_underline(
+    hdc: HDC,
+    text: &[u16],
+    text_rect: windows::Win32::Foundation::RECT,
+    color: Color,
+) {
     if text.is_empty() || text_rect.right <= text_rect.left || text_rect.bottom <= text_rect.top {
         return;
     }
@@ -578,11 +590,7 @@ mod tests {
 
     #[test]
     fn link_buttons_underline_when_hovered() {
-        assert!(should_underline_button(
-            Some(StyleId::LinkButton),
-            0,
-            true
-        ));
+        assert!(should_underline_button(Some(StyleId::LinkButton), 0, true));
     }
 
     #[test]
