@@ -1902,6 +1902,9 @@ impl Win32ApiInternalState {
         };
         let mut event_to_send: Option<AppEvent> = None;
         let mut lresult_override: Option<LRESULT> = None;
+        let has_main_window_background = self
+            .get_parsed_style(StyleId::MainWindowBackground)
+            .is_some();
 
         match msg {
             WM_CREATE => {
@@ -2016,38 +2019,23 @@ impl Win32ApiInternalState {
                 lresult_override =
                     Some(self.handle_wm_getminmaxinfo(hwnd, wparam, lparam, window_id));
             }
-            WM_UAHDRAWMENU => {
-                if self
-                    .get_parsed_style(StyleId::MainWindowBackground)
-                    .is_some()
-                {
-                    let uah = lparam.0 as *const UahMenu;
-                    let colors = MenuBarColors::from_state(self);
-                    unsafe { paint_dark_menu_bar(hwnd, (*uah).hdc, colors.bar_bg) };
-                    lresult_override = Some(LRESULT(0));
-                }
+            WM_UAHDRAWMENU if has_main_window_background => {
+                let uah = lparam.0 as *const UahMenu;
+                let colors = MenuBarColors::from_state(self);
+                unsafe { paint_dark_menu_bar(hwnd, (*uah).hdc, colors.bar_bg) };
+                lresult_override = Some(LRESULT(0));
             }
-            WM_UAHDRAWMENUITEM => {
-                if self
-                    .get_parsed_style(StyleId::MainWindowBackground)
-                    .is_some()
-                {
-                    let udmi = unsafe { &*(lparam.0 as *const UahDrawMenuItem) };
-                    let colors = MenuBarColors::from_state(self);
-                    unsafe { paint_dark_menu_bar_item(udmi, &colors) };
-                    lresult_override = Some(LRESULT(0));
-                }
+            WM_UAHDRAWMENUITEM if has_main_window_background => {
+                let udmi = unsafe { &*(lparam.0 as *const UahDrawMenuItem) };
+                let colors = MenuBarColors::from_state(self);
+                unsafe { paint_dark_menu_bar_item(udmi, &colors) };
+                lresult_override = Some(LRESULT(0));
             }
-            WM_NCPAINT | WM_NCACTIVATE => {
-                if self
-                    .get_parsed_style(StyleId::MainWindowBackground)
-                    .is_some()
-                {
-                    let def_result = unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-                    let colors = MenuBarColors::from_state(self);
-                    unsafe { draw_dark_menu_nc_bottom_line(hwnd, colors.bar_bg) };
-                    lresult_override = Some(def_result);
-                }
+            WM_NCPAINT | WM_NCACTIVATE if has_main_window_background => {
+                let def_result = unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                let colors = MenuBarColors::from_state(self);
+                unsafe { draw_dark_menu_nc_bottom_line(hwnd, colors.bar_bg) };
+                lresult_override = Some(def_result);
             }
             WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {
                 let hdc = HDC(wparam.0 as *mut c_void);

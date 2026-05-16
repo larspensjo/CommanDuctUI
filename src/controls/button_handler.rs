@@ -367,28 +367,24 @@ unsafe extern "system" fn button_hover_subclass_proc(
         "button_hover_subclass_proc",
         || unsafe {
             match msg {
-                WM_MOUSEMOVE => {
-                    if !is_button_hovered(hwnd) {
-                        let _ = SetPropW(
-                            hwnd,
-                            BUTTON_HOVER_PROP,
-                            Some(HANDLE(std::ptr::dangling_mut())),
-                        );
-                        let mut tme = TRACKMOUSEEVENT {
-                            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                            dwFlags: TME_LEAVE,
-                            hwndTrack: hwnd,
-                            dwHoverTime: 0,
-                        };
-                        let _ = TrackMouseEvent(&mut tme);
-                        let _ = InvalidateRect(Some(hwnd), None, false);
-                    }
+                WM_MOUSEMOVE if !is_button_hovered(hwnd) => {
+                    let _ = SetPropW(
+                        hwnd,
+                        BUTTON_HOVER_PROP,
+                        Some(HANDLE(std::ptr::dangling_mut())),
+                    );
+                    let mut tme = TRACKMOUSEEVENT {
+                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 0,
+                    };
+                    let _ = TrackMouseEvent(&mut tme);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 }
-                WM_MOUSELEAVE => {
-                    if is_button_hovered(hwnd) {
-                        let _ = RemovePropW(hwnd, BUTTON_HOVER_PROP);
-                        let _ = InvalidateRect(Some(hwnd), None, false);
-                    }
+                WM_MOUSELEAVE if is_button_hovered(hwnd) => {
+                    let _ = RemovePropW(hwnd, BUTTON_HOVER_PROP);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 WM_NCDESTROY => {
                     let _ = RemovePropW(hwnd, BUTTON_HOVER_PROP);
