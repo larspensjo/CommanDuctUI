@@ -5,16 +5,91 @@
  * appropriate colors and brushes during the control's paint cycle.
  */
 
-use crate::PlatformResult;
 use crate::app::Win32ApiInternalState;
 use crate::styling::Color;
 use crate::types::{ControlId, WindowId};
+use crate::window_common::WM_APP_INPUT_KEYDOWN;
+use crate::{PlatformResult, ffi_safety};
 use std::sync::Arc;
 use windows::Win32::{
-    Foundation::{COLORREF, HWND, LRESULT},
+    Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM},
     Graphics::Gdi::{OPAQUE, SetBkColor, SetBkMode, SetTextColor},
-    UI::WindowsAndMessaging::GetDlgCtrlID,
+    UI::{
+        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+        WindowsAndMessaging::{
+            GA_ROOT, GetAncestor, GetDlgCtrlID, PostMessageW, WM_GETDLGCODE, WM_KEYDOWN,
+            WM_NCDESTROY,
+        },
+    },
 };
+
+const INPUT_KEYDOWN_SUBCLASS_ID: usize = 1;
+
+/// Tells the dialog manager to pass all keys (including Enter) directly
+/// to the control so a single-line Edit without `ES_WANTRETURN` doesn't
+/// beep when there is no default button in the dialog.
+const DLGC_WANTALLKEYS: isize = 0x0004;
+
+unsafe extern "system" fn input_keydown_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _subclass_id: usize,
+    _ref_data: usize,
+) -> LRESULT {
+    ffi_safety::catch_unwind_ffi(
+        "input_keydown_subclass_proc",
+        || unsafe {
+            match msg {
+                WM_KEYDOWN => {
+                    let root = GetAncestor(hwnd, GA_ROOT);
+                    if !root.is_invalid() {
+                        let _ = PostMessageW(
+                            Some(root),
+                            WM_APP_INPUT_KEYDOWN,
+                            WPARAM(hwnd.0 as usize),
+                            LPARAM(wparam.0 as isize),
+                        );
+                    }
+                }
+                WM_GETDLGCODE => {
+                    // Ask the dialog manager not to intercept Enter (and
+                    // other keys) — without this, a single-line Edit with no
+                    // default button in the dialog beeps on Enter.
+                    let base = DefSubclassProc(hwnd, msg, wparam, lparam);
+                    return LRESULT(base.0 | DLGC_WANTALLKEYS);
+                }
+                WM_NCDESTROY => {
+                    let _ = RemoveWindowSubclass(
+                        hwnd,
+                        Some(input_keydown_subclass_proc),
+                        INPUT_KEYDOWN_SUBCLASS_ID,
+                    );
+                }
+                _ => {}
+            }
+
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        },
+        || unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
+    )
+}
+
+pub(crate) fn install_input_keydown_subclass(hwnd: HWND) {
+    unsafe {
+        if !SetWindowSubclass(
+            hwnd,
+            Some(input_keydown_subclass_proc),
+            INPUT_KEYDOWN_SUBCLASS_ID,
+            0,
+        )
+        .as_bool()
+        {
+            log::warn!("Failed to install input keydown subclass for hwnd {hwnd:?}.");
+        }
+    }
+}
 
 /*
  * Creates a Win32 COLORREF from the platform-agnostic `Color` struct.

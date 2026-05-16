@@ -68,3 +68,9 @@ Change: Added 51 tests (138 → 189) across six areas:
 6. **Line-ending normalization** — Extracted `normalize_line_endings_for_edit_control` / `normalize_line_endings_from_edit_control` from the exclude-patterns dialog proc (7 tests including round-trip).
 7. **TreeView map contract** — Added `register_item`, `lookup_htreeitem`, `lookup_item_id`, `clear_maps` methods to `TreeViewInternalState`; 4 tests covering bidirectional round-trip, unknown-ID lookup, clear, and re-registration.
 Refs: src/controls/dialog_handler.rs, src/controls/progress_handler.rs, src/controls/toggle_switch_handler.rs, src/controls/treeview_handler.rs, src/window_common.rs
+
+## 2026-05-16 - Edit keydown events and explicit focus commands
+Type: Feature
+Context: Host apps needed a generic way to react to keys pressed inside edit controls and to move focus/select text without adding app-specific Win32 code to the toolkit.
+Change: Added `AppEvent::InputKeyDown` with modifier state, an edit-control subclass that forwards `WM_KEYDOWN` through the existing app-event flow, and `PlatformCommand::SetFocus { select_all }` with a command-executor seam for optional full-text selection. Bumped the crate to 2.3.0 and covered the pure translation/focus-selection contracts with unit tests.
+Refs: src/types.rs, src/controls/input_handler.rs, src/window_common.rs, src/command_executor.rs, src/app.rs, CHANGELOG.md, Cargo.toml

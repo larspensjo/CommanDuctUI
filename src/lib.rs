@@ -45,7 +45,7 @@ pub use styling_primitives::{
 pub use types::{
     AppEvent, BadgeDescriptor, ChartDataPacket, ChartLineData, ChartLineEmphasis, CheckState,
     ControlId, DockStyle, FormButtons, FormDialogDescriptor, FormField, FormFieldValue,
-    FormFileExistsWarning, FormRow, FormTextValidation, LabelClass, LayoutRule,
+    FormFileExistsWarning, FormRow, FormTextValidation, KeyModifiers, LabelClass, LayoutRule,
     ListBoxItemDescriptor, ListBoxItemId, ListBoxRowDensity, MenuActionId, MenuItemConfig,
     MessageSeverity, PlatformCommand, PlatformEventHandler, SplitterOrientation,
     TreeItemDescriptor, TreeItemId, TreeItemMarkerKind, UiStateProvider, WindowConfig, WindowId,

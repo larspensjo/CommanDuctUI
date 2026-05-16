@@ -10,7 +10,7 @@
  */
 
 use super::app::Win32ApiInternalState;
-use super::controls::{listbox_handler, richedit_handler, treeview_handler};
+use super::controls::{input_handler, listbox_handler, richedit_handler, treeview_handler};
 use super::error::{PlatformError, Result as PlatformResult};
 use super::styling::StyleId;
 use super::types::{
@@ -25,8 +25,8 @@ use windows::{
         Foundation::{GetLastError, HWND, LPARAM, WPARAM},
         Graphics::Gdi::InvalidateRect,
         UI::{
-            Controls::{SetScrollInfo, WC_EDITW},
-            Input::KeyboardAndMouse::EnableWindow,
+            Controls::{EM_SETSEL, SetScrollInfo, WC_EDITW},
+            Input::KeyboardAndMouse::{EnableWindow, SetFocus},
             WindowsAndMessaging::*,
         },
     },
@@ -432,6 +432,7 @@ pub(crate) fn execute_create_input(
         {
             try_enable_dark_mode(hwnd_edit);
         }
+        input_handler::install_input_keydown_subclass(hwnd_edit);
 
         window_data.register_control_hwnd(control_id, hwnd_edit);
         log::debug!(
@@ -502,6 +503,38 @@ pub(crate) fn execute_set_input_text(
     text: String,
 ) -> PlatformResult<()> {
     execute_set_control_text(internal_state, window_id, control_id, text)
+}
+
+fn focus_selection_range(select_all: bool) -> Option<(WPARAM, LPARAM)> {
+    select_all.then_some((WPARAM(0), LPARAM(-1)))
+}
+
+pub(crate) fn execute_set_focus(
+    internal_state: &Arc<Win32ApiInternalState>,
+    window_id: WindowId,
+    control_id: ControlId,
+    select_all: bool,
+) -> PlatformResult<()> {
+    let hwnd_control = internal_state.with_window_data_read(window_id, |window_data| {
+        window_data.get_control_hwnd(control_id).ok_or_else(|| {
+            log::warn!(
+                "CommandExecutor: Control ID {} not found for SetFocus in WinID {window_id:?}",
+                control_id.raw()
+            );
+            PlatformError::InvalidHandle(format!(
+                "Control ID {} not found for SetFocus in WinID {window_id:?}",
+                control_id.raw()
+            ))
+        })
+    })?;
+
+    unsafe {
+        let _ = SetFocus(Some(hwnd_control));
+        if let Some((start, end)) = focus_selection_range(select_all) {
+            let _ = SendMessageW(hwnd_control, EM_SETSEL, Some(start), Some(end));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn execute_set_viewer_content(
@@ -777,6 +810,25 @@ mod tests {
             "hello".into(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_focus_missing_control_returns_error() {
+        let (internal_state, window_id, native_window_data) = setup_test_env();
+        {
+            let mut guard = internal_state.active_windows().write().unwrap();
+            guard.insert(window_id, native_window_data);
+        }
+
+        let result = execute_set_focus(&internal_state, window_id, ControlId::new(1234), true);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn focus_selection_range_selects_all_only_when_requested() {
+        assert_eq!(focus_selection_range(true), Some((WPARAM(0), LPARAM(-1))));
+        assert_eq!(focus_selection_range(false), None);
     }
 
     #[test]

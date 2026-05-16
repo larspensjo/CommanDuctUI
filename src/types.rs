@@ -144,6 +144,14 @@ pub struct WindowConfig<'a> {
     pub height: i32,
 }
 
+/// Modifier keys held while a control-local keyboard event was generated.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KeyModifiers {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+}
+
 /// Visual state-image lane of an item in a tree control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckState {
@@ -271,6 +279,24 @@ pub enum AppEvent {
         window_id: WindowId,
         control_id: ControlId,
         key_code: u16,
+    },
+    /// Key-down event for input controls created via [`CreateInput`](crate::PlatformCommand::CreateInput).
+    ///
+    /// Delivered by a per-control subclass installed during
+    /// `CreateInput` that forwards `WM_KEYDOWN` to the root window.
+    /// **Not delivered for `EDIT` controls created outside of
+    /// `CreateInput`**, such as form-field edits inside a
+    /// [`FormDialog`](crate::PlatformCommand::ShowFormDialog).
+    ///
+    /// `modifiers` are read via `GetKeyState` when the root window
+    /// processes the posted message, not at the original `WM_KEYDOWN`.
+    /// They may be stale for a fast typist who releases the modifier
+    /// between the key press and the posted-message dispatch.
+    InputKeyDown {
+        window_id: WindowId,
+        control_id: ControlId,
+        key_code: u16,
+        modifiers: KeyModifiers,
     },
     ListBoxScrolled {
         window_id: WindowId,
@@ -703,6 +729,11 @@ pub enum PlatformCommand {
         window_id: WindowId,
         control_id: ControlId,
         text: String,
+    },
+    SetFocus {
+        window_id: WindowId,
+        control_id: ControlId,
+        select_all: bool,
     },
     SetViewerContent {
         window_id: WindowId,

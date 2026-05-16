@@ -18,7 +18,10 @@ use super::{
     error::{PlatformError, Result as PlatformResult},
     ffi_safety,
     styling::StyleId,
-    types::{AppEvent, ControlId, DockStyle, LayoutRule, MenuActionId, MessageSeverity, WindowId},
+    types::{
+        AppEvent, ControlId, DockStyle, KeyModifiers, LayoutRule, MenuActionId, MessageSeverity,
+        WindowId,
+    },
 };
 
 use windows::core::w;
@@ -45,6 +48,7 @@ use windows::{
             DRAWITEMSTRUCT, NM_CLICK, NM_CUSTOMDRAW, NMHDR, ODS_HOTLIGHT, ODS_NOACCEL,
             ODS_SELECTED, SetWindowTheme, TVN_ITEMCHANGEDW, TVN_SELCHANGEDW,
         },
+        UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT},
         UI::WindowsAndMessaging::*, // This list is massive, just import all of them.
     },
     core::{BOOL, HSTRING, PCSTR, PCWSTR},
@@ -89,6 +93,7 @@ pub(crate) const WM_APP_TOGGLE_SWITCH_CLICKED: u32 = WM_APP + 0x105;
 pub(crate) const WM_APP_LISTBOX_SELECTION_CHANGED: u32 = WM_APP + 0x106;
 pub(crate) const WM_APP_LISTBOX_SCROLLED: u32 = WM_APP + 0x107;
 pub(crate) const WM_APP_LISTBOX_KEYDOWN: u32 = WM_APP + 0x108;
+pub(crate) const WM_APP_INPUT_KEYDOWN: u32 = WM_APP + 0x109;
 
 // General UI constants
 /// Default debounce delay for edit controls in milliseconds.
@@ -2000,6 +2005,9 @@ impl Win32ApiInternalState {
             WM_APP_LISTBOX_KEYDOWN => {
                 event_to_send = self.handle_wm_app_listbox_keydown(hwnd, wparam, lparam, window_id);
             }
+            WM_APP_INPUT_KEYDOWN => {
+                event_to_send = self.handle_wm_app_input_keydown(hwnd, wparam, lparam, window_id);
+            }
             WM_APP_TOGGLE_SWITCH_CLICKED => {
                 event_to_send =
                     self.handle_wm_app_toggle_switch_clicked(hwnd, wparam, lparam, window_id);
@@ -2692,6 +2700,31 @@ impl Win32ApiInternalState {
         ))
     }
 
+    fn handle_wm_app_input_keydown(
+        self: &Arc<Self>,
+        _hwnd_parent: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        window_id: WindowId,
+    ) -> Option<AppEvent> {
+        let hwnd_edit = HWND(wparam.0 as *mut std::ffi::c_void);
+        let control_id_raw = unsafe { GetDlgCtrlID(hwnd_edit) };
+        if control_id_raw == 0 {
+            log::warn!(
+                "[Input] WM_APP_INPUT_KEYDOWN from HWND {:?} without control ID",
+                hwnd_edit
+            );
+            return None;
+        }
+
+        Some(translate_input_keydown(
+            window_id,
+            ControlId::new(control_id_raw),
+            lparam.0 as u16,
+            current_key_modifiers(),
+        ))
+    }
+
     /*
      * Handles WM_APP_TOGGLE_SWITCH_CLICKED messages sent by the ToggleSwitch WndProc to its root.
      * WPARAM = HWND of the toggle switch control.
@@ -3213,6 +3246,40 @@ fn translate_listbox_keydown(
         window_id,
         control_id,
         key_code,
+    }
+}
+
+fn translate_input_keydown(
+    window_id: WindowId,
+    control_id: ControlId,
+    key_code: u16,
+    modifiers: KeyModifiers,
+) -> AppEvent {
+    AppEvent::InputKeyDown {
+        window_id,
+        control_id,
+        key_code,
+        modifiers,
+    }
+}
+
+/// Pure reducer-seam: turns raw `GetKeyState` return values into a
+/// [`KeyModifiers`] struct.  All eight combinations are tested below.
+fn key_modifiers_from_states(ctrl: i16, shift: i16, alt: i16) -> KeyModifiers {
+    KeyModifiers {
+        ctrl: ctrl < 0,
+        shift: shift < 0,
+        alt: alt < 0,
+    }
+}
+
+fn current_key_modifiers() -> KeyModifiers {
+    unsafe {
+        key_modifiers_from_states(
+            GetKeyState(VK_CONTROL.0 as i32) as i16,
+            GetKeyState(VK_SHIFT.0 as i32) as i16,
+            GetKeyState(VK_MENU.0 as i32) as i16,
+        )
     }
 }
 
@@ -3877,6 +3944,41 @@ mod tests {
             matches!(event, AppEvent::ListBoxItemKeyDown { window_id, control_id, key_code }
                 if window_id == wid && control_id == cid && key_code == 0x0D)
         );
+    }
+
+    #[test]
+    fn translate_input_keydown_produces_correct_event_with_modifiers() {
+        let wid = WindowId::new(3);
+        let cid = ControlId::new(6);
+        let modifiers = KeyModifiers {
+            ctrl: true,
+            shift: false,
+            alt: true,
+        };
+        let event = translate_input_keydown(wid, cid, 0x1B, modifiers);
+        assert!(
+            matches!(event, AppEvent::InputKeyDown { window_id, control_id, key_code, modifiers: seen_modifiers }
+                if window_id == wid && control_id == cid && key_code == 0x1B && seen_modifiers == modifiers)
+        );
+    }
+
+    #[test]
+    fn key_modifiers_from_states_all_eight_combinations() {
+        let all: Vec<(i16, i16, i16)> = (0..8)
+            .map(|n| {
+                (
+                    if n & 1 != 0 { i16::MIN } else { 0 },
+                    if n & 2 != 0 { i16::MIN } else { 0 },
+                    if n & 4 != 0 { i16::MIN } else { 0 },
+                )
+            })
+            .collect();
+        for (i, (ctrl, shift, alt)) in all.iter().enumerate() {
+            let m = super::key_modifiers_from_states(*ctrl, *shift, *alt);
+            assert_eq!(m.ctrl, i & 1 != 0, "ctrl mismatch at combo {i}");
+            assert_eq!(m.shift, i & 2 != 0, "shift mismatch at combo {i}");
+            assert_eq!(m.alt, i & 4 != 0, "alt mismatch at combo {i}");
+        }
     }
 
     #[test]

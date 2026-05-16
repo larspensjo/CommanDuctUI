@@ -5,7 +5,10 @@ Update it together with `Cargo.toml` when cutting a new version.
 Skip changelog entries for internal-only refactors, plans, review docs, diary updates, and doc-only or test-only changes unless they ship as part of a user-visible release.
 
 ## Unreleased
+
+## 2.3.0 - 2026-05-16
 - **API**: Derive `Copy` for public `Color` and `FontWeight`, making style values cheaper and clearer to pass through hot paint paths without load-bearing `.clone()` calls.
+- **API**: Add edit-control `AppEvent::InputKeyDown` and `PlatformCommand::SetFocus` so host apps can implement local keyboard shortcuts and explicit focus moves without custom Win32 plumbing.
 
 ## 2.2.2 - 2026-04-28
 - **Fix**: Replace the owner-drawn button hover marker with `std::ptr::dangling_mut()` so strict clippy checks no longer flag the Win32 property sentinel.
