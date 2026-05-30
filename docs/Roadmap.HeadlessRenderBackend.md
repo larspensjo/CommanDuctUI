@@ -86,6 +86,10 @@ Roadmap deltas.
 - 2026-05-30 — Phase 2a implemented: added `wait_until`, dialog responder scripting, the
   eight modal dialog completions, dialog-request snapshot tracing, and a hardened
   `inject_raw`; bumped the crate to `2.5.0` and recorded the release in `CHANGELOG.md`.
+- 2026-05-30 — Phase 2a review follow-up: replaced debug-string dialog request details
+  with structured snapshot DTOs, made the `serde_json::Value` wait predicate an explicit
+  public API decision in the spec, and recorded modal completion ordering as a known
+  fidelity gap for later contract work.
 
 ## Parking lot
 

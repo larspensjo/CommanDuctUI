@@ -5,12 +5,144 @@ use crate::{
     WindowId,
 };
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 type SharedHandler = Arc<Mutex<dyn PlatformEventHandler>>;
 type SharedProvider = Arc<Mutex<dyn UiStateProvider>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DialogKind {
+    SaveFile,
+    OpenFile,
+    ProfileSelection,
+    Input,
+    ExcludePatterns,
+    Form,
+    MessageBox,
+    FolderPicker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialogMatcher {
+    pub kind: DialogKind,
+    pub window_id: Option<WindowId>,
+    pub title: Option<String>,
+    pub prompt: Option<String>,
+    pub context_tag: Option<String>,
+}
+
+impl DialogMatcher {
+    pub fn any(kind: DialogKind) -> Self {
+        Self {
+            kind,
+            window_id: None,
+            title: None,
+            prompt: None,
+            context_tag: None,
+        }
+    }
+
+    fn matches(&self, request: &DialogRequest) -> bool {
+        self.kind == request.kind
+            && self
+                .window_id
+                .is_none_or(|window_id| window_id == request.window_id)
+            && self
+                .title
+                .as_ref()
+                .is_none_or(|title| title == &request.title)
+            && self
+                .prompt
+                .as_ref()
+                .is_none_or(|prompt| request.prompt.as_ref() == Some(prompt))
+            && self
+                .context_tag
+                .as_ref()
+                .is_none_or(|context_tag| request.context_tag.as_ref() == Some(context_tag))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialogScriptEntry {
+    pub matcher: DialogMatcher,
+    pub outcome: DialogOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DialogOutcome {
+    SaveFile {
+        result: Option<PathBuf>,
+    },
+    OpenFile {
+        result: Option<PathBuf>,
+    },
+    ProfileSelection {
+        chosen_profile_name: Option<String>,
+        create_new_requested: bool,
+        user_cancelled: bool,
+    },
+    Input {
+        text: Option<String>,
+    },
+    ExcludePatterns {
+        saved: bool,
+        patterns: String,
+    },
+    Form {
+        confirmed: bool,
+        field_values: Vec<crate::FormFieldValue>,
+    },
+    FolderPicker {
+        path: Option<PathBuf>,
+    },
+    MessageBox,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialogRequest {
+    pub kind: DialogKind,
+    pub window_id: WindowId,
+    pub title: String,
+    pub prompt: Option<String>,
+    pub context_tag: Option<String>,
+    pub details: DialogRequestDetails,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DialogRequestDetails {
+    SaveFile {
+        default_filename: String,
+        filter_spec: String,
+        initial_dir: Option<PathBuf>,
+    },
+    OpenFile {
+        filter_spec: String,
+        initial_dir: Option<PathBuf>,
+    },
+    ProfileSelection {
+        available_profiles: Vec<String>,
+    },
+    Input {
+        default_text: Option<String>,
+    },
+    ExcludePatterns {
+        patterns: String,
+    },
+    Form {
+        form: crate::FormDialogDescriptor,
+    },
+    MessageBox {
+        message: String,
+        severity: MessageSeverity,
+    },
+    FolderPicker {
+        initial_dir: Option<PathBuf>,
+    },
+}
 
 pub struct HeadlessHarness {
     backend: HeadlessBackend,
@@ -96,12 +228,52 @@ impl HeadlessHarness {
         }
     }
 
+    /// Repeatedly pumps the UI until `predicate` returns `true` for the current snapshot.
+    ///
+    /// This is in-process only. External `--headless` protocol clients cannot send a Rust
+    /// closure, so they must poll snapshots themselves.
+    pub fn wait_until<F>(&mut self, predicate: F, timeout: Duration) -> PlatformResult<()>
+    where
+        F: Fn(&Value) -> bool,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let snapshot = self.snapshot_value()?;
+            if predicate(&snapshot) {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(PlatformError::OperationFailed(
+                    "Timed out waiting for headless condition".into(),
+                ));
+            }
+            self.pump()?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     pub fn snapshot(&self) -> PlatformResult<String> {
         serde_json::to_string_pretty(&self.backend.snapshot()).map_err(|err| {
             PlatformError::OperationFailed(format!("Failed to serialize headless snapshot: {err}"))
         })
     }
 
+    /// Installs the ordered dialog responder script used by subsequent `Show*Dialog` commands.
+    pub fn set_dialog_responder(&mut self, script: Vec<DialogScriptEntry>) {
+        self.backend.dialog_responder = script.into();
+    }
+
+    fn snapshot_value(&self) -> PlatformResult<Value> {
+        serde_json::to_value(self.backend.snapshot()).map_err(|err| {
+            PlatformError::OperationFailed(format!("Failed to serialize headless snapshot: {err}"))
+        })
+    }
+
+    /// Injects a raw `AppEvent` into the harness.
+    ///
+    /// This is the in-process escape hatch for tests and host-side code that already has a
+    /// concrete native event. It bypasses semantic-action validation but still routes through the
+    /// normal follow-up queue and pump.
     pub fn inject_raw(&mut self, event: AppEvent) -> PlatformResult<()> {
         self.enqueue_follow_up_event(event);
         self.pump()
@@ -275,6 +447,8 @@ struct HeadlessBackend {
     next_window_id: usize,
     windows: BTreeMap<usize, WindowState>,
     markers: Vec<String>,
+    dialog_requests: Vec<DialogRequest>,
+    dialog_responder: VecDeque<DialogScriptEntry>,
     command_queue: VecDeque<PlatformCommand>,
     follow_up_events: VecDeque<AppEvent>,
     quitting: bool,
@@ -287,6 +461,8 @@ impl HeadlessBackend {
             next_window_id: 1,
             windows: BTreeMap::new(),
             markers: Vec::new(),
+            dialog_requests: Vec::new(),
+            dialog_responder: VecDeque::new(),
             command_queue: VecDeque::new(),
             follow_up_events: VecDeque::new(),
             quitting: false,
@@ -298,6 +474,11 @@ impl HeadlessBackend {
             app_name: self.app_name.clone(),
             quitting: self.quitting,
             markers: self.markers.clone(),
+            dialog_requests: self
+                .dialog_requests
+                .iter()
+                .map(DialogRequestSnapshot::from)
+                .collect(),
             windows: self.windows.values().map(WindowState::snapshot).collect(),
         }
     }
@@ -676,14 +857,6 @@ impl HeadlessBackend {
             | PlatformCommand::UpdateTreeItemText { .. }
             | PlatformCommand::CreateMainMenu { .. }
             | PlatformCommand::CreateChart { .. }
-            | PlatformCommand::ShowSaveFileDialog { .. }
-            | PlatformCommand::ShowOpenFileDialog { .. }
-            | PlatformCommand::ShowProfileSelectionDialog { .. }
-            | PlatformCommand::ShowInputDialog { .. }
-            | PlatformCommand::ShowExcludePatternsDialog { .. }
-            | PlatformCommand::ShowFormDialog { .. }
-            | PlatformCommand::ShowMessageBox { .. }
-            | PlatformCommand::ShowFolderPickerDialog { .. }
             | PlatformCommand::ExpandVisibleTreeItems { .. }
             | PlatformCommand::ExpandAllTreeItems { .. }
             | PlatformCommand::RedrawTreeItem { .. }
@@ -696,6 +869,336 @@ impl HeadlessBackend {
             | PlatformCommand::SetTreeViewSelection { .. } => {
                 Err(Self::unsupported_command(command))
             }
+            PlatformCommand::ShowSaveFileDialog {
+                window_id,
+                title,
+                default_filename,
+                filter_spec,
+                initial_dir,
+            } => self.handle_save_file_dialog(
+                window_id,
+                title,
+                default_filename,
+                filter_spec,
+                initial_dir,
+            ),
+            PlatformCommand::ShowOpenFileDialog {
+                window_id,
+                title,
+                filter_spec,
+                initial_dir,
+            } => self.handle_open_file_dialog(window_id, title, filter_spec, initial_dir),
+            PlatformCommand::ShowProfileSelectionDialog {
+                window_id,
+                available_profiles,
+                title,
+                prompt,
+            } => self.handle_profile_selection_dialog(window_id, available_profiles, title, prompt),
+            PlatformCommand::ShowInputDialog {
+                window_id,
+                title,
+                prompt,
+                default_text,
+                context_tag,
+            } => self.handle_input_dialog(window_id, title, prompt, default_text, context_tag),
+            PlatformCommand::ShowExcludePatternsDialog {
+                window_id,
+                title,
+                patterns,
+            } => self.handle_exclude_patterns_dialog(window_id, title, patterns),
+            PlatformCommand::ShowFormDialog { window_id, form } => {
+                self.handle_form_dialog(window_id, form)
+            }
+            PlatformCommand::ShowMessageBox {
+                window_id,
+                title,
+                message,
+                severity,
+            } => self.handle_message_box(window_id, title, message, severity),
+            PlatformCommand::ShowFolderPickerDialog {
+                window_id,
+                title,
+                initial_dir,
+            } => self.handle_folder_picker_dialog(window_id, title, initial_dir),
+        }
+    }
+
+    fn handle_save_file_dialog(
+        &mut self,
+        window_id: WindowId,
+        title: String,
+        default_filename: String,
+        filter_spec: String,
+        initial_dir: Option<PathBuf>,
+    ) -> PlatformResult<()> {
+        self.ensure_window_exists(window_id)?;
+        let request = DialogRequest {
+            kind: DialogKind::SaveFile,
+            window_id,
+            title,
+            prompt: None,
+            context_tag: None,
+            details: DialogRequestDetails::SaveFile {
+                default_filename,
+                filter_spec,
+                initial_dir,
+            },
+        };
+        self.complete_dialog_request(request);
+        Ok(())
+    }
+
+    fn handle_open_file_dialog(
+        &mut self,
+        window_id: WindowId,
+        title: String,
+        filter_spec: String,
+        initial_dir: Option<PathBuf>,
+    ) -> PlatformResult<()> {
+        self.ensure_window_exists(window_id)?;
+        let request = DialogRequest {
+            kind: DialogKind::OpenFile,
+            window_id,
+            title,
+            prompt: None,
+            context_tag: None,
+            details: DialogRequestDetails::OpenFile {
+                filter_spec,
+                initial_dir,
+            },
+        };
+        self.complete_dialog_request(request);
+        Ok(())
+    }
+
+    fn handle_profile_selection_dialog(
+        &mut self,
+        window_id: WindowId,
+        available_profiles: Vec<String>,
+        title: String,
+        prompt: String,
+    ) -> PlatformResult<()> {
+        self.ensure_window_exists(window_id)?;
+        let request = DialogRequest {
+            kind: DialogKind::ProfileSelection,
+            window_id,
+            title,
+            prompt: Some(prompt),
+            context_tag: None,
+            details: DialogRequestDetails::ProfileSelection { available_profiles },
+        };
+        self.complete_dialog_request(request);
+        Ok(())
+    }
+
+    fn handle_input_dialog(
+        &mut self,
+        window_id: WindowId,
+        title: String,
+        prompt: String,
+        default_text: Option<String>,
+        context_tag: Option<String>,
+    ) -> PlatformResult<()> {
+        self.ensure_window_exists(window_id)?;
+        let request = DialogRequest {
+            kind: DialogKind::Input,
+            window_id,
+            title,
+            prompt: Some(prompt),
+            context_tag: context_tag.clone(),
+            details: DialogRequestDetails::Input { default_text },
+        };
+        self.complete_dialog_request(request);
+        Ok(())
+    }
+
+    fn handle_exclude_patterns_dialog(
+        &mut self,
+        window_id: WindowId,
+        title: String,
+        patterns: String,
+    ) -> PlatformResult<()> {
+        self.ensure_window_exists(window_id)?;
+        let request = DialogRequest {
+            kind: DialogKind::ExcludePatterns,
+            window_id,
+            title,
+            prompt: None,
+            context_tag: None,
+            details: DialogRequestDetails::ExcludePatterns { patterns },
+        };
+        self.complete_dialog_request(request);
+        Ok(())
+    }
+
+    fn handle_form_dialog(
+        &mut self,
+        window_id: WindowId,
+        form: crate::FormDialogDescriptor,
+    ) -> PlatformResult<()> {
+        self.ensure_window_exists(window_id)?;
+        let title = form.title.clone();
+        let context_tag = Some(form.context_tag.clone());
+        let request = DialogRequest {
+            kind: DialogKind::Form,
+            window_id,
+            title,
+            prompt: None,
+            context_tag: context_tag.clone(),
+            details: DialogRequestDetails::Form { form },
+        };
+        self.complete_dialog_request(request);
+        Ok(())
+    }
+
+    fn handle_message_box(
+        &mut self,
+        window_id: WindowId,
+        title: String,
+        message: String,
+        severity: MessageSeverity,
+    ) -> PlatformResult<()> {
+        self.ensure_window_exists(window_id)?;
+        let request = DialogRequest {
+            kind: DialogKind::MessageBox,
+            window_id,
+            title,
+            prompt: Some(message.clone()),
+            context_tag: None,
+            details: DialogRequestDetails::MessageBox { message, severity },
+        };
+        self.record_dialog_request(request);
+        Ok(())
+    }
+
+    fn handle_folder_picker_dialog(
+        &mut self,
+        window_id: WindowId,
+        title: String,
+        initial_dir: Option<PathBuf>,
+    ) -> PlatformResult<()> {
+        self.ensure_window_exists(window_id)?;
+        let request = DialogRequest {
+            kind: DialogKind::FolderPicker,
+            window_id,
+            title,
+            prompt: None,
+            context_tag: None,
+            details: DialogRequestDetails::FolderPicker { initial_dir },
+        };
+        self.complete_dialog_request(request);
+        Ok(())
+    }
+
+    fn record_dialog_request(&mut self, request: DialogRequest) {
+        self.dialog_requests.push(request);
+    }
+
+    fn complete_dialog_request(&mut self, request: DialogRequest) {
+        self.record_dialog_request(request.clone());
+        let outcome = self.take_dialog_outcome_for(&request);
+        if let Some(event) = self.dialog_completion_event(&request, outcome) {
+            self.follow_up_events.push_back(event);
+        }
+    }
+
+    fn take_dialog_outcome_for(&mut self, request: &DialogRequest) -> DialogOutcome {
+        if let Some(front) = self.dialog_responder.front()
+            && front.matcher.matches(request)
+        {
+            return self.dialog_responder.pop_front().unwrap().outcome;
+        }
+        Self::default_dialog_outcome(request)
+    }
+
+    fn default_dialog_outcome(request: &DialogRequest) -> DialogOutcome {
+        match &request.details {
+            DialogRequestDetails::SaveFile { .. } => DialogOutcome::SaveFile { result: None },
+            DialogRequestDetails::OpenFile { .. } => DialogOutcome::OpenFile { result: None },
+            DialogRequestDetails::ProfileSelection { .. } => DialogOutcome::ProfileSelection {
+                chosen_profile_name: None,
+                create_new_requested: false,
+                user_cancelled: true,
+            },
+            DialogRequestDetails::Input { .. } => DialogOutcome::Input { text: None },
+            DialogRequestDetails::ExcludePatterns { patterns } => DialogOutcome::ExcludePatterns {
+                saved: false,
+                patterns: patterns.clone(),
+            },
+            DialogRequestDetails::Form { form: _ } => DialogOutcome::Form {
+                confirmed: false,
+                field_values: Vec::new(),
+            },
+            DialogRequestDetails::MessageBox { .. } => DialogOutcome::MessageBox,
+            DialogRequestDetails::FolderPicker { .. } => DialogOutcome::FolderPicker { path: None },
+        }
+    }
+
+    fn dialog_completion_event(
+        &self,
+        request: &DialogRequest,
+        outcome: DialogOutcome,
+    ) -> Option<AppEvent> {
+        match (request.kind.clone(), outcome) {
+            (DialogKind::SaveFile, DialogOutcome::SaveFile { result }) => {
+                Some(AppEvent::FileSaveDialogCompleted {
+                    window_id: request.window_id,
+                    result,
+                })
+            }
+            (DialogKind::OpenFile, DialogOutcome::OpenFile { result }) => {
+                Some(AppEvent::FileOpenProfileDialogCompleted {
+                    window_id: request.window_id,
+                    result,
+                })
+            }
+            (
+                DialogKind::ProfileSelection,
+                DialogOutcome::ProfileSelection {
+                    chosen_profile_name,
+                    create_new_requested,
+                    user_cancelled,
+                },
+            ) => Some(AppEvent::ProfileSelectionDialogCompleted {
+                window_id: request.window_id,
+                chosen_profile_name,
+                create_new_requested,
+                user_cancelled,
+            }),
+            (DialogKind::Input, DialogOutcome::Input { text }) => {
+                Some(AppEvent::GenericInputDialogCompleted {
+                    window_id: request.window_id,
+                    text,
+                    context_tag: request.context_tag.clone(),
+                })
+            }
+            (DialogKind::ExcludePatterns, DialogOutcome::ExcludePatterns { saved, patterns }) => {
+                Some(AppEvent::ExcludePatternsDialogCompleted {
+                    window_id: request.window_id,
+                    saved,
+                    patterns,
+                })
+            }
+            (
+                DialogKind::Form,
+                DialogOutcome::Form {
+                    confirmed,
+                    field_values,
+                },
+            ) => Some(AppEvent::FormDialogCompleted {
+                window_id: request.window_id,
+                context_tag: request.context_tag.clone().unwrap_or_default(),
+                confirmed,
+                field_values,
+            }),
+            (DialogKind::FolderPicker, DialogOutcome::FolderPicker { path }) => {
+                Some(AppEvent::FolderPickerDialogCompleted {
+                    window_id: request.window_id,
+                    path,
+                })
+            }
+            (DialogKind::MessageBox, DialogOutcome::MessageBox) => None,
+            _ => None,
         }
     }
 
@@ -1559,6 +2062,7 @@ struct HeadlessSnapshot {
     app_name: String,
     quitting: bool,
     markers: Vec<String>,
+    dialog_requests: Vec<DialogRequestSnapshot>,
     windows: Vec<WindowSnapshot>,
 }
 
@@ -1934,6 +2438,229 @@ impl From<&ControlState> for ControlSnapshot {
 }
 
 #[derive(Debug, Serialize)]
+struct DialogRequestSnapshot {
+    kind: String,
+    window_id: usize,
+    title: String,
+    prompt: Option<String>,
+    context_tag: Option<String>,
+    details: DialogRequestDetailsSnapshot,
+}
+
+impl From<&DialogRequest> for DialogRequestSnapshot {
+    fn from(request: &DialogRequest) -> Self {
+        Self {
+            kind: format!("{:?}", request.kind),
+            window_id: request.window_id.raw(),
+            title: request.title.clone(),
+            prompt: request.prompt.clone(),
+            context_tag: request.context_tag.clone(),
+            details: DialogRequestDetailsSnapshot::from(&request.details),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum DialogRequestDetailsSnapshot {
+    SaveFile {
+        default_filename: String,
+        filter_spec: String,
+        initial_dir: Option<PathBuf>,
+    },
+    OpenFile {
+        filter_spec: String,
+        initial_dir: Option<PathBuf>,
+    },
+    ProfileSelection {
+        available_profiles: Vec<String>,
+    },
+    Input {
+        default_text: Option<String>,
+    },
+    ExcludePatterns {
+        patterns: String,
+    },
+    Form {
+        form: FormDialogSnapshot,
+    },
+    MessageBox {
+        message: String,
+        severity: String,
+    },
+    FolderPicker {
+        initial_dir: Option<PathBuf>,
+    },
+}
+
+impl From<&DialogRequestDetails> for DialogRequestDetailsSnapshot {
+    fn from(details: &DialogRequestDetails) -> Self {
+        match details {
+            DialogRequestDetails::SaveFile {
+                default_filename,
+                filter_spec,
+                initial_dir,
+            } => Self::SaveFile {
+                default_filename: default_filename.clone(),
+                filter_spec: filter_spec.clone(),
+                initial_dir: initial_dir.clone(),
+            },
+            DialogRequestDetails::OpenFile {
+                filter_spec,
+                initial_dir,
+            } => Self::OpenFile {
+                filter_spec: filter_spec.clone(),
+                initial_dir: initial_dir.clone(),
+            },
+            DialogRequestDetails::ProfileSelection { available_profiles } => {
+                Self::ProfileSelection {
+                    available_profiles: available_profiles.clone(),
+                }
+            }
+            DialogRequestDetails::Input { default_text } => Self::Input {
+                default_text: default_text.clone(),
+            },
+            DialogRequestDetails::ExcludePatterns { patterns } => Self::ExcludePatterns {
+                patterns: patterns.clone(),
+            },
+            DialogRequestDetails::Form { form } => Self::Form {
+                form: FormDialogSnapshot::from(form),
+            },
+            DialogRequestDetails::MessageBox { message, severity } => Self::MessageBox {
+                message: message.clone(),
+                severity: format!("{severity:?}"),
+            },
+            DialogRequestDetails::FolderPicker { initial_dir } => Self::FolderPicker {
+                initial_dir: initial_dir.clone(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct FormDialogSnapshot {
+    title: String,
+    context_tag: String,
+    rows: Vec<FormRowSnapshot>,
+    fields: Vec<FormFieldSnapshot>,
+    buttons: FormButtonsSnapshot,
+}
+
+impl From<&crate::FormDialogDescriptor> for FormDialogSnapshot {
+    fn from(form: &crate::FormDialogDescriptor) -> Self {
+        Self {
+            title: form.title.clone(),
+            context_tag: form.context_tag.clone(),
+            rows: form.rows.iter().map(FormRowSnapshot::from).collect(),
+            fields: form.fields.iter().map(FormFieldSnapshot::from).collect(),
+            buttons: FormButtonsSnapshot::from(&form.buttons),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum FormRowSnapshot {
+    ReadOnlyText { label: String, value: String },
+    Note { text: String, severity: String },
+}
+
+impl From<&crate::FormRow> for FormRowSnapshot {
+    fn from(row: &crate::FormRow) -> Self {
+        match row {
+            crate::FormRow::ReadOnlyText { label, value } => Self::ReadOnlyText {
+                label: label.clone(),
+                value: value.clone(),
+            },
+            crate::FormRow::Note { text, severity } => Self::Note {
+                text: text.clone(),
+                severity: format!("{severity:?}"),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum FormFieldSnapshot {
+    TextInput {
+        field_id: String,
+        label: String,
+        value: String,
+        validation: String,
+        live_warning: Option<FormFileExistsWarningSnapshot>,
+    },
+    CheckBox {
+        field_id: String,
+        label: String,
+        checked: bool,
+    },
+}
+
+impl From<&crate::FormField> for FormFieldSnapshot {
+    fn from(field: &crate::FormField) -> Self {
+        match field {
+            crate::FormField::TextInput {
+                field_id,
+                label,
+                value,
+                validation,
+                live_warning,
+            } => Self::TextInput {
+                field_id: field_id.clone(),
+                label: label.clone(),
+                value: value.clone(),
+                validation: format!("{validation:?}"),
+                live_warning: live_warning
+                    .as_ref()
+                    .map(FormFileExistsWarningSnapshot::from),
+            },
+            crate::FormField::CheckBox {
+                field_id,
+                label,
+                checked,
+            } => Self::CheckBox {
+                field_id: field_id.clone(),
+                label: label.clone(),
+                checked: *checked,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct FormFileExistsWarningSnapshot {
+    base_dir: PathBuf,
+    message: String,
+}
+
+impl From<&crate::FormFileExistsWarning> for FormFileExistsWarningSnapshot {
+    fn from(warning: &crate::FormFileExistsWarning) -> Self {
+        Self {
+            base_dir: warning.base_dir.clone(),
+            message: warning.message.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct FormButtonsSnapshot {
+    confirm_label: String,
+    cancel_label: String,
+    confirm_enabled: bool,
+}
+
+impl From<&crate::FormButtons> for FormButtonsSnapshot {
+    fn from(buttons: &crate::FormButtons) -> Self {
+        Self {
+            confirm_label: buttons.confirm_label.clone(),
+            cancel_label: buttons.cancel_label.clone(),
+            confirm_enabled: buttons.confirm_enabled,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct ListBoxItemSnapshot {
     id: u64,
     title: String,
@@ -1973,6 +2700,9 @@ impl From<&BadgeDescriptor> for BadgeSnapshot {
 mod tests {
     use super::*;
     use crate::TreeItemId;
+    use crate::{
+        FormButtons, FormDialogDescriptor, FormField, FormFieldValue, FormRow, FormTextValidation,
+    };
     use serde_json::Value;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -1998,6 +2728,33 @@ mod tests {
         fn is_tree_item_new(&self, _window_id: WindowId, _item_id: TreeItemId) -> bool {
             false
         }
+    }
+
+    fn started_harness(
+        initial_commands: Vec<PlatformCommand>,
+    ) -> (
+        HeadlessHarness,
+        WindowId,
+        Arc<Mutex<TestHandler>>,
+        Arc<Mutex<SilentProvider>>,
+    ) {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(handler.clone(), provider.clone(), initial_commands)
+            .unwrap();
+        (harness, window_id, handler, provider)
     }
 
     #[test]
@@ -2707,5 +3464,486 @@ mod tests {
             .wait_for("missing", Duration::from_millis(1))
             .unwrap_err();
         assert!(matches!(err, PlatformError::OperationFailed(_)));
+    }
+
+    #[test]
+    fn wait_until_returns_immediately_when_condition_is_already_true() {
+        let (mut harness, window_id, _handler, _provider) =
+            started_harness(vec![PlatformCommand::ShowWindow {
+                window_id: WindowId::new(1),
+            }]);
+
+        harness
+            .wait_until(
+                |snapshot| {
+                    snapshot["windows"][0]["shown"].as_bool() == Some(true)
+                        && snapshot["windows"][0]["title"] == "Window"
+                },
+                Duration::from_millis(5),
+            )
+            .unwrap();
+
+        assert_eq!(window_id.raw(), 1);
+    }
+
+    #[test]
+    fn wait_until_pumps_until_condition_becomes_true() {
+        let (mut harness, window_id, _handler, _provider) =
+            started_harness(vec![PlatformCommand::ShowWindow {
+                window_id: WindowId::new(1),
+            }]);
+        harness
+            .backend
+            .command_queue
+            .push_back(PlatformCommand::SetWindowTitle {
+                window_id,
+                title: "Updated".into(),
+            });
+
+        harness
+            .wait_until(
+                |snapshot| snapshot["windows"][0]["title"] == "Updated",
+                Duration::from_millis(5),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn wait_until_times_out_when_condition_is_never_true() {
+        let mut harness = HeadlessHarness::new("app");
+        let err = harness
+            .wait_until(
+                |snapshot| {
+                    snapshot["windows"]
+                        .as_array()
+                        .is_some_and(|windows| !windows.is_empty())
+                },
+                Duration::from_millis(1),
+            )
+            .unwrap_err();
+        assert!(matches!(err, PlatformError::OperationFailed(_)));
+    }
+
+    #[test]
+    fn inject_raw_requires_an_event_handler() {
+        let mut harness = HeadlessHarness::new("app");
+        let err = harness
+            .inject_raw(AppEvent::WindowCloseRequestedByUser {
+                window_id: WindowId::new(1),
+            })
+            .unwrap_err();
+        assert!(matches!(err, PlatformError::OperationFailed(_)));
+    }
+
+    #[test]
+    fn dialog_commands_emit_completions_and_record_requests() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness.set_dialog_responder(vec![
+            DialogScriptEntry {
+                matcher: DialogMatcher {
+                    kind: DialogKind::SaveFile,
+                    window_id: Some(window_id),
+                    title: Some("Save".into()),
+                    prompt: None,
+                    context_tag: None,
+                },
+                outcome: DialogOutcome::SaveFile {
+                    result: Some(PathBuf::from("export.txt")),
+                },
+            },
+            DialogScriptEntry {
+                matcher: DialogMatcher {
+                    kind: DialogKind::OpenFile,
+                    window_id: Some(window_id),
+                    title: Some("Open".into()),
+                    prompt: None,
+                    context_tag: None,
+                },
+                outcome: DialogOutcome::OpenFile {
+                    result: Some(PathBuf::from("profile.json")),
+                },
+            },
+            DialogScriptEntry {
+                matcher: DialogMatcher {
+                    kind: DialogKind::ProfileSelection,
+                    window_id: Some(window_id),
+                    title: Some("Profiles".into()),
+                    prompt: Some("Choose".into()),
+                    context_tag: None,
+                },
+                outcome: DialogOutcome::ProfileSelection {
+                    chosen_profile_name: Some("Default".into()),
+                    create_new_requested: false,
+                    user_cancelled: false,
+                },
+            },
+            DialogScriptEntry {
+                matcher: DialogMatcher {
+                    kind: DialogKind::Input,
+                    window_id: Some(window_id),
+                    title: Some("Prompt".into()),
+                    prompt: Some("Enter value".into()),
+                    context_tag: Some("ctx".into()),
+                },
+                outcome: DialogOutcome::Input {
+                    text: Some("typed".into()),
+                },
+            },
+            DialogScriptEntry {
+                matcher: DialogMatcher {
+                    kind: DialogKind::ExcludePatterns,
+                    window_id: Some(window_id),
+                    title: Some("Patterns".into()),
+                    prompt: None,
+                    context_tag: None,
+                },
+                outcome: DialogOutcome::ExcludePatterns {
+                    saved: true,
+                    patterns: "target/\n*.tmp".into(),
+                },
+            },
+            DialogScriptEntry {
+                matcher: DialogMatcher {
+                    kind: DialogKind::Form,
+                    window_id: Some(window_id),
+                    title: Some("Form".into()),
+                    prompt: None,
+                    context_tag: Some("form-tag".into()),
+                },
+                outcome: DialogOutcome::Form {
+                    confirmed: true,
+                    field_values: vec![
+                        FormFieldValue::Text {
+                            field_id: "name".into(),
+                            value: "Alice".into(),
+                        },
+                        FormFieldValue::CheckBox {
+                            field_id: "enabled".into(),
+                            checked: true,
+                        },
+                    ],
+                },
+            },
+            DialogScriptEntry {
+                matcher: DialogMatcher {
+                    kind: DialogKind::FolderPicker,
+                    window_id: Some(window_id),
+                    title: Some("Folder".into()),
+                    prompt: None,
+                    context_tag: None,
+                },
+                outcome: DialogOutcome::FolderPicker {
+                    path: Some(PathBuf::from("C:/tmp")),
+                },
+            },
+        ]);
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![
+                    PlatformCommand::ShowSaveFileDialog {
+                        window_id,
+                        title: "Save".into(),
+                        default_filename: "export.txt".into(),
+                        filter_spec: "*.txt".into(),
+                        initial_dir: Some(PathBuf::from("C:/temp")),
+                    },
+                    PlatformCommand::ShowOpenFileDialog {
+                        window_id,
+                        title: "Open".into(),
+                        filter_spec: "*.json".into(),
+                        initial_dir: None,
+                    },
+                    PlatformCommand::ShowProfileSelectionDialog {
+                        window_id,
+                        available_profiles: vec!["Default".into()],
+                        title: "Profiles".into(),
+                        prompt: "Choose".into(),
+                    },
+                    PlatformCommand::ShowInputDialog {
+                        window_id,
+                        title: "Prompt".into(),
+                        prompt: "Enter value".into(),
+                        default_text: Some("seed".into()),
+                        context_tag: Some("ctx".into()),
+                    },
+                    PlatformCommand::ShowExcludePatternsDialog {
+                        window_id,
+                        title: "Patterns".into(),
+                        patterns: "target/\n*.tmp".into(),
+                    },
+                    PlatformCommand::ShowFormDialog {
+                        window_id,
+                        form: FormDialogDescriptor {
+                            title: "Form".into(),
+                            context_tag: "form-tag".into(),
+                            rows: vec![
+                                FormRow::ReadOnlyText {
+                                    label: "Info".into(),
+                                    value: "Value".into(),
+                                },
+                                FormRow::Note {
+                                    text: "Note".into(),
+                                    severity: MessageSeverity::Information,
+                                },
+                            ],
+                            fields: vec![
+                                FormField::TextInput {
+                                    field_id: "name".into(),
+                                    label: "Name".into(),
+                                    value: String::new(),
+                                    validation: FormTextValidation::Any,
+                                    live_warning: None,
+                                },
+                                FormField::CheckBox {
+                                    field_id: "enabled".into(),
+                                    label: "Enabled".into(),
+                                    checked: false,
+                                },
+                            ],
+                            buttons: FormButtons {
+                                confirm_label: "OK".into(),
+                                cancel_label: "Cancel".into(),
+                                confirm_enabled: true,
+                            },
+                        },
+                    },
+                    PlatformCommand::ShowFolderPickerDialog {
+                        window_id,
+                        title: "Folder".into(),
+                        initial_dir: Some(PathBuf::from("C:/tmp")),
+                    },
+                    PlatformCommand::ShowMessageBox {
+                        window_id,
+                        title: "Notice".into(),
+                        message: "Hello".into(),
+                        severity: MessageSeverity::Information,
+                    },
+                ],
+            )
+            .unwrap();
+
+        let events = &handler.lock().unwrap().events;
+        assert_eq!(events.len(), 7);
+        assert!(matches!(
+            events[0],
+            AppEvent::FileSaveDialogCompleted {
+                window_id: got,
+                result: Some(_),
+            } if got == window_id
+        ));
+        assert!(matches!(
+            events[1],
+            AppEvent::FileOpenProfileDialogCompleted {
+                window_id: got,
+                result: Some(_),
+            } if got == window_id
+        ));
+        assert!(matches!(
+            events[2],
+            AppEvent::ProfileSelectionDialogCompleted {
+                chosen_profile_name: Some(_),
+                create_new_requested: false,
+                user_cancelled: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[3],
+            AppEvent::GenericInputDialogCompleted {
+                text: Some(_),
+                context_tag: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &events[4],
+            AppEvent::ExcludePatternsDialogCompleted {
+                saved: true,
+                patterns,
+                ..
+            } if patterns == "target/\n*.tmp"
+        ));
+        assert!(matches!(
+            &events[5],
+            AppEvent::FormDialogCompleted {
+                context_tag,
+                confirmed: true,
+                field_values,
+                ..
+            } if context_tag == "form-tag" && field_values.len() == 2
+        ));
+        assert!(matches!(
+            events[6],
+            AppEvent::FolderPickerDialogCompleted { path: Some(_), .. }
+        ));
+
+        let snapshot = serde_json::from_str::<Value>(&harness.snapshot().unwrap()).unwrap();
+        assert_eq!(snapshot["dialog_requests"].as_array().unwrap().len(), 8);
+        assert_eq!(
+            snapshot["dialog_requests"][0]["details"]["kind"],
+            "save_file"
+        );
+        assert_eq!(
+            snapshot["dialog_requests"][0]["details"]["default_filename"],
+            "export.txt"
+        );
+        assert_eq!(
+            snapshot["dialog_requests"][2]["details"]["available_profiles"][0],
+            "Default"
+        );
+        assert_eq!(
+            snapshot["dialog_requests"][5]["details"]["form"]["fields"][0]["kind"],
+            "text_input"
+        );
+        assert_eq!(
+            snapshot["dialog_requests"][5]["details"]["form"]["buttons"]["confirm_label"],
+            "OK"
+        );
+        assert_eq!(snapshot["dialog_requests"][7]["kind"], "MessageBox");
+        assert_eq!(
+            snapshot["dialog_requests"][7]["details"]["kind"],
+            "message_box"
+        );
+        assert_eq!(
+            snapshot["dialog_requests"][7]["details"]["severity"],
+            "Information"
+        );
+    }
+
+    #[test]
+    fn dialog_responder_uses_ordered_matches_and_field_constraints() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness.set_dialog_responder(vec![
+            DialogScriptEntry {
+                matcher: DialogMatcher {
+                    kind: DialogKind::Input,
+                    window_id: Some(window_id),
+                    title: Some("First".into()),
+                    prompt: Some("Prompt 1".into()),
+                    context_tag: Some("tag".into()),
+                },
+                outcome: DialogOutcome::Input {
+                    text: Some("one".into()),
+                },
+            },
+            DialogScriptEntry {
+                matcher: DialogMatcher {
+                    kind: DialogKind::Input,
+                    window_id: Some(window_id),
+                    title: Some("Second".into()),
+                    prompt: Some("Prompt 2".into()),
+                    context_tag: Some("tag".into()),
+                },
+                outcome: DialogOutcome::Input {
+                    text: Some("two".into()),
+                },
+            },
+        ]);
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![
+                    PlatformCommand::ShowInputDialog {
+                        window_id,
+                        title: "First".into(),
+                        prompt: "Prompt 1".into(),
+                        default_text: None,
+                        context_tag: Some("tag".into()),
+                    },
+                    PlatformCommand::ShowInputDialog {
+                        window_id,
+                        title: "Second".into(),
+                        prompt: "Prompt 2".into(),
+                        default_text: None,
+                        context_tag: Some("tag".into()),
+                    },
+                ],
+            )
+            .unwrap();
+
+        let events = &handler.lock().unwrap().events;
+        assert!(matches!(
+            events.as_slice(),
+            [
+                AppEvent::GenericInputDialogCompleted { text: Some(first), .. },
+                AppEvent::GenericInputDialogCompleted { text: Some(second), .. }
+            ] if first == "one" && second == "two"
+        ));
+    }
+
+    #[test]
+    fn unmatched_dialog_defaults_to_cancel_without_consuming_responder() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness.set_dialog_responder(vec![DialogScriptEntry {
+            matcher: DialogMatcher {
+                kind: DialogKind::SaveFile,
+                window_id: Some(window_id),
+                title: Some("Different".into()),
+                prompt: None,
+                context_tag: None,
+            },
+            outcome: DialogOutcome::SaveFile {
+                result: Some(PathBuf::from("scripted.txt")),
+            },
+        }]);
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![PlatformCommand::ShowSaveFileDialog {
+                    window_id,
+                    title: "Actual".into(),
+                    default_filename: "export.txt".into(),
+                    filter_spec: "*.txt".into(),
+                    initial_dir: None,
+                }],
+            )
+            .unwrap();
+
+        let events = &handler.lock().unwrap().events;
+        assert!(matches!(
+            events.as_slice(),
+            [AppEvent::FileSaveDialogCompleted { result: None, .. }]
+        ));
+        assert_eq!(harness.backend.dialog_responder.len(), 1);
     }
 }

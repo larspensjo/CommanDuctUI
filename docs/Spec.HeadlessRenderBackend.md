@@ -291,7 +291,9 @@ follow-up native events to quiescence → optionally `wait_for("done")` →
    **Protocol boundary:** the protocol exposes marker waits (`wait_for`) and snapshot
    polling, but **not** `wait_until(predicate, …)` — a Rust predicate closure cannot cross
    the process boundary, so `wait_until` is **in-process (shape 1) only**, alongside
-   `inject_raw`. External harnesses express conditions by polling snapshots between actions.
+   `inject_raw`. Its predicate intentionally receives the parsed JSON snapshot as
+   `serde_json::Value`, making the snapshot schema the stable public view for this wait
+   API. External harnesses express conditions by polling snapshots between actions.
 
    **All logs go to stderr** so stdout stays clean JSON-lines. Shape 2 is a stdio adapter
    over shape 1.
@@ -309,6 +311,9 @@ non-Rust harnesses). Explicit boundary:
 - **Opaque IDs** (`ControlId`, `WindowId`, `ListBoxItemId`, `TreeItemId`) have private
   fields. Snapshots serialize their stable **raw** values through headless-owned DTOs
   (using the existing `raw()` accessors), not via direct derives on the public ID types.
+- **Dialog requests** serialize their command payloads as structured, tagged snapshot DTOs,
+  including form rows/fields/buttons. They must not expose Rust `Debug` strings because
+  Phase 2c clients consume this data as machine-readable JSON.
 - **Dependency impact:** always-compiled headless mode makes `serde` and `serde_json`
   **default dependencies** (today only `log` is unconditional). This is accepted; if a
   lean release ever needs to drop them, a *default-on* feature can be introduced later
@@ -449,3 +454,8 @@ criteria:
   tagless dialog commands, that is a semver/changelog change (§11).
 - **Versioning of `Checkpoint`.** Adding a `PlatformCommand` variant is a public,
   releasable change; update `Cargo.toml` version and `CHANGELOG.md` together.
+- **Modal completion ordering.** Win32 modal dialogs block command execution until the
+  dialog closes. Headless intentionally queues dialog completions as follow-up events for
+  pump consistency, so commands already queued after a `Show*Dialog` can run before the
+  completion event. Most hosts wait for the completion before issuing dependent work, but
+  shared fidelity tests should keep this documented divergence visible.

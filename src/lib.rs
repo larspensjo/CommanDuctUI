@@ -40,7 +40,7 @@ pub(crate) mod window_common;
 #[cfg(target_os = "windows")]
 pub use app::PlatformInterface;
 pub use error::{PlatformError, Result as PlatformResult};
-pub use headless::HeadlessHarness;
+pub use headless::{DialogKind, DialogMatcher, DialogOutcome, DialogScriptEntry, HeadlessHarness};
 pub use styling_primitives::{
     Color, ControlStyle, FontDescription, FontWeight, StyleId, TextAlignment,
 };

@@ -6,6 +6,11 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.5.0 - 2026-05-30
+- **Feature**: Add in-process `HeadlessHarness::wait_until` plus dialog responder scripting for ordered modal-dialog handling in headless mode.
+- **Feature**: Implement headless completions for save/open/profile/input/exclude-patterns/form/folder dialogs, with message boxes recorded as trace-only requests.
+- **Feature**: Record dialog requests with structured details in the headless snapshot and harden `inject_raw` as the in-process raw-event escape hatch.
+
 ## 2.4.0 - 2026-05-30
 - **Feature**: Add the cross-platform headless harness and JSON snapshot model, plus the new `PlatformCommand::Checkpoint` marker for in-process UI-state verification.
 - **Feature**: Add the example app-core split and a headless integration test that drives the demo flow through the new harness.

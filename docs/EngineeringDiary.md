@@ -80,3 +80,9 @@ Type: Feature
 Context: Phase 1 of the headless backend work needed an always-compiled Rust model that can mirror a subset of platform commands, pump follow-up events, and expose stable JSON snapshots for in-process tests.
 Change: Added the cross-platform `headless` module with a deterministic UI model, `HeadlessHarness`, `Checkpoint` marker recording, setup-complete follow-up delivery, and a demo-style integration test that exercises the app-core split on non-Windows builds.
 Refs: src/headless.rs, src/types.rs, src/app.rs, src/lib.rs, examples/hello_window.rs, tests/headless_harness.rs
+
+## 2026-05-30 - Headless interaction completeness for modal dialogs
+Type: Feature
+Context: Phase 2a needed in-process condition waits and modal-dialog fidelity so headless tests could drive the same interaction flow as the Win32 backend.
+Change: Added `HeadlessHarness::wait_until`, dialog responder scripting, structured request capture in snapshots, headless completions for the save/open/profile/input/exclude-patterns/form/folder dialogs, and trace-only message-box recording; also hardened `inject_raw` as the raw-event escape hatch.
+Refs: src/headless.rs, src/lib.rs, CHANGELOG.md, Cargo.toml, docs/Roadmap.HeadlessRenderBackend.md
