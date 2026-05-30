@@ -6,6 +6,9 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.3.1 - 2026-05-30
+- **Fix**: Owner-drawn list boxes now size badge slots by the widest badge at each position, keeping multi-badge rows aligned in columns and avoiding avoidable ellipsizing of shorter rows.
+
 ## 2.3.0 - 2026-05-16
 - **API**: Derive `Copy` for public `Color` and `FontWeight`, making style values cheaper and clearer to pass through hot paint paths without load-bearing `.clone()` calls.
 - **API**: Add edit-control `AppEvent::InputKeyDown` and `PlatformCommand::SetFocus` so host apps can implement local keyboard shortcuts and explicit focus moves without custom Win32 plumbing.

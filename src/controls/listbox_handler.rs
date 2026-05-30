@@ -914,19 +914,22 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
     let mut x = ROW_PAD_LEFT;
     let badge_column_right = ROW_PAD_LEFT + state.badge_column_width - BADGE_GAP;
     let y = top + (state.row_height.max(1) - BADGE_HEIGHT) / 2;
-    for badge in &item.badges {
+    let _font = unsafe { SelectedObject::select(hdc, state.meta_font) };
+    let badge_slot_widths = badge_slot_widths(hdc, state);
+    for (index, badge) in item.badges.iter().enumerate() {
         if x >= badge_column_right {
             break;
         }
         let pair = badge_colors(badge.style, !item.enabled);
         let mut text: Vec<u16> = badge.text.encode_utf16().collect();
         let mut size = SIZE::default();
-        // Keep meta_font selected for both measurement and drawing.
-        let _font = unsafe { SelectedObject::select(hdc, state.meta_font) };
         unsafe {
             let _ = GetTextExtentPoint32W(hdc, &text, &mut size);
         }
-        let badge_width = size.cx + BADGE_PAD_X * 2;
+        let badge_width = badge_slot_widths
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| badge_width_from_text_width(size.cx));
         let rect = RECT {
             left: x,
             top: y,
@@ -963,9 +966,44 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
                 windows::Win32::Graphics::Gdi::DRAW_TEXT_FORMAT(badge_text_flags()),
             );
         }
-        // _font drops at end of loop body, restoring previous font selection
         x += badge_width + BADGE_GAP;
     }
+}
+
+fn badge_width_from_text_width(text_width: i32) -> i32 {
+    text_width.saturating_add(BADGE_PAD_X * 2)
+}
+
+fn badge_slot_widths_from_measured_rows(rows: &[Vec<i32>]) -> Vec<i32> {
+    let widest_len = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut widths = vec![0; widest_len];
+    for row in rows {
+        for (index, text_width) in row.iter().enumerate() {
+            widths[index] = widths[index].max(badge_width_from_text_width(*text_width));
+        }
+    }
+    widths
+}
+
+fn badge_slot_widths(hdc: HDC, state: &ListBoxState) -> Vec<i32> {
+    let measured_rows = state
+        .items
+        .iter()
+        .map(|item| {
+            item.badges
+                .iter()
+                .map(|badge| {
+                    let text: Vec<u16> = badge.text.encode_utf16().collect();
+                    let mut size = SIZE::default();
+                    unsafe {
+                        let _ = GetTextExtentPoint32W(hdc, &text, &mut size);
+                    }
+                    size.cx
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    badge_slot_widths_from_measured_rows(&measured_rows)
 }
 
 fn badge_text_rect(rect: RECT) -> RECT {
@@ -1274,6 +1312,24 @@ mod tests {
             windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS.0
         );
         assert_eq!(flags & windows::Win32::Graphics::Gdi::DT_CENTER.0, 0);
+    }
+
+    #[test]
+    fn badge_slot_widths_use_widest_badge_per_position() {
+        let widths = badge_slot_widths_from_measured_rows(&[
+            vec![24, 12, 60],
+            vec![48, 20, 30],
+            vec![18, 44],
+        ]);
+
+        assert_eq!(
+            widths,
+            vec![
+                badge_width_from_text_width(48),
+                badge_width_from_text_width(44),
+                badge_width_from_text_width(60),
+            ]
+        );
     }
 
     #[test]
