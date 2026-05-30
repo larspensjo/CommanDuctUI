@@ -1,6 +1,6 @@
 # Spec: Headless text-rendering backend for CommanDuctUI
 
-Status: Living design spec — Phase 1 delivered; Phase 2a delivered; preparing Phase 2b — 2026-05-30
+Status: Living design spec — Phase 1 delivered; Phase 2a delivered; Phase 2b in flight — 2026-05-30
 Owner: Lars Pensjö
 Reviews applied: `docs/Review.HeadlessRenderBackend.md` (design),
 `docs/Review.HeadlessRenderBackend.Phase1.md` (Phase 1 implementation)
@@ -253,6 +253,13 @@ headless snapshot stale (e.g. typed text lives in the native edit control;
 Programmatic `PlatformCommand` updates (e.g. `SetComboBoxSelection`,
 `SetCheckBoxChecked`, `SetTabBarSelection`) update model state but **must not** emit user
 events — matching the Win32 backend, where programmatic changes are silent.
+
+**Exception — `SetTreeViewSelection`.** Win32 is *not* silent here: the command issues
+`TVM_SELECTITEM`, which fires `TVN_SELCHANGED`, which the backend routes to
+`TreeViewItemSelectionChanged` with no suppression. To preserve fidelity, the headless
+backend mirrors this and **does** emit `TreeViewItemSelectionChanged` for
+`SetTreeViewSelection`. This is the one programmatic `Set*` that is event-bearing because
+the native control itself notifies; the silence rule still holds for combo/checkbox/tab.
 
 ## 8. Data flow (one turn)
 
