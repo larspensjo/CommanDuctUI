@@ -21,6 +21,7 @@ pub(crate) mod controls;
 pub mod error;
 #[cfg(target_os = "windows")]
 pub(crate) mod ffi_safety;
+pub mod headless;
 pub(crate) mod styling_primitives;
 #[cfg(not(target_os = "windows"))]
 pub(crate) mod styling_stub;
@@ -39,6 +40,7 @@ pub(crate) mod window_common;
 #[cfg(target_os = "windows")]
 pub use app::PlatformInterface;
 pub use error::{PlatformError, Result as PlatformResult};
+pub use headless::HeadlessHarness;
 pub use styling_primitives::{
     Color, ControlStyle, FontDescription, FontWeight, StyleId, TextAlignment,
 };

@@ -1,8 +1,9 @@
 # Spec: Headless text-rendering backend for CommanDuctUI
 
-Status: Draft (design spec), revised after review — 2026-05-30
+Status: Living design spec — Phase 1 delivered; Phase 2a delivered; preparing Phase 2b — 2026-05-30
 Owner: Lars Pensjö
-Review applied: `docs/Review.HeadlessRenderBackend.md`
+Reviews applied: `docs/Review.HeadlessRenderBackend.md` (design),
+`docs/Review.HeadlessRenderBackend.Phase1.md` (Phase 1 implementation)
 
 > This is the design **spec** (the `Spec.` prefix denotes a design document). The
 > implementation plan is produced separately and follows the repo's `Plan.` convention.
@@ -271,11 +272,26 @@ follow-up native events to quiescence → optionally `wait_for("done")` →
    process drives the binary over **JSON lines**. This needs a small **versioned protocol
    envelope**, not bare snapshots. Requests carry a `request_id`; responses are tagged:
 
+   Requests (driver → binary), each with a `request_id`:
+
+   - `{"type":"action","request_id":N,"action":"click","window_id":W,"control_id":C}` —
+     and likewise `set_text` (`text`), `select_row` (`item_id`), `select_combo`/`select_tab`
+     (`index`), `toggle`, `select_radio`.
+   - `{"type":"snapshot","request_id":N}` → a `snapshot` response.
+   - `{"type":"wait_for","request_id":N,"label":"done","timeout_ms":M}` → `ok` or `error`.
+
+   Responses (binary → driver):
+
    - `{"type":"snapshot","request_id":N,"model":{…}}`
    - `{"type":"ok","request_id":N}`
    - `{"type":"error","request_id":N,"message":"…"}`
    - `{"type":"marker","label":"…"}` (asynchronous; checkpoint observed)
    - top-level `protocol_version` is sent in a handshake/`hello` message.
+
+   **Protocol boundary:** the protocol exposes marker waits (`wait_for`) and snapshot
+   polling, but **not** `wait_until(predicate, …)` — a Rust predicate closure cannot cross
+   the process boundary, so `wait_until` is **in-process (shape 1) only**, alongside
+   `inject_raw`. External harnesses express conditions by polling snapshots between actions.
 
    **All logs go to stderr** so stdout stays clean JSON-lines. Shape 2 is a stdio adapter
    over shape 1.
@@ -316,6 +332,18 @@ field constraints, yielding the outcome. Default responder = "cancel / none".
 If, during implementation, we decide some commands need first-class tags, **adding
 `context_tag` to those public `PlatformCommand` variants is a semver-relevant change** and
 must be reflected in `Cargo.toml` version and `CHANGELOG.md` together.
+
+**Installation and outcomes.** The responder is installed on the harness before driving
+(e.g. `HeadlessHarness::set_dialog_responder(...)`), taking the ordered script described
+above. Each scripted entry yields an *outcome* that the pump turns into the precise
+completion event for that dialog kind — for example a `ShowSaveFileDialog` outcome carries
+the chosen `PathBuf` (or `None` for cancel) and produces `FileSaveDialogCompleted`;
+`ShowFormDialog` carries the `confirmed` flag and `field_values` and produces
+`FormDialogCompleted`. `ShowMessageBox` is the exception: it has **no** completion
+`AppEvent`, so it is recorded (for snapshot/trace) but consumes no responder entry and
+emits nothing. An unmatched dialog (script exhausted or constraints fail) falls back to the
+default "cancel / none" outcome rather than erroring, so a missing script never hangs the
+pump; tests assert on the resulting state.
 
 ## 12. Error handling and action validation
 
@@ -368,11 +396,13 @@ criteria:
 
 ## 15. Phasing (YAGNI)
 
-**Phase 1 — easy wins, scope A.**
+**Phase 1 — easy wins, scope A. (Delivered.)**
 - `UiModel` (incl. window `shown`/`closed`, control `enabled`) + `HeadlessBackend` for a
-  core command subset: window title; show/close; create/parenting; label; button;
-  input / set-text; listbox populate/select; checkbox / radio / toggle / combo / tabbar
-  state; `DefineLayout` (logical metadata).
+  core command subset: window title; show/close; create/parenting; label (+ `UpdateLabelText`);
+  button; input / set-text; listbox populate/select; checkbox / radio (grouped by
+  `group_start`) / toggle / combo / tabbar state; progress, splitter, and richedit logical
+  state; `SetFocus`; `DefineLayout` (logical metadata). (Progress / splitter / richedit /
+  label-update landed in Phase 1 already, ahead of the original §15 plan.)
 - Headless event pump with the follow-up native-event queue, including
   `SignalMainWindowUISetupComplete` → `MainWindowUISetupComplete`.
 - Semantic actions with native-state transitions (§7 table); `inject_raw` escape hatch
@@ -384,13 +414,21 @@ criteria:
 - Demo app + one end-to-end example test; app-core compiles on non-Windows.
 - Meet the Phase 1 acceptance criteria (§13).
 
-**Phase 2.**
-- `wait_until` predicate waits.
-- Dialog responder (ordered, command-kind + field matching) + modal dialog commands.
-- More controls: treeview, richedit, chart-as-data, progress, splitter logical state.
-- **`--headless` stdio JSON protocol** with versioned envelopes (`run_protocol`, delivery
-  shape 2); logs to stderr; demo app `--headless` flag.
-- Harden `inject_raw`.
+**Phase 2 (split into 2a/2b/2c so each review cycle stays small).**
+
+- **Phase 2a — interaction completeness.** `wait_until` predicate waits (in-process only,
+  §9); dialog responder install + ordered matching (§11) + the eight modal dialog commands
+  and their completion events (`ShowMessageBox` records but emits none); harden/document
+  `inject_raw`. No new control modeling beyond capturing dialog requests.
+- **Phase 2b — remaining controls and commands.** TreeView (hierarchical items: text,
+  check/visual state, selection, expand) + its semantic actions; chart-as-data
+  (`CreateChart` / `SetChartData`); `CreateMainMenu` + a menu-action semantic action
+  emitting `MenuActionClicked`; styling commands (`DefineStyle` / `ApplyStyleToControl` /
+  `SetTabBarStyle` / `SetToggleSwitchStyle`) populating the `style_id` snapshot field;
+  `SetScrollPosition` (+ `ControlScrolled`) populating the scroll fields. Goal: the
+  unsupported arm shrinks to only commands with no meaningful logical state.
+- **Phase 2c — external protocol.** `--headless` stdio JSON protocol with the versioned
+  request/response envelopes (§9); logs to stderr; demo app `--headless` flag.
 
 **Phase 3 — toward fidelity-C.**
 - Shared contract-test suite spanning documented behaviors.

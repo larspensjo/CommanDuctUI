@@ -1,22 +1,21 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use commanductui::{
     AppEvent, ControlId, DockStyle, LayoutRule, PlatformCommand, PlatformEventHandler,
-    PlatformResult, UiStateProvider, WindowId,
+    UiStateProvider, WindowId, headless::HeadlessHarness,
 };
 
 const BTN_CLICK_ME: ControlId = ControlId::new(101);
-type AppLogicHandle = Arc<Mutex<dyn PlatformEventHandler>>;
-type UiStateHandle = Arc<Mutex<dyn UiStateProvider>>;
 
-struct MyAppLogic {
+struct DemoHandler {
     command_queue: VecDeque<PlatformCommand>,
     click_count: u32,
     main_window_id: WindowId,
 }
 
-impl PlatformEventHandler for MyAppLogic {
+impl PlatformEventHandler for DemoHandler {
     fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::ButtonClicked { control_id, .. } if control_id == BTN_CLICK_ME => {
@@ -26,10 +25,9 @@ impl PlatformEventHandler for MyAppLogic {
                         window_id: self.main_window_id,
                         title: format!("You clicked {} times!", self.click_count),
                     });
-            }
-            AppEvent::WindowCloseRequestedByUser { window_id } => {
-                self.command_queue
-                    .push_back(PlatformCommand::CloseWindow { window_id });
+                self.command_queue.push_back(PlatformCommand::Checkpoint {
+                    label: "done".to_string(),
+                });
             }
             _ => {}
         }
@@ -48,9 +46,17 @@ impl UiStateProvider for StaticUiState {
     }
 }
 
-fn build_app_core(
-    main_window_id: WindowId,
-) -> (AppLogicHandle, UiStateHandle, Vec<PlatformCommand>) {
+#[test]
+fn demo_app_reaches_done_and_snapshot_is_stable() {
+    let mut harness = HeadlessHarness::new("CommanDuctUIExample");
+    let main_window_id = harness
+        .create_window(commanductui::WindowConfig {
+            title: "My App",
+            width: 400,
+            height: 300,
+        })
+        .unwrap();
+
     let initial_commands = vec![
         PlatformCommand::CreateButton {
             window_id: main_window_id,
@@ -74,34 +80,22 @@ fn build_app_core(
         },
     ];
 
-    let app_logic: AppLogicHandle = Arc::new(Mutex::new(MyAppLogic {
+    let handler: Arc<Mutex<dyn PlatformEventHandler>> = Arc::new(Mutex::new(DemoHandler {
         command_queue: VecDeque::new(),
         click_count: 0,
         main_window_id,
     }));
-    let ui_state_provider: UiStateHandle = Arc::new(Mutex::new(StaticUiState));
+    let ui_state_provider: Arc<Mutex<dyn UiStateProvider>> = Arc::new(Mutex::new(StaticUiState));
 
-    (app_logic, ui_state_provider, initial_commands)
-}
+    harness
+        .start(handler.clone(), ui_state_provider, initial_commands)
+        .unwrap();
+    harness.click(main_window_id, BTN_CLICK_ME).unwrap();
+    harness
+        .wait_for("done", Duration::from_millis(100))
+        .unwrap();
 
-#[cfg(target_os = "windows")]
-fn run_windows_example() -> PlatformResult<()> {
-    let platform = commanductui::PlatformInterface::new("CommanDuctUIExample".to_string())?;
-    let main_window_id = platform.create_window(commanductui::WindowConfig {
-        title: "My App",
-        width: 400,
-        height: 300,
-    })?;
-    let (app_logic, ui_state_provider, initial_commands) = build_app_core(main_window_id);
-    platform.main_event_loop(app_logic, ui_state_provider, initial_commands)
-}
-
-#[cfg(target_os = "windows")]
-fn main() -> PlatformResult<()> {
-    run_windows_example()
-}
-
-#[cfg(not(target_os = "windows"))]
-fn main() {
-    let _ = build_app_core(WindowId::new(1));
+    let snapshot = harness.snapshot().unwrap();
+    assert!(snapshot.contains("\"title\": \"You clicked 1 times!\""));
+    assert!(snapshot.contains("\"label\": \"done\"") || snapshot.contains("\"markers\": ["));
 }

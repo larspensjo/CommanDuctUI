@@ -74,3 +74,9 @@ Type: Feature
 Context: Host apps needed a generic way to react to keys pressed inside edit controls and to move focus/select text without adding app-specific Win32 code to the toolkit.
 Change: Added `AppEvent::InputKeyDown` with modifier state, an edit-control subclass that forwards `WM_KEYDOWN` through the existing app-event flow, and `PlatformCommand::SetFocus { select_all }` with a command-executor seam for optional full-text selection. Bumped the crate to 2.3.0 and covered the pure translation/focus-selection contracts with unit tests.
 Refs: src/types.rs, src/controls/input_handler.rs, src/window_common.rs, src/command_executor.rs, src/app.rs, CHANGELOG.md, Cargo.toml
+
+## 2026-05-30 - Headless harness scaffolding and checkpoint markers
+Type: Feature
+Context: Phase 1 of the headless backend work needed an always-compiled Rust model that can mirror a subset of platform commands, pump follow-up events, and expose stable JSON snapshots for in-process tests.
+Change: Added the cross-platform `headless` module with a deterministic UI model, `HeadlessHarness`, `Checkpoint` marker recording, setup-complete follow-up delivery, and a demo-style integration test that exercises the app-core split on non-Windows builds.
+Refs: src/headless.rs, src/types.rs, src/app.rs, src/lib.rs, examples/hello_window.rs, tests/headless_harness.rs

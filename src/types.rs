@@ -617,6 +617,14 @@ pub enum PlatformCommand {
         title: String,
         initial_dir: Option<PathBuf>,
     },
+    /// Records a logical synchronization point for test harnesses and log tracing.
+    ///
+    /// Unlike `SignalMainWindowUISetupComplete`, this command is only a marker:
+    /// the Windows executor logs it and the headless backend exposes it through
+    /// its marker stream, but it does not schedule an `AppEvent`.
+    Checkpoint {
+        label: String,
+    },
     SetControlEnabled {
         window_id: WindowId,
         control_id: ControlId,

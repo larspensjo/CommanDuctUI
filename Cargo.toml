@@ -1,6 +1,6 @@
 [package]
 name = "commanductui"
-version = "2.3.1"
+version = "2.4.0"
 edition = "2024"
 license = "MIT"
 description = "Declarative, command-driven Win32 UI toolkit powering SourcePacker."
@@ -26,6 +26,8 @@ targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 
 [dependencies]
 log = "0.4.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = [

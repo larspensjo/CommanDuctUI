@@ -587,6 +587,10 @@ impl Win32ApiInternalState {
                 title,
                 initial_dir,
             ),
+            PlatformCommand::Checkpoint { label } => {
+                log::debug!("PlatformCommand::Checkpoint: {label}");
+                Ok(())
+            }
             PlatformCommand::SetControlEnabled {
                 window_id,
                 control_id,
