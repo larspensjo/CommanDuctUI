@@ -6,7 +6,7 @@ How to use:
 - Add an entry when a noteworthy implementation lands.
 - Add an entry for every bug fix, including lessons learned and prevention.
 - Add an entry for important decisions and tradeoffs.
-- Write entries so they still make sense if plans or temporary review docs are deleted later.
+- Write entries so they still make sense if plans or temporary review docs are deleted later. Don't refer to plans and phases.
 - Keep entries concise and reference concrete artifacts.
 - New entries goes to the end of the file.
 
@@ -79,10 +79,16 @@ Refs: src/types.rs, src/controls/input_handler.rs, src/window_common.rs, src/com
 Type: Feature
 Context: Phase 1 of the headless backend work needed an always-compiled Rust model that can mirror a subset of platform commands, pump follow-up events, and expose stable JSON snapshots for in-process tests.
 Change: Added the cross-platform `headless` module with a deterministic UI model, `HeadlessHarness`, `Checkpoint` marker recording, setup-complete follow-up delivery, and a demo-style integration test that exercises the app-core split on non-Windows builds.
-Refs: src/headless.rs, src/types.rs, src/app.rs, src/lib.rs, examples/hello_window.rs, tests/headless_harness.rs
+Refs: src/headless.rs, src/types.rs, src/app.rs, src/lib.rs, examples/hello_window.rs
 
 ## 2026-05-30 - Headless interaction completeness for modal dialogs
 Type: Feature
 Context: Phase 2a needed in-process condition waits and modal-dialog fidelity so headless tests could drive the same interaction flow as the Win32 backend.
 Change: Added `HeadlessHarness::wait_until`, dialog responder scripting, structured request capture in snapshots, headless completions for the save/open/profile/input/exclude-patterns/form/folder dialogs, and trace-only message-box recording; also hardened `inject_raw` as the raw-event escape hatch.
 Refs: src/headless.rs, src/lib.rs, CHANGELOG.md, Cargo.toml, docs/Roadmap.HeadlessRenderBackend.md
+
+## 2026-05-30 - Headless logical state coverage
+Type: Implementation
+Context: Phase 2b needed the headless interpreter to cover the remaining logical-state commands instead of leaving tree/menu/chart/style/scroll work in the unsupported bucket.
+Change: Extended `src/headless.rs` with TreeView hierarchy state, chart snapshots, window menus, style application markers, scroll positions, tree selection parity, menu-action dispatch, and the public harness actions for tree selection/toggle, menu clicks, and semantic scrolling; added snapshot coverage for the new model fields.
+Refs: src/headless.rs, src/types.rs, src/styling_primitives.rs, CHANGELOG.md, Cargo.toml

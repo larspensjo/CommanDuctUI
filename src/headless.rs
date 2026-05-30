@@ -1,12 +1,13 @@
 use crate::{
-    AppEvent, BadgeDescriptor, ControlId, DockStyle, LabelClass, LayoutRule, ListBoxItemDescriptor,
-    ListBoxItemId, ListBoxRowDensity, MessageSeverity, PlatformCommand, PlatformError,
-    PlatformEventHandler, PlatformResult, SplitterOrientation, UiStateProvider, WindowConfig,
+    AppEvent, BadgeDescriptor, ChartDataPacket, CheckState, ControlId, ControlStyle, DockStyle,
+    LabelClass, LayoutRule, ListBoxItemDescriptor, ListBoxItemId, ListBoxRowDensity, MenuActionId,
+    MessageSeverity, PlatformCommand, PlatformError, PlatformEventHandler, PlatformResult,
+    SplitterOrientation, StyleId, TreeItemDescriptor, TreeItemId, UiStateProvider, WindowConfig,
     WindowId,
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -379,6 +380,73 @@ impl HeadlessHarness {
         self.pump()
     }
 
+    pub fn select_tree_item(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: TreeItemId,
+    ) -> PlatformResult<()> {
+        self.backend
+            .validate_visible_enabled_tree_view(window_id, control_id)?;
+        let event = self
+            .backend
+            .set_tree_view_selection(window_id, control_id, item_id)?;
+        self.enqueue_follow_up_event(event);
+        self.pump()
+    }
+
+    pub fn toggle_tree_item(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: TreeItemId,
+    ) -> PlatformResult<()> {
+        self.backend
+            .validate_visible_enabled_tree_view(window_id, control_id)?;
+        if let Some(new_state) = self
+            .backend
+            .toggle_tree_item(window_id, control_id, item_id)?
+        {
+            self.enqueue_follow_up_event(AppEvent::TreeViewItemToggledByUser {
+                window_id,
+                item_id,
+                new_state,
+            });
+        }
+        self.pump()
+    }
+
+    pub fn click_menu_action(
+        &mut self,
+        window_id: WindowId,
+        action_id: MenuActionId,
+    ) -> PlatformResult<()> {
+        self.backend.validate_window_visible(window_id)?;
+        self.backend.click_menu_action(window_id, action_id)?;
+        self.enqueue_follow_up_event(AppEvent::MenuActionClicked { action_id });
+        self.pump()
+    }
+
+    pub fn scroll(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        vertical_pos: u32,
+        horizontal_pos: u32,
+    ) -> PlatformResult<()> {
+        self.backend
+            .validate_visible_enabled_scrollable(window_id, control_id)?;
+        self.backend
+            .set_scroll_position(window_id, control_id, vertical_pos, horizontal_pos)?;
+        self.enqueue_follow_up_event(AppEvent::ControlScrolled {
+            window_id,
+            control_id,
+            vertical_pos,
+            horizontal_pos,
+        });
+        self.pump()
+    }
+
     fn enqueue_follow_up_event(&mut self, event: AppEvent) {
         self.backend.follow_up_events.push_back(event);
     }
@@ -446,6 +514,8 @@ struct HeadlessBackend {
     app_name: String,
     next_window_id: usize,
     windows: BTreeMap<usize, WindowState>,
+    // Retained to mirror native DefineStyle state; Phase 2b snapshots only expose applied style ids.
+    styles: HashMap<StyleId, ControlStyle>,
     markers: Vec<String>,
     dialog_requests: Vec<DialogRequest>,
     dialog_responder: VecDeque<DialogScriptEntry>,
@@ -460,6 +530,7 @@ impl HeadlessBackend {
             app_name,
             next_window_id: 1,
             windows: BTreeMap::new(),
+            styles: HashMap::new(),
             markers: Vec::new(),
             dialog_requests: Vec::new(),
             dialog_responder: VecDeque::new(),
@@ -851,23 +922,116 @@ impl HeadlessBackend {
                 }
                 Ok(())
             }),
-            PlatformCommand::CreateTreeView { .. }
-            | PlatformCommand::PopulateTreeView { .. }
-            | PlatformCommand::UpdateTreeItemVisualState { .. }
-            | PlatformCommand::UpdateTreeItemText { .. }
-            | PlatformCommand::CreateMainMenu { .. }
-            | PlatformCommand::CreateChart { .. }
-            | PlatformCommand::ExpandVisibleTreeItems { .. }
-            | PlatformCommand::ExpandAllTreeItems { .. }
-            | PlatformCommand::RedrawTreeItem { .. }
-            | PlatformCommand::SetChartData { .. }
-            | PlatformCommand::SetTabBarStyle { .. }
-            | PlatformCommand::DefineStyle { .. }
-            | PlatformCommand::ApplyStyleToControl { .. }
-            | PlatformCommand::SetToggleSwitchStyle { .. }
-            | PlatformCommand::SetScrollPosition { .. }
-            | PlatformCommand::SetTreeViewSelection { .. } => {
-                Err(Self::unsupported_command(command))
+            PlatformCommand::CreateTreeView {
+                window_id,
+                parent_control_id,
+                control_id,
+            } => self.create_control(
+                window_id,
+                parent_control_id,
+                control_id,
+                ControlKind::TreeView {
+                    items: Vec::new(),
+                    selected_item_id: None,
+                },
+            ),
+            PlatformCommand::PopulateTreeView {
+                window_id,
+                control_id,
+                items,
+            } => self.populate_tree_view(window_id, control_id, items),
+            PlatformCommand::UpdateTreeItemVisualState {
+                window_id,
+                control_id,
+                item_id,
+                new_state,
+            } => self.update_tree_item_visual_state(window_id, control_id, item_id, new_state),
+            PlatformCommand::UpdateTreeItemText {
+                window_id,
+                control_id,
+                item_id,
+                text,
+            } => self.update_tree_item_text(window_id, control_id, item_id, text),
+            PlatformCommand::CreateMainMenu {
+                window_id,
+                menu_items,
+            } => self.create_main_menu(window_id, menu_items),
+            PlatformCommand::CreateChart {
+                window_id,
+                parent_control_id,
+                control_id,
+            } => self.create_control(
+                window_id,
+                parent_control_id,
+                control_id,
+                ControlKind::Chart { data: None },
+            ),
+            PlatformCommand::SetChartData {
+                window_id,
+                control_id,
+                data,
+            } => self.set_chart_data(window_id, control_id, data),
+            PlatformCommand::ExpandVisibleTreeItems {
+                window_id,
+                control_id,
+            } => self.expand_tree_items(window_id, control_id),
+            PlatformCommand::ExpandAllTreeItems {
+                window_id,
+                control_id,
+            } => self.expand_tree_items(window_id, control_id),
+            PlatformCommand::RedrawTreeItem {
+                window_id,
+                control_id,
+                item_id,
+            } => self.redraw_tree_item(window_id, control_id, item_id),
+            PlatformCommand::SetTabBarStyle {
+                window_id,
+                control_id,
+                background_color,
+                text_color,
+                accent_color,
+                font,
+            } => self.set_tab_bar_style(
+                window_id,
+                control_id,
+                background_color,
+                text_color,
+                accent_color,
+                font,
+            ),
+            PlatformCommand::DefineStyle { style_id, style } => self.define_style(style_id, style),
+            PlatformCommand::ApplyStyleToControl {
+                window_id,
+                control_id,
+                style_id,
+            } => self.apply_style_to_control(window_id, control_id, style_id),
+            PlatformCommand::SetToggleSwitchStyle {
+                window_id,
+                control_id,
+                background,
+                pill_off,
+                pill_on,
+                knob,
+                text,
+            } => self.set_toggle_switch_style(
+                window_id,
+                control_id,
+                (background, pill_off, pill_on, knob, text),
+            ),
+            PlatformCommand::SetScrollPosition {
+                window_id,
+                control_id,
+                vertical_pos,
+                horizontal_pos,
+            } => self.set_scroll_position(window_id, control_id, vertical_pos, horizontal_pos),
+            PlatformCommand::SetTreeViewSelection {
+                window_id,
+                control_id,
+                item_id,
+            } => {
+                let event = self.set_tree_view_selection(window_id, control_id, item_id)?;
+                self.follow_up_events.push_back(event);
+                Ok(())
             }
             PlatformCommand::ShowSaveFileDialog {
                 window_id,
@@ -1202,10 +1366,6 @@ impl HeadlessBackend {
         }
     }
 
-    fn unsupported_command(command: PlatformCommand) -> PlatformError {
-        PlatformError::OperationFailed(format!("Headless backend does not support {command:?}"))
-    }
-
     fn unsupported_control_kind(command: &str, expected: &str) -> PlatformError {
         PlatformError::OperationFailed(format!(
             "{command} is only supported for {expected} controls"
@@ -1495,6 +1655,331 @@ impl HeadlessBackend {
             _ => Err(Self::unsupported_control_kind(
                 "SetToggleSwitchState",
                 "ToggleSwitch",
+            )),
+        })
+    }
+
+    fn populate_tree_view(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        items: Vec<TreeItemDescriptor>,
+    ) -> PlatformResult<()> {
+        self.with_control_mut(window_id, control_id, |control| match &mut control.kind {
+            ControlKind::TreeView {
+                items: current_items,
+                selected_item_id,
+            } => {
+                *current_items = items.iter().map(TreeItemNode::from_descriptor).collect();
+                if let Some(selected) = selected_item_id
+                    && !tree_items_contain_id(current_items, *selected)
+                {
+                    *selected_item_id = None;
+                }
+                Ok(())
+            }
+            _ => Err(Self::unsupported_control_kind(
+                "PopulateTreeView",
+                "TreeView",
+            )),
+        })
+    }
+
+    fn update_tree_item_visual_state(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: TreeItemId,
+        new_state: CheckState,
+    ) -> PlatformResult<()> {
+        self.with_control_mut(window_id, control_id, |control| match &mut control.kind {
+            ControlKind::TreeView { items, .. } => {
+                let item = tree_items_find_mut(items, item_id).ok_or_else(|| {
+                    PlatformError::InvalidHandle(format!(
+                        "TreeItemId {item_id:?} not found in window {window_id:?}"
+                    ))
+                })?;
+                item.state = new_state;
+                Ok(())
+            }
+            _ => Err(Self::unsupported_control_kind(
+                "UpdateTreeItemVisualState",
+                "TreeView",
+            )),
+        })
+    }
+
+    fn update_tree_item_text(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: TreeItemId,
+        text: String,
+    ) -> PlatformResult<()> {
+        self.with_control_mut(window_id, control_id, |control| match &mut control.kind {
+            ControlKind::TreeView { items, .. } => {
+                let item = tree_items_find_mut(items, item_id).ok_or_else(|| {
+                    PlatformError::InvalidHandle(format!(
+                        "TreeItemId {item_id:?} not found in window {window_id:?}"
+                    ))
+                })?;
+                item.text = text;
+                Ok(())
+            }
+            _ => Err(Self::unsupported_control_kind(
+                "UpdateTreeItemText",
+                "TreeView",
+            )),
+        })
+    }
+
+    fn set_tree_view_selection(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: TreeItemId,
+    ) -> PlatformResult<AppEvent> {
+        self.with_control_mut(window_id, control_id, |control| match &mut control.kind {
+            ControlKind::TreeView {
+                items,
+                selected_item_id,
+            } => {
+                if !tree_items_contain_id(items, item_id) {
+                    return Err(PlatformError::InvalidHandle(format!(
+                        "TreeItemId {item_id:?} not found in window {window_id:?}"
+                    )));
+                }
+                *selected_item_id = Some(item_id);
+                Ok(AppEvent::TreeViewItemSelectionChanged { window_id, item_id })
+            }
+            _ => Err(Self::unsupported_control_kind(
+                "SetTreeViewSelection",
+                "TreeView",
+            )),
+        })
+    }
+
+    fn expand_tree_items(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+    ) -> PlatformResult<()> {
+        self.with_control_mut(window_id, control_id, |control| match &mut control.kind {
+            ControlKind::TreeView { items, .. } => {
+                for item in items.iter_mut() {
+                    item.expand_recursive();
+                }
+                Ok(())
+            }
+            _ => Err(Self::unsupported_control_kind(
+                "ExpandTreeItems",
+                "TreeView",
+            )),
+        })
+    }
+
+    fn redraw_tree_item(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: TreeItemId,
+    ) -> PlatformResult<()> {
+        self.find_tree_item(window_id, control_id, item_id)?;
+        Ok(())
+    }
+
+    fn create_main_menu(
+        &mut self,
+        window_id: WindowId,
+        menu_items: Vec<crate::MenuItemConfig>,
+    ) -> PlatformResult<()> {
+        self.with_window_mut(window_id, |window| {
+            window.ensure_not_closed()?;
+            window.menu_items = menu_items.iter().map(MenuNode::from_config).collect();
+            Ok(())
+        })
+    }
+
+    fn set_chart_data(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        data: ChartDataPacket,
+    ) -> PlatformResult<()> {
+        self.with_control_mut(window_id, control_id, |control| match &mut control.kind {
+            ControlKind::Chart { data: current } => {
+                *current = Some(ChartDataState::from_packet(data));
+                Ok(())
+            }
+            _ => Err(Self::unsupported_control_kind("SetChartData", "Chart")),
+        })
+    }
+
+    fn set_tab_bar_style(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        _background_color: crate::Color,
+        _text_color: crate::Color,
+        _accent_color: crate::Color,
+        _font: Option<crate::FontDescription>,
+    ) -> PlatformResult<()> {
+        let control = self.with_control_ref(window_id, control_id)?;
+        match &control.kind {
+            ControlKind::TabBar { .. } => Ok(()),
+            _ => Err(Self::unsupported_control_kind("SetTabBarStyle", "TabBar")),
+        }
+    }
+
+    fn define_style(&mut self, style_id: StyleId, style: ControlStyle) -> PlatformResult<()> {
+        self.styles.insert(style_id, style);
+        Ok(())
+    }
+
+    fn apply_style_to_control(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        style_id: StyleId,
+    ) -> PlatformResult<()> {
+        self.with_control_mut(window_id, control_id, |control| {
+            control.style_id = Some(style_id.stable_name().to_string());
+            Ok(())
+        })
+    }
+
+    fn set_toggle_switch_style(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        _palette: (
+            crate::Color,
+            crate::Color,
+            crate::Color,
+            crate::Color,
+            crate::Color,
+        ),
+    ) -> PlatformResult<()> {
+        let control = self.with_control_ref(window_id, control_id)?;
+        match &control.kind {
+            ControlKind::ToggleSwitch { .. } => Ok(()),
+            _ => Err(Self::unsupported_control_kind(
+                "SetToggleSwitchStyle",
+                "ToggleSwitch",
+            )),
+        }
+    }
+
+    fn set_scroll_position(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        vertical_pos: u32,
+        horizontal_pos: u32,
+    ) -> PlatformResult<()> {
+        self.with_control_mut(window_id, control_id, |control| {
+            control.scroll_vertical = vertical_pos;
+            control.scroll_horizontal = horizontal_pos;
+            Ok(())
+        })
+    }
+
+    fn click_menu_action(
+        &self,
+        window_id: WindowId,
+        action_id: MenuActionId,
+    ) -> PlatformResult<()> {
+        let window = self.window(window_id)?;
+        if find_menu_action(&window.menu_items, action_id.raw()).is_none() {
+            return Err(PlatformError::InvalidHandle(format!(
+                "MenuActionId {} not found in window {window_id:?}",
+                action_id.raw()
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_visible_enabled_tree_view(
+        &self,
+        window_id: WindowId,
+        control_id: ControlId,
+    ) -> PlatformResult<()> {
+        self.validate_visible_enabled_control(window_id, control_id, "tree action")?;
+        let control = self.with_control_ref(window_id, control_id)?;
+        match &control.kind {
+            ControlKind::TreeView { .. } => Ok(()),
+            _ => Err(Self::unsupported_control_kind("tree action", "TreeView")),
+        }
+    }
+
+    fn validate_visible_enabled_scrollable(
+        &self,
+        window_id: WindowId,
+        control_id: ControlId,
+    ) -> PlatformResult<()> {
+        self.validate_visible_enabled_control(window_id, control_id, "scroll")?;
+        let control = self.with_control_ref(window_id, control_id)?;
+        match &control.kind {
+            ControlKind::Input { .. } | ControlKind::RichEdit { .. } => Ok(()),
+            _ => Err(Self::unsupported_control_kind("scroll", "Input/RichEdit")),
+        }
+    }
+
+    fn validate_window_visible(&self, window_id: WindowId) -> PlatformResult<()> {
+        let window = self.window(window_id)?;
+        if window.closed || !window.shown {
+            return Err(PlatformError::InvalidHandle(format!(
+                "WindowId {window_id:?} is not visible for menu action"
+            )));
+        }
+        Ok(())
+    }
+
+    fn find_tree_item(
+        &self,
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: TreeItemId,
+    ) -> PlatformResult<&TreeItemNode> {
+        let control = self.with_control_ref(window_id, control_id)?;
+        match &control.kind {
+            ControlKind::TreeView { items, .. } => {
+                tree_items_find(items, item_id).ok_or_else(|| {
+                    PlatformError::InvalidHandle(format!(
+                        "TreeItemId {item_id:?} not found in window {window_id:?}"
+                    ))
+                })
+            }
+            _ => Err(Self::unsupported_control_kind("RedrawTreeItem", "TreeView")),
+        }
+    }
+
+    fn toggle_tree_item(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        item_id: TreeItemId,
+    ) -> PlatformResult<Option<CheckState>> {
+        self.with_control_mut(window_id, control_id, |control| match &mut control.kind {
+            ControlKind::TreeView { items, .. } => {
+                let item = tree_items_find_mut(items, item_id).ok_or_else(|| {
+                    PlatformError::InvalidHandle(format!(
+                        "TreeItemId {item_id:?} not found in window {window_id:?}"
+                    ))
+                })?;
+                if item.state == CheckState::Hidden {
+                    return Ok(None);
+                }
+                item.state = match item.state {
+                    CheckState::Checked => CheckState::Unchecked,
+                    CheckState::Unchecked => CheckState::Checked,
+                    CheckState::Hidden => CheckState::Hidden,
+                };
+                Ok(Some(item.state))
+            }
+            _ => Err(Self::unsupported_control_kind(
+                "toggle_tree_item",
+                "TreeView",
             )),
         })
     }
@@ -1924,6 +2409,7 @@ struct WindowState {
     shown: bool,
     closed: bool,
     focused_control_id: Option<ControlId>,
+    menu_items: Vec<MenuNode>,
     layout_rules: Vec<LayoutRule>,
     controls: BTreeMap<i32, ControlState>,
     next_control_order: usize,
@@ -1939,6 +2425,7 @@ impl WindowState {
             shown: false,
             closed: false,
             focused_control_id: None,
+            menu_items: Vec::new(),
             layout_rules: Vec::new(),
             controls: BTreeMap::new(),
             next_control_order: 0,
@@ -1974,6 +2461,7 @@ impl WindowState {
             shown: self.shown,
             closed: self.closed,
             focused_control_id: self.focused_control_id.map(|id| id.raw()),
+            menu: self.menu_items.iter().map(MenuNodeSnapshot::from).collect(),
             layout_rules: self
                 .layout_rules
                 .iter()
@@ -2043,6 +2531,13 @@ enum ControlKind {
         items: Vec<String>,
         selected_index: Option<usize>,
     },
+    TreeView {
+        items: Vec<TreeItemNode>,
+        selected_item_id: Option<TreeItemId>,
+    },
+    Chart {
+        data: Option<ChartDataState>,
+    },
     ToggleSwitch {
         label: String,
         checked: bool,
@@ -2055,6 +2550,150 @@ enum ControlKind {
     Splitter {
         orientation: SplitterOrientation,
     },
+}
+
+#[derive(Debug)]
+struct TreeItemNode {
+    id: TreeItemId,
+    text: String,
+    is_folder: bool,
+    state: CheckState,
+    expanded: bool,
+    style_override: Option<String>,
+    children: Vec<TreeItemNode>,
+}
+
+#[derive(Debug)]
+struct ChartDataState {
+    lines: Vec<ChartLineState>,
+    week_labels: Vec<String>,
+    is_loading: bool,
+    show_x_axis_labels: bool,
+    show_y_axis_labels: bool,
+    show_end_labels: bool,
+}
+
+#[derive(Debug)]
+struct ChartLineState {
+    label: String,
+    weekly_counts: Vec<u32>,
+    end_label: Option<String>,
+    emphasis: String,
+}
+
+#[derive(Debug)]
+struct MenuNode {
+    action: Option<u32>,
+    text: String,
+    children: Vec<MenuNode>,
+}
+
+impl TreeItemNode {
+    fn from_descriptor(descriptor: &TreeItemDescriptor) -> Self {
+        Self {
+            id: descriptor.id,
+            text: descriptor.text.clone(),
+            is_folder: descriptor.is_folder,
+            state: descriptor.state,
+            expanded: false,
+            style_override: descriptor
+                .style_override
+                .map(|style_id| style_id.stable_name().to_string()),
+            children: descriptor
+                .children
+                .iter()
+                .map(TreeItemNode::from_descriptor)
+                .collect(),
+        }
+    }
+
+    fn expand_recursive(&mut self) {
+        self.expanded = true;
+        for child in &mut self.children {
+            child.expand_recursive();
+        }
+    }
+}
+
+impl ChartDataState {
+    fn from_packet(packet: ChartDataPacket) -> Self {
+        Self {
+            lines: packet
+                .lines
+                .into_iter()
+                .map(ChartLineState::from_line)
+                .collect(),
+            week_labels: packet.week_labels,
+            is_loading: packet.is_loading,
+            show_x_axis_labels: packet.show_x_axis_labels,
+            show_y_axis_labels: packet.show_y_axis_labels,
+            show_end_labels: packet.show_end_labels,
+        }
+    }
+}
+
+impl ChartLineState {
+    fn from_line(line: crate::ChartLineData) -> Self {
+        Self {
+            label: line.label,
+            weekly_counts: line.weekly_counts,
+            end_label: line.end_label,
+            emphasis: line.emphasis.stable_name().to_string(),
+        }
+    }
+}
+
+impl MenuNode {
+    fn from_config(config: &crate::MenuItemConfig) -> Self {
+        Self {
+            action: config.action.map(|action| action.raw()),
+            text: config.text.clone(),
+            children: config.children.iter().map(MenuNode::from_config).collect(),
+        }
+    }
+}
+
+fn tree_items_find(items: &[TreeItemNode], item_id: TreeItemId) -> Option<&TreeItemNode> {
+    for item in items {
+        if item.id == item_id {
+            return Some(item);
+        }
+        if let Some(found) = tree_items_find(&item.children, item_id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn tree_items_find_mut(
+    items: &mut [TreeItemNode],
+    item_id: TreeItemId,
+) -> Option<&mut TreeItemNode> {
+    for item in items {
+        if item.id == item_id {
+            return Some(item);
+        }
+        if let Some(found) = tree_items_find_mut(&mut item.children, item_id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn tree_items_contain_id(items: &[TreeItemNode], item_id: TreeItemId) -> bool {
+    tree_items_find(items, item_id).is_some()
+}
+
+fn find_menu_action(items: &[MenuNode], action_id: u32) -> Option<&MenuNode> {
+    for item in items {
+        if item.action == Some(action_id) {
+            return Some(item);
+        }
+        if let Some(found) = find_menu_action(&item.children, action_id) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[derive(Debug, Serialize)]
@@ -2075,6 +2714,7 @@ struct WindowSnapshot {
     shown: bool,
     closed: bool,
     focused_control_id: Option<i32>,
+    menu: Vec<MenuNodeSnapshot>,
     layout_rules: Vec<LayoutRuleSnapshot>,
     controls: Vec<ControlSnapshot>,
 }
@@ -2098,6 +2738,23 @@ impl From<&LayoutRule> for LayoutRuleSnapshot {
             order: rule.order,
             fixed_size: rule.fixed_size,
             margin: [rule.margin.0, rule.margin.1, rule.margin.2, rule.margin.3],
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct MenuNodeSnapshot {
+    action: Option<u32>,
+    text: String,
+    children: Vec<MenuNodeSnapshot>,
+}
+
+impl From<&MenuNode> for MenuNodeSnapshot {
+    fn from(node: &MenuNode) -> Self {
+        Self {
+            action: node.action,
+            text: node.text.clone(),
+            children: node.children.iter().map(MenuNodeSnapshot::from).collect(),
         }
     }
 }
@@ -2217,6 +2874,27 @@ enum ControlSnapshot {
         items: Vec<String>,
         selected_index: Option<usize>,
     },
+    TreeView {
+        id: i32,
+        parent_control_id: Option<i32>,
+        enabled: bool,
+        selected_all: bool,
+        scroll_vertical: u32,
+        scroll_horizontal: u32,
+        style_id: Option<String>,
+        items: Vec<TreeItemSnapshot>,
+        selected_item_id: Option<u64>,
+    },
+    Chart {
+        id: i32,
+        parent_control_id: Option<i32>,
+        enabled: bool,
+        selected_all: bool,
+        scroll_vertical: u32,
+        scroll_horizontal: u32,
+        style_id: Option<String>,
+        data: Option<ChartDataSnapshot>,
+    },
     ToggleSwitch {
         id: i32,
         parent_control_id: Option<i32>,
@@ -2250,6 +2928,73 @@ enum ControlSnapshot {
         style_id: Option<String>,
         orientation: String,
     },
+}
+
+#[derive(Debug, Serialize)]
+struct TreeItemSnapshot {
+    id: u64,
+    text: String,
+    is_folder: bool,
+    state: String,
+    expanded: bool,
+    style_override: Option<String>,
+    children: Vec<TreeItemSnapshot>,
+}
+
+impl From<&TreeItemNode> for TreeItemSnapshot {
+    fn from(node: &TreeItemNode) -> Self {
+        Self {
+            id: node.id.raw(),
+            text: node.text.clone(),
+            is_folder: node.is_folder,
+            state: node.state.stable_name().to_string(),
+            expanded: node.expanded,
+            style_override: node.style_override.clone(),
+            children: node.children.iter().map(TreeItemSnapshot::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ChartDataSnapshot {
+    lines: Vec<ChartLineSnapshot>,
+    week_labels: Vec<String>,
+    is_loading: bool,
+    show_x_axis_labels: bool,
+    show_y_axis_labels: bool,
+    show_end_labels: bool,
+}
+
+impl From<&ChartDataState> for ChartDataSnapshot {
+    fn from(data: &ChartDataState) -> Self {
+        Self {
+            lines: data.lines.iter().map(ChartLineSnapshot::from).collect(),
+            week_labels: data.week_labels.clone(),
+            is_loading: data.is_loading,
+            show_x_axis_labels: data.show_x_axis_labels,
+            show_y_axis_labels: data.show_y_axis_labels,
+            show_end_labels: data.show_end_labels,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ChartLineSnapshot {
+    label: String,
+    weekly_counts: Vec<u32>,
+    end_label: Option<String>,
+    emphasis: String,
+}
+
+impl From<&ChartLineState> for ChartLineSnapshot {
+    fn from(line: &ChartLineState) -> Self {
+        Self {
+            label: line.label.clone(),
+            weekly_counts: line.weekly_counts.clone(),
+            end_label: line.end_label.clone(),
+            emphasis: line.emphasis.clone(),
+        }
+    }
 }
 
 impl From<&ControlState> for ControlSnapshot {
@@ -2399,6 +3144,30 @@ impl From<&ControlState> for ControlSnapshot {
                 style_id: common.6,
                 items: items.clone(),
                 selected_index: *selected_index,
+            },
+            ControlKind::TreeView {
+                items,
+                selected_item_id,
+            } => Self::TreeView {
+                id: common.0,
+                parent_control_id: common.1,
+                enabled: common.2,
+                selected_all: common.3,
+                scroll_vertical: common.4,
+                scroll_horizontal: common.5,
+                style_id: common.6,
+                items: items.iter().map(TreeItemSnapshot::from).collect(),
+                selected_item_id: selected_item_id.map(|id| id.raw()),
+            },
+            ControlKind::Chart { data } => Self::Chart {
+                id: common.0,
+                parent_control_id: common.1,
+                enabled: common.2,
+                selected_all: common.3,
+                scroll_vertical: common.4,
+                scroll_horizontal: common.5,
+                style_id: common.6,
+                data: data.as_ref().map(ChartDataSnapshot::from),
             },
             ControlKind::ToggleSwitch { label, checked } => Self::ToggleSwitch {
                 id: common.0,
@@ -2700,6 +3469,7 @@ impl From<&BadgeDescriptor> for BadgeSnapshot {
 mod tests {
     use super::*;
     use crate::TreeItemId;
+    use crate::{ChartLineData, ChartLineEmphasis, Color, MenuActionId, MenuItemConfig};
     use crate::{
         FormButtons, FormDialogDescriptor, FormField, FormFieldValue, FormRow, FormTextValidation,
     };
@@ -3111,6 +3881,347 @@ mod tests {
         assert_eq!(json["windows"][0]["controls"][9]["items"][0], "Three");
         assert_eq!(json["windows"][0]["controls"][11]["position"], 55);
         assert_eq!(json["windows"][0]["controls"][5]["selected_item_id"], 99);
+    }
+
+    #[test]
+    fn treeview_commands_update_state_and_snapshot_order() {
+        let mut backend = HeadlessBackend::new("app".into());
+        let window_id = backend.create_window(WindowConfig {
+            title: "Window",
+            width: 320,
+            height: 240,
+        });
+        backend
+            .execute_platform_command(PlatformCommand::CreateTreeView {
+                window_id,
+                parent_control_id: None,
+                control_id: ControlId::new(1),
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::PopulateTreeView {
+                window_id,
+                control_id: ControlId::new(1),
+                items: vec![TreeItemDescriptor {
+                    id: TreeItemId::new(10),
+                    text: "Parent".into(),
+                    is_folder: true,
+                    state: CheckState::Unchecked,
+                    style_override: Some(StyleId::TreeItemDisabled),
+                    children: vec![
+                        TreeItemDescriptor {
+                            id: TreeItemId::new(11),
+                            text: "Child B".into(),
+                            is_folder: false,
+                            state: CheckState::Checked,
+                            style_override: None,
+                            children: vec![],
+                        },
+                        TreeItemDescriptor {
+                            id: TreeItemId::new(12),
+                            text: "Child A".into(),
+                            is_folder: false,
+                            state: CheckState::Unchecked,
+                            style_override: Some(StyleId::DefaultText),
+                            children: vec![],
+                        },
+                    ],
+                }],
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::UpdateTreeItemText {
+                window_id,
+                control_id: ControlId::new(1),
+                item_id: TreeItemId::new(12),
+                text: "Child A+".into(),
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::UpdateTreeItemVisualState {
+                window_id,
+                control_id: ControlId::new(1),
+                item_id: TreeItemId::new(11),
+                new_state: CheckState::Hidden,
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::SetTreeViewSelection {
+                window_id,
+                control_id: ControlId::new(1),
+                item_id: TreeItemId::new(12),
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::ExpandAllTreeItems {
+                window_id,
+                control_id: ControlId::new(1),
+            })
+            .unwrap();
+
+        let snapshot =
+            serde_json::from_str::<Value>(&serde_json::to_string(&backend.snapshot()).unwrap())
+                .unwrap();
+        let tree = &snapshot["windows"][0]["controls"][0];
+        assert_eq!(tree["kind"], "tree_view");
+        assert_eq!(tree["selected_item_id"], 12);
+        assert_eq!(tree["items"][0]["style_override"], "TreeItemDisabled");
+        assert_eq!(tree["items"][0]["children"][0]["text"], "Child B");
+        assert_eq!(tree["items"][0]["children"][1]["text"], "Child A+");
+        assert_eq!(tree["items"][0]["children"][0]["expanded"], true);
+        assert_eq!(tree["items"][0]["children"][1]["expanded"], true);
+        assert_eq!(tree["items"][0]["children"][0]["state"], "Hidden");
+        assert!(matches!(
+            backend.follow_up_events.pop_front(),
+            Some(AppEvent::TreeViewItemSelectionChanged {
+                window_id: got_window_id,
+                item_id: got_item_id,
+            }) if got_window_id == window_id && got_item_id == TreeItemId::new(12)
+        ));
+    }
+
+    #[test]
+    fn hidden_tree_toggle_is_silent() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![
+                    PlatformCommand::CreateTreeView {
+                        window_id,
+                        parent_control_id: None,
+                        control_id: ControlId::new(1),
+                    },
+                    PlatformCommand::PopulateTreeView {
+                        window_id,
+                        control_id: ControlId::new(1),
+                        items: vec![TreeItemDescriptor {
+                            id: TreeItemId::new(7),
+                            text: "Row".into(),
+                            is_folder: false,
+                            state: CheckState::Hidden,
+                            style_override: None,
+                            children: vec![],
+                        }],
+                    },
+                    PlatformCommand::ShowWindow { window_id },
+                ],
+            )
+            .unwrap();
+
+        harness
+            .toggle_tree_item(window_id, ControlId::new(1), TreeItemId::new(7))
+            .unwrap();
+        assert!(handler.lock().unwrap().events.is_empty());
+        let snapshot = serde_json::from_str::<Value>(&harness.snapshot().unwrap()).unwrap();
+        assert_eq!(
+            snapshot["windows"][0]["controls"][0]["items"][0]["state"],
+            "Hidden"
+        );
+    }
+
+    #[test]
+    fn chart_menu_style_and_scroll_commands_update_snapshot() {
+        let mut backend = HeadlessBackend::new("app".into());
+        let window_id = backend.create_window(WindowConfig {
+            title: "Window",
+            width: 320,
+            height: 240,
+        });
+        backend
+            .execute_platform_command(PlatformCommand::CreateButton {
+                window_id,
+                parent_control_id: None,
+                control_id: ControlId::new(1),
+                text: "Button".into(),
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::CreateChart {
+                window_id,
+                parent_control_id: None,
+                control_id: ControlId::new(2),
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::CreateTabBar {
+                window_id,
+                parent_control_id: None,
+                control_id: ControlId::new(3),
+                items: vec!["One".into(), "Two".into()],
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::CreateToggleSwitch {
+                window_id,
+                parent_control_id: None,
+                control_id: ControlId::new(4),
+                label: "Toggle".into(),
+                checked: false,
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::SetChartData {
+                window_id,
+                control_id: ControlId::new(2),
+                data: ChartDataPacket {
+                    lines: vec![ChartLineData {
+                        label: "Alpha".into(),
+                        weekly_counts: vec![1, 2, 3],
+                        color: 0x00FF00,
+                        end_label: Some("A".into()),
+                        emphasis: ChartLineEmphasis::Secondary,
+                    }],
+                    week_labels: vec!["W1".into(), "W2".into(), "W3".into()],
+                    is_loading: false,
+                    show_x_axis_labels: true,
+                    show_y_axis_labels: true,
+                    show_end_labels: true,
+                },
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::CreateMainMenu {
+                window_id,
+                menu_items: vec![MenuItemConfig {
+                    action: None,
+                    text: "&File".into(),
+                    children: vec![MenuItemConfig {
+                        action: Some(MenuActionId::new(42)),
+                        text: "Exit".into(),
+                        children: vec![],
+                    }],
+                }],
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::DefineStyle {
+                style_id: StyleId::PrimaryButton,
+                style: ControlStyle::default(),
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::ApplyStyleToControl {
+                window_id,
+                control_id: ControlId::new(1),
+                style_id: StyleId::PrimaryButton,
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::SetTabBarStyle {
+                window_id,
+                control_id: ControlId::new(3),
+                background_color: Color::default(),
+                text_color: Color::default(),
+                accent_color: Color::default(),
+                font: None,
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::SetToggleSwitchStyle {
+                window_id,
+                control_id: ControlId::new(4),
+                background: Color::default(),
+                pill_off: Color::default(),
+                pill_on: Color::default(),
+                knob: Color::default(),
+                text: Color::default(),
+            })
+            .unwrap();
+        backend
+            .execute_platform_command(PlatformCommand::SetScrollPosition {
+                window_id,
+                control_id: ControlId::new(1),
+                vertical_pos: 25,
+                horizontal_pos: 75,
+            })
+            .unwrap();
+
+        let snapshot =
+            serde_json::from_str::<Value>(&serde_json::to_string(&backend.snapshot()).unwrap())
+                .unwrap();
+        let window = &snapshot["windows"][0];
+        assert_eq!(window["menu"][0]["children"][0]["action"], 42);
+        let chart = &window["controls"][1];
+        assert_eq!(chart["kind"], "chart");
+        assert_eq!(chart["data"]["lines"][0]["emphasis"], "Secondary");
+        assert!(chart["data"]["lines"][0].get("color").is_none());
+        assert_eq!(window["controls"][0]["style_id"], "PrimaryButton");
+        assert_eq!(window["controls"][0]["scroll_vertical"], 25);
+        assert_eq!(window["controls"][0]["scroll_horizontal"], 75);
+    }
+
+    #[test]
+    fn scroll_action_emits_event_and_rejects_list_box() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![
+                    PlatformCommand::CreateInput {
+                        window_id,
+                        parent_control_id: None,
+                        control_id: ControlId::new(1),
+                        initial_text: String::new(),
+                        read_only: false,
+                        multiline: false,
+                        vertical_scroll: true,
+                    },
+                    PlatformCommand::CreateListBox {
+                        window_id,
+                        parent_control_id: None,
+                        control_id: ControlId::new(2),
+                    },
+                    PlatformCommand::ShowWindow { window_id },
+                ],
+            )
+            .unwrap();
+
+        harness
+            .scroll(window_id, ControlId::new(1), 33, 44)
+            .unwrap();
+        let events = &handler.lock().unwrap().events;
+        assert!(matches!(
+            events.last(),
+            Some(AppEvent::ControlScrolled {
+                vertical_pos: 33,
+                horizontal_pos: 44,
+                ..
+            })
+        ));
+        let snapshot = serde_json::from_str::<Value>(&harness.snapshot().unwrap()).unwrap();
+        assert_eq!(snapshot["windows"][0]["controls"][0]["scroll_vertical"], 33);
+        assert_eq!(
+            snapshot["windows"][0]["controls"][0]["scroll_horizontal"],
+            44
+        );
+        assert!(harness.scroll(window_id, ControlId::new(2), 1, 1).is_err());
     }
 
     #[test]

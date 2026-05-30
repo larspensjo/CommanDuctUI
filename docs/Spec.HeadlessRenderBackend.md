@@ -1,6 +1,6 @@
 # Spec: Headless text-rendering backend for CommanDuctUI
 
-Status: Living design spec — Phase 1 delivered; Phase 2a delivered; Phase 2b in flight — 2026-05-30
+Status: Living design spec — Phase 1 delivered; Phase 2a delivered; Phase 2b delivered — 2026-05-30
 Owner: Lars Pensjö
 Reviews applied: `docs/Review.HeadlessRenderBackend.md` (design),
 `docs/Review.HeadlessRenderBackend.Phase1.md` (Phase 1 implementation)

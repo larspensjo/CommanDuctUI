@@ -6,6 +6,10 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.6.0 - 2026-05-30
+- **Feature**: Extend the headless backend with TreeView, chart, menu, styling, and scroll logical state, including tree selection parity, hidden-row toggle suppression, menu-action clicks, and deterministic snapshot coverage for the new control data.
+- **API**: Add in-process headless harness actions for tree selection/toggle, menu action clicks, and semantic scrolling so tests can drive the new logical state directly.
+
 ## 2.5.0 - 2026-05-30
 - **Feature**: Add in-process `HeadlessHarness::wait_until` plus dialog responder scripting for ordered modal-dialog handling in headless mode.
 - **Feature**: Implement headless completions for save/open/profile/input/exclude-patterns/form/folder dialogs, with message boxes recorded as trace-only requests.

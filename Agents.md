@@ -7,6 +7,7 @@
 - When adding a CLI flag to `harvester_batch`, update `scripts/Start-HarvesterBatch.ps1` in the same change.
 - When creating or saving plan documents, always save them to the `docs/` folder unless explicitly told otherwise. Use the prfix 'Plan.' for plans, 'Spec.' for specifications and 'Review.' for reviews.
 - New handler modules must include a `#[cfg(test)]` block covering at least the pure-logic seam.
+- Keep `docs/EngineeringDiary.md` up to date for noteworthy implementations, important decisions, and bug fixes with reusable lessons. See instructions in the beginning how to add entries.
 
 ## Releases
 - Update `Cargo.toml` version and `CHANGELOG.md` together, in the same change.
@@ -26,9 +27,3 @@
 - Prefer tests of event translation, emitted effects, and public contracts over internal details.
 - Reducer seam before Win32 syscall. When a function both (a) decides something from its inputs and (b) calls Win32 to act on that decision, split (a) into a pure function and test it. Event-translation handlers should be callable with `HWND::default()` — if they can't, the reduction is still entangled.
 - `use super::*;` is acceptable inside an inline `#[cfg(test)]` block, but extracted test files (e.g. `tests.rs`) must use explicit imports.
-
-## Diary
-- Keep `docs/EngineeringDiary.md` up to date for noteworthy implementations, important decisions, and bug fixes with reusable lessons.
-- Write diary entries as durable change records: state what changed and why, without depending on plan documents or plan IDs.
-- Keep diary entries short and reference concrete artifacts.
-- Add new entries to the end.

@@ -166,6 +166,17 @@ pub enum CheckState {
     Unchecked,
 }
 
+impl CheckState {
+    /// Returns the stable public name used in headless snapshots and protocol DTOs.
+    pub(crate) fn stable_name(self) -> &'static str {
+        match self {
+            CheckState::Hidden => "Hidden",
+            CheckState::Checked => "Checked",
+            CheckState::Unchecked => "Unchecked",
+        }
+    }
+}
+
 /// Descriptor for one tree item, including its children and style override.
 #[derive(Debug, Clone)]
 pub struct TreeItemDescriptor {
@@ -436,6 +447,16 @@ pub enum SplitterOrientation {
 pub enum ChartLineEmphasis {
     Primary,
     Secondary,
+}
+
+impl ChartLineEmphasis {
+    /// Returns the stable public name used in headless snapshots and protocol DTOs.
+    pub(crate) fn stable_name(&self) -> &'static str {
+        match self {
+            ChartLineEmphasis::Primary => "Primary",
+            ChartLineEmphasis::Secondary => "Secondary",
+        }
+    }
 }
 
 /// A single entity trend line sent to the chart control.
