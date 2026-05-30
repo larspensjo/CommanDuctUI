@@ -67,6 +67,9 @@ pub struct ListBoxItemDescriptor {
     pub badges: Vec<BadgeDescriptor>,
     pub title: String,
     pub metadata: String,
+    /// When `false`, the row renders muted (disabled background and text) but
+    /// remains selectable by click and keyboard navigation. Hosts use this for
+    /// de-emphasized rows that must still be inspectable.
     pub enabled: bool,
 }
 

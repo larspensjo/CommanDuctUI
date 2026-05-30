@@ -426,20 +426,9 @@ unsafe fn handle_keydown(hwnd: HWND, key: u16) -> bool {
         return false;
     }
     let visible = visible_rows(hwnd).max(1);
-    let mut next = state.selected_index.unwrap_or(0);
-    if key == VK_UP.0 {
-        next = next.saturating_sub(1);
-    } else if key == VK_DOWN.0 {
-        next = (next + 1).min(len.saturating_sub(1));
-    } else if key == VK_HOME.0 {
-        next = 0;
-    } else if key == VK_END.0 {
-        next = len.saturating_sub(1);
-    } else if key == VK_PRIOR.0 {
-        next = next.saturating_sub(visible);
-    } else if key == VK_NEXT.0 {
-        next = (next + visible).min(len.saturating_sub(1));
-    }
+    let Some(next) = next_navigation_index(state.selected_index, len, visible, key) else {
+        return true;
+    };
     if state.selected_index != Some(next) {
         state.selected_index = Some(next);
         ensure_row_visible(hwnd, next);
@@ -515,6 +504,37 @@ unsafe fn ensure_row_visible(hwnd: HWND, row: usize) {
 fn hit_test_row(state: &ListBoxState, y: i32) -> Option<usize> {
     let row = (y / state.row_height.max(1)).max(0) as usize + state.scroll_row;
     (row < state.items.len()).then_some(row)
+}
+
+/// Compute the next selected index for a navigation key. Index-based only - it
+/// deliberately does not consult `ListBoxItemDescriptor::enabled`, so disabled
+/// rows remain reachable by keyboard. Returns `None` when there is nothing to move to.
+fn next_navigation_index(
+    selected: Option<usize>,
+    len: usize,
+    visible: usize,
+    key: u16,
+) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let current = selected.unwrap_or(0);
+    let next = if key == VK_UP.0 {
+        current.saturating_sub(1)
+    } else if key == VK_DOWN.0 {
+        (current + 1).min(len.saturating_sub(1))
+    } else if key == VK_HOME.0 {
+        0
+    } else if key == VK_END.0 {
+        len.saturating_sub(1)
+    } else if key == VK_PRIOR.0 {
+        current.saturating_sub(visible)
+    } else if key == VK_NEXT.0 {
+        (current + visible).min(len.saturating_sub(1))
+    } else {
+        return None;
+    };
+    Some(next)
 }
 
 fn row_rect(state: &ListBoxState, row_index: usize, width: i32) -> Option<RECT> {
@@ -1292,5 +1312,26 @@ mod tests {
         assert!(is_navigation_key(VK_PRIOR.0));
         assert!(is_navigation_key(VK_NEXT.0));
         assert!(!is_navigation_key(b'X' as u16));
+    }
+
+    #[test]
+    fn next_navigation_index_moves_across_disabled_rows() {
+        let next = next_navigation_index(Some(0), 2, 1, VK_DOWN.0);
+
+        assert_eq!(next, Some(1));
+    }
+
+    #[test]
+    fn next_navigation_index_respects_home_end_and_page_keys() {
+        assert_eq!(next_navigation_index(Some(3), 5, 2, VK_HOME.0), Some(0));
+        assert_eq!(next_navigation_index(Some(1), 5, 2, VK_END.0), Some(4));
+        assert_eq!(next_navigation_index(Some(4), 5, 2, VK_PRIOR.0), Some(2));
+        assert_eq!(next_navigation_index(Some(1), 5, 2, VK_NEXT.0), Some(3));
+    }
+
+    #[test]
+    fn next_navigation_index_returns_none_for_unknown_keys_and_empty_lists() {
+        assert_eq!(next_navigation_index(Some(0), 0, 1, VK_DOWN.0), None);
+        assert_eq!(next_navigation_index(Some(0), 2, 1, b'X' as u16), None);
     }
 }
