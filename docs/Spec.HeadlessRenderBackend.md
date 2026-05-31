@@ -1,9 +1,11 @@
 # Spec: Headless text-rendering backend for CommanDuctUI
 
-Status: Living design spec — Phase 1 delivered; Phase 2a delivered; Phase 2b delivered — 2026-05-30
+Status: Living design spec — Phase 1 delivered; Phase 2a delivered; Phase 2b delivered;
+Phase 2c (external protocol) in planning — 2026-05-31
 Owner: Lars Pensjö
 Reviews applied: `docs/Review.HeadlessRenderBackend.md` (design),
-`docs/Review.HeadlessRenderBackend.Phase1.md` (Phase 1 implementation)
+`docs/Review.HeadlessRenderBackend.Phase1.md` (Phase 1 implementation),
+`docs/Review.HeadlessRenderBackend.Phase2c.md` (Phase 2c plan)
 
 > This is the design **spec** (the `Spec.` prefix denotes a design document). The
 > implementation plan is produced separately and follows the repo's `Plan.` convention.
@@ -291,8 +293,11 @@ follow-up native events to quiescence → optionally `wait_for("done")` →
 
    - `{"type":"snapshot","request_id":N,"model":{…}}`
    - `{"type":"ok","request_id":N}`
-   - `{"type":"error","request_id":N,"message":"…"}`
+   - `{"type":"error","request_id":N|null,"message":"…"}` — `request_id` is `Option`: it is the
+     originating id when the request parsed far enough to recover one, and `null` only when the
+     input was unparseable (see *Malformed input* below).
    - `{"type":"marker","label":"…"}` (asynchronous; checkpoint observed)
+   - `{"type":"bye"}` (terminal; emitted once on quit/EOF, see *Termination*)
    - top-level `protocol_version` is sent in a handshake/`hello` message.
 
    **Protocol boundary:** the protocol exposes marker waits (`wait_for`) and snapshot
@@ -302,8 +307,60 @@ follow-up native events to quiescence → optionally `wait_for("done")` →
    `serde_json::Value`, making the snapshot schema the stable public view for this wait
    API. External harnesses express conditions by polling snapshots between actions.
 
+   **Dialogs and window close are not driver-scriptable in shape 2.** The protocol exposes only
+   semantic actions, `snapshot`, and `wait_for`; it has no request to script a dialog responder
+   and no `close_window` action. A `Show*Dialog` reached over the protocol therefore resolves to
+   the default cancel/none outcome (§11), and native top-level close cannot be simulated (that uses
+   the in-process `inject_raw` of `WindowCloseRequestedByUser`). Both are out of scope for the
+   first protocol version; driver-scriptable dialog outcomes are a planned follow-up. (The
+   snapshot schema that shape 2 freezes as its external contract must use stable enum name
+   mappings, not `Debug` formatting — §10.)
+
    **All logs go to stderr** so stdout stays clean JSON-lines. Shape 2 is a stdio adapter
-   over shape 1.
+   over shape 1. The `run_protocol` adapter writes only protocol JSON to its `writer`, but it
+   **cannot police a host app's logger** once embedded: keeping stdout clean in `--headless` mode
+   is partly the downstream app's responsibility. The demo `--headless` path is the reference and
+   must model this — no stdout diagnostics, and any logger it initializes is configured to stderr.
+
+   **Loop mechanics (the stdio adapter).** `run_protocol(reader, writer)` is a synchronous
+   request → response loop over the existing in-process pump; it adds I/O framing, not new UI
+   behavior:
+
+   - **Handshake.** Before reading any request the adapter writes one
+     `{"type":"hello","protocol_version":V}` line **and flushes the writer**. The window(s) and
+     app-core are created by the application's `main()` *before* `run_protocol` is called (per §4),
+     so the protocol has **no `create_window` request**; a driver discovers window/control ids by
+     issuing a `snapshot` first.
+   - **Id reconstruction.** Requests carry raw integer ids; the adapter rebuilds the opaque
+     `WindowId` / `ControlId` / `ListBoxItemId` / `TreeItemId` / `MenuActionId` via their public
+     constructors before calling the matching harness action. An id that names no live control
+     surfaces as an `error` response (the same validation `Err` the in-process action returns).
+   - **Malformed input (two-stage parse).** Each line is parsed in two stages: first a minimal
+     envelope (`type` + optional `request_id`), then the full typed request. A line that parses as
+     the envelope but fails the full parse (unknown variant, missing/ill-typed fields) yields an
+     `error` correlated with `request_id: Some(id)`; only a line that fails even the envelope parse
+     yields `request_id: null`. Malformed input never panics or aborts the loop.
+   - **`wait_for` is cursor-relative.** Protocol `wait_for(label, timeout)` waits for a checkpoint
+     observed **at or after the adapter's current marker cursor**, not anywhere in the cumulative
+     marker history. This prevents a reused app-defined label (`done`, `ready`) from being
+     satisfied immediately by a stale earlier marker. (This differs from the in-process
+     `HeadlessHarness::wait_for`, which scans the cumulative marker list; the divergence is
+     intentional and documented because the protocol has already emitted prior markers to the
+     driver.)
+   - **Marker + writer flush.** Markers accumulate in the backend; the adapter keeps a cursor and,
+     after servicing each request, emits a `{"type":"marker","label":…}` line for every newly
+     observed checkpoint **before** writing that request's tagged response, then flushes the writer
+     so the whole output group reaches the driver (an interactive line protocol over a buffered
+     writer would otherwise deadlock the driver on un-emitted bytes). With the current
+     single-threaded pump, markers only advance while a request is being serviced; a background
+     async source (Spec §7) would flush at the next request. True out-of-band push (markers written
+     with no pending request) stays out of 2c and is only needed once a real async producer exists.
+   - **Termination and `bye` ordering.** `QuitApplication` sets the terminal flag the pump already
+     observes. When a request triggers quit, the adapter preserves correlation order: service the
+     request → flush newly observed markers → write the request's tagged response → write
+     `{"type":"bye"}` → flush → return. `bye` is a terminal notification, **not** a replacement for
+     the request's response. On reader EOF (no triggering request) the adapter emits `bye` and
+     returns.
 
 ## 10. Serialization and dependency boundary
 
@@ -321,6 +378,14 @@ non-Rust harnesses). Explicit boundary:
 - **Dialog requests** serialize their command payloads as structured, tagged snapshot DTOs,
   including form rows/fields/buttons. They must not expose Rust `Debug` strings because
   Phase 2c clients consume this data as machine-readable JSON.
+- **Enum-valued snapshot fields use stable name mappings, not `Debug`.** Because the stdio
+  protocol (§9) freezes `HeadlessSnapshot` as an external machine contract, every externally
+  visible enum field (e.g. `dock_style`, dialog `kind`, badge `style`, label `class`/`severity`,
+  listbox `density`, splitter `orientation`, `MessageSeverity`, form note `severity`, form
+  `validation`) must serialize through an explicit stable-name helper — the same treatment Phase
+  2b gave `CheckState` / `ChartLineEmphasis` / `StyleId`. A field deliberately left as a `Debug`
+  string must be documented as intentionally stable. This keeps a future enum rename from silently
+  breaking the protocol contract.
 - **Dependency impact:** always-compiled headless mode makes `serde` and `serde_json`
   **default dependencies** (today only `log` is unconditional). This is accepted; if a
   lean release ever needs to drop them, a *default-on* feature can be introduced later
@@ -440,7 +505,12 @@ criteria:
   `SetScrollPosition` (+ `ControlScrolled`) populating the scroll fields. Goal: the
   unsupported arm shrinks to only commands with no meaningful logical state.
 - **Phase 2c — external protocol.** `--headless` stdio JSON protocol with the versioned
-  request/response envelopes (§9); logs to stderr; demo app `--headless` flag.
+  request/response envelopes (§9); logs to stderr; demo app `--headless` flag. Dialog scripting
+  and `close_window` are **out of scope** (default-cancel dialogs, no native-close action);
+  snapshot enum fields gain stable-name mappings (§10) before the contract freezes.
+- **Phase 2d — external dialog scripting.** A driver-scriptable dialog-outcome protocol so shape 2
+  can drive `Show*Dialog` results instead of always defaulting to cancel/none. Deferred from the
+  2c review; pursued when a black-box workflow needs file/profile/form dialog coverage.
 
 **Phase 3 — toward fidelity-C.**
 - Shared contract-test suite spanning documented behaviors.
