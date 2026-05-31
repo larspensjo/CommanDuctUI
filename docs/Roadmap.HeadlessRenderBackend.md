@@ -1,11 +1,8 @@
 # Roadmap: Headless text-rendering backend for CommanDuctUI
 
-Status: Active — Phase 1 done; Phase 2a done; Phase 2b done; Phase 2c implemented,
-review pending — 2026-05-31
+Status: Active — Phase 1 done; Phase 2a done; Phase 2b done; Phase 2c done;
+Phase 2d in planning — 2026-05-31
 Design spec: `docs/Spec.HeadlessRenderBackend.md`
-Review notes: `docs/Review.HeadlessRenderBackend.md` (design),
-`docs/Review.HeadlessRenderBackend.Phase1.md` (Phase 1),
-`docs/Review.HeadlessRenderBackend.Phase2c.md` (Phase 2c plan)
 
 This is the **living control document** for an iterative, review-driven build. The spec
 holds the stable "what/why"; this roadmap holds phase status, the detailed checklist for
@@ -34,8 +31,8 @@ dedicated `Plan.HeadlessRenderBackend.PhaseN.md` and link it from the table.
 | 1 | In-process headless harness over a core control subset; pump; Checkpoint/wait_for; JSON snapshot; demo + e2e | `done` | §"Phase 1 (done)" below |
 | 2a | `wait_until`; dialog responder + 8 dialog commands; harden `inject_raw` | `done` | §"Phase 2a (done)" below |
 | 2b | Remaining controls/commands: treeview, chart, menu, styling, scroll | `done` | §"Phase 2b (done)" below |
-| 2c | `--headless` stdio JSON protocol | `wip` | §"Phase 2c (wip)" below |
-| 2d | External dialog-scripting protocol (drive `Show*Dialog` outcomes from shape 2) | `todo` | Deferred from 2c review finding 1; one-liner until reached |
+| 2c | `--headless` stdio JSON protocol | `done` | §"Phase 2c (done)" below |
+| 2d | External dialog-scripting protocol (drive `Show*Dialog` outcomes from shape 2) | `wip` | §"Phase 2d (wip)" below |
 | 3 | Fidelity-C: shared contract suite; deterministic async; broader input vocabulary | `todo` | Spec §15 (expand when reached) |
 
 ## Phase 1 (done)
@@ -45,7 +42,7 @@ window `shown`/`closed` + per-control `enabled`; the no-wildcard command interpr
 event pump with the follow-up native-event queue (`SignalMainWindowUISetupComplete` →
 `MainWindowUISetupComplete`); `Checkpoint` + `wait_for` + timeout; deterministic JSON
 snapshots; the §7 semantic actions; `inject_raw`; the app-core split + e2e demo test.
-Review fixes (`docs/Review.HeadlessRenderBackend.Phase1.md`) are committed: same-call pump
+Review fixes are committed: same-call pump
 drain, uniform visible/enabled/read-only action validation, `UpdateLabelText`, radio
 grouping by `group_start`, and stronger per-effect assertions. Progress / splitter /
 richedit / label-update landed here too, ahead of the original plan. See
@@ -181,7 +178,14 @@ Completion checklist:
 - [x] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
       `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
 
-## Phase 2c (wip)
+## Phase 2c (done)
+
+**Delivered.** The shipped-binary `--headless` mode landed: a versioned JSON-lines stdio
+protocol (`run_protocol`) over the existing in-process pump, the demo `--headless` execution
+path, and the snapshot stable-name prerequisite. Implementation and the review follow-up are
+recorded in the Iteration Log (2026-05-31). The full delivered checklist is retained below for
+traceability; the externally-frozen contract is the protocol snapshot view (no cumulative
+`markers`/`quitting`), with markers and quit delivered through `marker`/`bye` lines.
 
 **Goal (Spec §15, §9).** Ship the shipped-binary `--headless` mode: a versioned JSON-lines
 **stdio protocol** (delivery shape 2) that drives the existing in-process harness from a
@@ -190,7 +194,7 @@ DTOs only** — no new UI behavior, no new control modeling. The in-process harn
 Phases 1–2b is the substrate; `run_protocol` is a thin synchronous adapter over `pump` /
 actions / `snapshot` / `wait_for`.
 
-**Scope decisions from the 2c plan review (`Review.HeadlessRenderBackend.Phase2c.md`).**
+**Scope decisions from the 2c plan review.**
 - **Dialog scripting is out of 2c (finding 1).** Shape 2 exposes only actions / snapshot /
   `wait_for`; `Show*Dialog` therefore uses the default cancel/none responder outcome over the
   protocol. This is documented as a known limitation, covered by a deterministic default-cancel
@@ -222,54 +226,54 @@ actions / `snapshot` / `wait_for`.
 Completion checklist:
 
 ### Snapshot stable-name prerequisite (review finding 6)
-- [ ] Replace the remaining externally-visible `format!("{:?}", …)` snapshot fields with
+- [x] Replace the remaining externally-visible `format!("{:?}", …)` snapshot fields with
       explicit stable-name mappings, mirroring the Phase 2b `CheckState` / `ChartLineEmphasis` /
       `StyleId` treatment: `dock_style` (`headless.rs:2737`), dialog-request `kind` (`:3222`),
       badge `style` (`:3463`), label `class` + `severity` (`:3044-3045`), listbox `density`
       (`:3091`), splitter `orientation` (`:3203`), `MessageSeverity` (`:3300`), form note
       `severity` (`:3346`), and form `validation` (`:3382`). Prefer a stable-name helper over
       `Debug`; if any field is left `Debug`-formatted, document it as intentionally stable.
-- [ ] Snapshot-stability test asserting the chosen stable strings for each converted field, so a
+- [x] Snapshot-stability test asserting the chosen stable strings for each converted field, so a
       future enum rename can't silently change the external protocol contract.
 
 ### Protocol DTOs (serde boundary, Spec §10)
-- [ ] Add request DTOs deserialized from driver → binary: `action` (with the `click` /
+- [x] Add request DTOs deserialized from driver → binary: `action` (with the `click` /
       `set_text` / `select_row` / `select_combo` / `select_tab` / `toggle` / `select_radio` /
       `select_tree` / `toggle_tree` / `click_menu` / `scroll` variants), `snapshot`, and
       `wait_for`. Each carries `request_id` and raw integer ids; reconstruct opaque ids via the
       public `new` constructors. **Do not** derive serde on `PlatformCommand`/`AppEvent`/the id
       types — the DTOs are headless-owned (Spec §10).
-- [ ] **Two-stage request parse (review finding 3).** First deserialize a minimal envelope
+- [x] **Two-stage request parse (review finding 3).** First deserialize a minimal envelope
       (`type` + optional `request_id`), then deserialize the full typed request. A valid-JSON but
       invalid/malformed request that still carries a usable `request_id` produces an `error`
       response correlated with `request_id: Some(id)`; only truly unparseable input (no usable id)
       uses `request_id: null`.
-- [ ] Add response DTOs serialized binary → driver: `hello` (`protocol_version`), `snapshot`
+- [x] Add response DTOs serialized binary → driver: `hello` (`protocol_version`), `snapshot`
       (`model`), `ok`, `error` (`message`), the asynchronous `marker` (`label`), and the terminal
       `bye`. Tag with `#[serde(tag = "type")]`; use a protocol-specific snapshot view for `model`
       that omits cumulative `markers` and `quitting`, leaving `marker` and `bye` as the protocol
       sources of truth.
       **`error` carries `request_id: Option<u64>`** (`Some` when recoverable, `null` otherwise —
       finding 3); the correlated responses (`ok` / `snapshot`) carry the request's `request_id`.
-- [ ] Define `protocol_version` as a single source of truth (const) and document the envelope
+- [x] Define `protocol_version` as a single source of truth (const) and document the envelope
       shape next to the DTOs. **Decision:** the `hello` line carries only `protocol_version`;
       drivers obtain ids by issuing a `snapshot` first (no `create_window` request — windows are
       created by `main()` before `run_protocol`, per Spec §4/§9). Flag for review whether
       `hello` should also bundle the first snapshot for convenience.
-- [ ] **Dialog handling over the protocol is default-cancel only (review finding 1).** Document,
+- [x] **Dialog handling over the protocol is default-cancel only (review finding 1).** Document,
       next to the DTOs, that shape 2 has no dialog-scripting request: `Show*Dialog` uses the
       default cancel/none responder outcome. Driver-scriptable dialog outcomes are deferred to
       Phase 2d. (No `inject_raw`, no `close_window`, no `wait_until` over the protocol either —
       finding 7 / Spec §9.)
 
 ### `run_protocol` adapter (Spec §9 loop mechanics)
-- [ ] Add `HeadlessHarness::run_protocol(reader: impl BufRead, writer: impl Write) ->
+- [x] Add `HeadlessHarness::run_protocol(reader: impl BufRead, writer: impl Write) ->
       PlatformResult<()>`: write `hello`, then loop reading one JSON request per line.
-- [ ] Dispatch each request to the matching in-process method; map its `PlatformResult` to an
+- [x] Dispatch each request to the matching in-process method; map its `PlatformResult` to an
       `ok` / `error` / `snapshot` response tagged with the request's `request_id`. A validation
       `Err` (unknown/invisible control, bad row) becomes an `error` response, **not** a process
       abort.
-- [ ] `wait_for` request → keep pumping until a matching marker appears at/after the adapter's
+- [x] `wait_for` request → keep pumping until a matching marker appears at/after the adapter's
       marker cursor, or `timeout_ms` elapses; `ok` on the marker, `error` on timeout.
       **Cursor-relative semantics (review finding 4):** protocol `wait_for` must ignore markers
       already emitted before the wait began, so a reused app-defined label (`done`, `ready`) can't
@@ -277,66 +281,162 @@ Completion checklist:
       in-process `wait_for`, which scans the cumulative marker list — `headless.rs:219`; document
       the divergence.) `wait_until` is **not** exposed — Rust predicate can't cross the boundary,
       Spec §9.
-- [ ] **Marker flush + writer flush (review finding 2):** keep a cursor into `backend.markers`;
+- [x] **Marker flush + writer flush (review finding 2):** keep a cursor into `backend.markers`;
       after servicing each request emit a `marker` line for every newly observed checkpoint
       *before* writing that request's response, then **`writer.flush()`** the whole output group.
       Also flush after the initial `hello` line. Without flushing, a driver blocks on serialized-
       but-unemitted bytes. (Single-threaded pump ⇒ markers only advance during a request; true
       out-of-band push stays out of 2c — parking lot.)
-- [ ] **Termination + `bye` ordering (review finding 5):** return cleanly on `QuitApplication`
+- [x] **Termination + `bye` ordering (review finding 5):** return cleanly on `QuitApplication`
       (`backend.quitting`) and on reader EOF. When a request triggers quit, preserve this order:
       service the request → flush newly observed markers → write the request's tagged response →
       write `{"type":"bye"}` → flush → return. `bye` is a terminal notification, never a
       replacement for the request's correlated response. On reader EOF (no triggering request),
       flush newly observed markers, emit `bye`, flush, and return.
-- [ ] Malformed/un-parseable input line → `error` response (`request_id` per the two-stage parse,
+- [x] Malformed/un-parseable input line → `error` response (`request_id` per the two-stage parse,
       finding 3), never a panic.
-- [ ] All protocol output goes to `writer` (stdout); **all `log` output and diagnostics go to
+- [x] All protocol output goes to `writer` (stdout); **all `log` output and diagnostics go to
       stderr** so stdout stays clean JSON-lines (Spec §9).
 
 ### Demo app `--headless` flag (Spec §4 reference)
-- [ ] Extend `examples/hello_window.rs` `main()` with the §4 runtime `match`: default = Win32
+- [x] Extend `examples/hello_window.rs` `main()` with the §4 runtime `match`: default = Win32
       `main_event_loop` (Windows only), `--headless` (flag/env var) = build core →
       `HeadlessHarness::new` → `create_window` → `start` → `run_protocol(stdin().lock(),
       stdout().lock())`. Keep the app-core (`build_app_core`) compiling on non-Windows; gate
       only the Win32 `run` path.
-- [ ] On non-Windows the example builds a **headless-only** binary that still runs the protocol
+- [x] On non-Windows the example builds a **headless-only** binary that still runs the protocol
       (replacing today's build-and-discard `main`), proving the cross-platform path (Spec §4).
-- [ ] **Clean stdout in the demo (review finding 8).** In `--headless` mode the demo must write
+- [x] **Clean stdout in the demo (review finding 8).** In `--headless` mode the demo must write
       no diagnostics to stdout; if it initializes a logger, configure it to stderr. Document that
       downstream apps embedding `run_protocol` must do the same — the adapter keeps its own output
       clean but cannot police a host app's logger.
 
 ### Tests
-- [ ] In-process `run_protocol` tests driving it over in-memory `Cursor`/byte buffers (no real
+- [x] In-process `run_protocol` tests driving it over in-memory `Cursor`/byte buffers (no real
       process): a scripted request sequence (snapshot → action → snapshot → wait_for) yields the
       expected tagged JSON-line responses, deterministically.
-- [ ] Round-trip parity: a protocol `action` produces the same `UiModel` mutation + event as the
+- [x] Round-trip parity: a protocol `action` produces the same `UiModel` mutation + event as the
       equivalent direct harness call (assert via the resulting snapshot).
-- [ ] Error paths: unknown id → `error` response (loop continues); malformed line → `error`;
+- [x] Error paths: unknown id → `error` response (loop continues); malformed line → `error`;
       `wait_for` timeout → `error`; `QuitApplication` → `bye` + clean return.
-- [ ] **Request-id recovery (finding 3):** a valid-JSON request with a bad variant/fields but a
+- [x] **Request-id recovery (finding 3):** a valid-JSON request with a bad variant/fields but a
       usable `request_id` yields `error` with `request_id: Some(id)`; truly unparseable input
       yields `request_id: null`.
-- [ ] Marker ordering: a checkpoint emitted during a request appears as a `marker` line before
+- [x] Marker ordering: a checkpoint emitted during a request appears as a `marker` line before
       that request's response, exactly once.
-- [ ] **Repeated-label `wait_for` (finding 4):** after a marker `done` is observed/emitted, a
+- [x] **Repeated-label `wait_for` (finding 4):** after a marker `done` is observed/emitted, a
       later `wait_for("done")` blocks until a *new* `done` marker (cursor-relative), not matching
       the stale one.
-- [ ] **Writer flush (finding 2):** a fake/instrumented writer proves `hello` and each request's
+- [x] **Writer flush (finding 2):** a fake/instrumented writer proves `hello` and each request's
       output group are flushed; the test would fail if flushing were dropped.
-- [ ] **`bye` ordering (finding 5):** a quit-triggering request emits its tagged response *then*
+- [x] **`bye` ordering (finding 5):** a quit-triggering request emits its tagged response *then*
       `bye` (in that order), and the loop returns.
-- [ ] **Default-cancel dialogs (finding 1):** a scripted sequence reaching a `Show*Dialog` over
+- [x] **Default-cancel dialogs (finding 1):** a scripted sequence reaching a `Show*Dialog` over
       the protocol deterministically produces the default cancel/none completion (no driver
       scripting), documenting the 2c limitation.
-- [ ] **Clean stdout (finding 8):** the demo `--headless` path emits only protocol JSON-lines on
+- [x] **Clean stdout (finding 8):** the demo `--headless` path emits only protocol JSON-lines on
       stdout (no stray diagnostics).
-- [ ] `protocol_version` handshake is emitted first and is stable.
+- [x] `protocol_version` handshake is emitted first and is stable.
 
 ### Cross-cutting / definition of done
-- [ ] New public `run_protocol` + the protocol envelope are a minor, releasable API change →
+- [x] New public `run_protocol` + the protocol envelope are a minor, releasable API change →
       bump `Cargo.toml` version and `CHANGELOG.md` together (next is `2.7.0`).
+- [x] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
+      `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
+
+## Phase 2d (wip)
+
+**Goal (Spec §9, §11, §15).** Let an external (shape 2) driver **script `Show*Dialog`
+outcomes** over the stdio protocol, lifting the 2c default-cancel-only limitation. Like 2c,
+this phase adds **protocol framing and DTOs only** — no new UI behavior and no new dialog
+modeling. The in-process dialog responder (`set_dialog_responder` + the ordered
+`DialogScriptEntry` queue, `headless.rs:506`) is the substrate; 2d exposes a request that fills
+that same queue from JSON, and the existing pump (`take_dialog_outcome_for`, `headless.rs:1692`)
+already turns a matched outcome into the precise `…Completed` event.
+
+**Audit / starting point (2026-05-31).**
+- In-process dialog scripting is complete: `DialogMatcher` (kind + optional
+  `window_id`/`title`/`prompt`/`context_tag`, `headless.rs:66`), `DialogScriptEntry`,
+  `DialogOutcome` (`headless.rs:93`: SaveFile / OpenFile / ProfileSelection / Input /
+  ExcludePatterns / Form / FolderPicker / MessageBox), and the ordered match-or-default
+  fallback (`take_dialog_outcome_for` → `default_dialog_outcome`, `headless.rs:1701`). The
+  protocol cannot reach any of it today — `ProtocolRequest` has only `Action` / `Snapshot` /
+  `WaitFor` (`headless.rs:173`).
+- **Serde boundary (Spec §10):** `DialogMatcher`, `DialogScriptEntry`, `DialogOutcome`,
+  `DialogKind`, and `FormFieldValue` (`types.rs:627`) are **not** serde-derived and must stay
+  that way. 2d adds **headless-owned protocol DTOs** that deserialize into them, mirroring how
+  `ProtocolActionRequest` carries raw integer ids and reconstructs the opaque id types.
+- Dialog requests are already captured in the snapshot, so a driver can poll to confirm which
+  dialog fired and whether the script consumed an entry — no new observability needed.
+- `MessageBox` has no completion event and consumes no responder entry (§11); its outcome DTO is
+  the no-payload `message_box` variant, kept only for symmetry/validation.
+
+**Design decision (locked in): Approach A — a pre-scripted `set_dialog_responder` request.** A
+new `{"type":"set_dialog_responder","request_id":N,"script":[{matcher, outcome}, …]}` request
+installs the ordered script *ahead* of the action that opens the dialog — a thin protocol mirror
+of `HeadlessHarness::set_dialog_responder`, with replace-semantics like the in-process call. It
+fits the existing synchronous request→response loop with no pump changes, which is exactly what
+the intended use — **deterministic integration testing** — needs: the test knows the dialog
+sequence in advance, so a pre-scripted queue is sufficient and there is no need for the driver to
+react to dialogs as they appear. The reactive alternative (the pump suspends on a `Show*Dialog`
+and blocks for a driver `dialog_response`) is **not** pursued; it stays parked for a possible
+future interactive black-box harness.
+
+Completion checklist:
+
+### Protocol DTOs (serde boundary, Spec §10)
+- [ ] Add a `set_dialog_responder` request DTO: `request_id` plus `script: Vec<DialogScriptEntryDto>`,
+      where `DialogScriptEntryDto` = `{ matcher: DialogMatcherDto, outcome: DialogOutcomeDto }`.
+      Deserialize into the existing `DialogScriptEntry`; **do not** derive serde on the public
+      dialog types.
+- [ ] `DialogMatcherDto`: `kind` (stable `DialogKind` string — add the stable-name mapping if one
+      doesn't exist yet, consistent with the §10 enum-string rule), optional `window_id` (raw
+      `usize` → `WindowId::new`), optional `title` / `prompt` / `context_tag`.
+- [ ] `DialogOutcomeDto`: tagged by dialog kind, carrying the same logical payload as
+      `DialogOutcome` — `save_file`/`open_file`/`folder_picker` (`path: Option<String>` → `PathBuf`),
+      `profile_selection` (`chosen_profile_name`, `create_new_requested`, `user_cancelled`),
+      `input` (`text: Option<String>`), `exclude_patterns` (`saved`, `patterns`), `form`
+      (`confirmed` + `field_values`), `message_box` (no payload). A `matcher.kind` /
+      `outcome` mismatch is a validation `error`, not a panic (mirror the in-process
+      kind/outcome pairing in `apply_dialog_outcome`).
+- [ ] `FormFieldValueDto` reconstructing `FormFieldValue` (`types.rs:627`): `text`
+      (`field_id`, `value`) and `checkbox` (`field_id`, `checked`).
+- [ ] Bump `protocol_version` (1 → 2) since the request vocabulary grows; document the new request
+      next to the existing envelope docs, including that the script **replaces** any prior script
+      and must be installed before the triggering action.
+
+### `run_protocol` dispatch (Spec §9)
+- [ ] Add the `SetDialogResponder` arm to `ProtocolRequest` and dispatch it to
+      `set_dialog_responder` after reconstructing the script; respond `ok` (or `error` on a
+      malformed/mismatched entry). No model mutation, no pump — the script only affects subsequent
+      `Show*Dialog` execution.
+- [ ] Confirm the existing fallback still holds over the protocol: a dialog with no matching script
+      entry resolves to default cancel/none (the 2c behavior), so a missing script never hangs.
+- [ ] Two-stage parse + `request_id` recovery unchanged: a `set_dialog_responder` with a usable
+      `request_id` but a bad script entry yields `error` with `request_id: Some(id)`.
+
+### Demo app reference (Spec §4)
+- [ ] Extend the demo `--headless` reference (or the e2e protocol test) to drive at least one
+      `Show*Dialog` to a scripted non-default outcome over the protocol, proving the round-trip
+      and documenting it as the shape-2 dialog-scripting reference.
+
+### Tests
+- [ ] `run_protocol` over in-memory `Cursor`: `set_dialog_responder` → action that opens the
+      dialog → `snapshot`/`wait_for` shows the scripted `…Completed` effect (e.g. a saved path,
+      a confirmed form). Parity with the equivalent in-process `set_dialog_responder` call.
+- [ ] Default-cancel still applies when the script is empty or no entry matches (regression guard
+      on the 2c limitation now that scripting exists).
+- [ ] `MessageBox` outcome consumes no entry and emits no event over the protocol.
+- [ ] Error paths: matcher/outcome kind mismatch → `error` (loop continues); malformed script
+      entry with a usable `request_id` → `error` with `request_id: Some(id)`.
+- [ ] `FormFieldValueDto` round-trips text + checkbox fields into the resulting
+      `FormDialogCompleted` field values.
+- [ ] `protocol_version` is `2` and stable.
+
+### Cross-cutting / definition of done
+- [ ] New `set_dialog_responder` protocol request + the dialog DTOs + `protocol_version` bump are a
+      minor, releasable API change → bump `Cargo.toml` version and `CHANGELOG.md` together (next is
+      `2.8.0`).
 - [ ] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
       `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
 
@@ -345,10 +445,10 @@ Completion checklist:
 Newest entries at the bottom. One entry per review cycle: findings → resulting Spec /
 Roadmap deltas.
 
-- 2026-05-30 — Roadmap created. Spec already revised once from
-  `docs/Review.HeadlessRenderBackend.md` (semantic-action state transitions, follow-up
-  event pump for `SignalMainWindowUISetupComplete`, dialog responder matching, serde
-  boundary, runtime-selection platform wording, `Checkpoint` rename, parity criteria).
+- 2026-05-30 — Roadmap created. Spec already revised once from the design review
+  (semantic-action state transitions, follow-up event pump for
+  `SignalMainWindowUISetupComplete`, dialog responder matching, serde boundary,
+  runtime-selection platform wording, `Checkpoint` rename, parity criteria).
 - 2026-05-30 — Phase 1 implemented: cross-platform headless harness, deterministic JSON
   snapshots, setup-complete follow-up delivery, semantic actions, and the demo headless
   integration test landed together with the `Checkpoint` command and app-core split.
@@ -412,7 +512,7 @@ Roadmap deltas.
   marker-flush cursor, quit/EOF termination). Flagged two decisions for the external review:
   whether `hello` should bundle the first snapshot, and deferring true out-of-band marker push
   until a real async producer exists. Marked 2c `wip`; next release is `2.7.0`.
-- 2026-05-31 — Phase 2c plan review (8 findings, all applied; `Review.HeadlessRenderBackend.Phase2c.md`).
+- 2026-05-31 — Phase 2c plan review (8 findings, all applied).
   Verified each against `headless.rs`. (1, High) External protocol can't script dialog outcomes →
   **decided** to keep dialog scripting out of 2c (default-cancel only, documented + tested) and spun
   out **Phase 2d** for the driver-scriptable dialog protocol. (2, High) Added explicit
@@ -436,7 +536,20 @@ Roadmap deltas.
   error/flush/termination scaffolding, removed the unused envelope `type` field so malformed
   requests with a recoverable `request_id` stay correlated, flushed markers before EOF `bye`,
   normalized the demo headless env flag, and made the protocol snapshot omit cumulative
-  `markers`/`quitting` while keeping those fields in the in-process snapshot.
+  `markers`/`quitting` while keeping those fields in the in-process snapshot. Phase 2c marked
+  `done`.
+- 2026-05-31 — Phase 2d prep / planning. Promoted dialog scripting from the parking lot to the
+  in-flight phase. Audited the dialog seams in `headless.rs`: in-process scripting is complete
+  (`DialogMatcher`/`DialogScriptEntry`/`DialogOutcome` + the `take_dialog_outcome_for` ordered
+  fallback), but `ProtocolRequest` exposes none of it. Confirmed the public dialog types and
+  `FormFieldValue` are not serde-derived, so 2d adds headless-owned DTOs that reconstruct them
+  (same pattern as the 2c action DTOs). Expanded the in-flight 2d checklist into DTO / dispatch /
+  demo / test / DoD workstreams grounded in those findings, and **locked in Approach A** (a
+  pre-scripted `set_dialog_responder` request that fits the synchronous loop) — sufficient for the
+  intended deterministic integration testing, where the dialog sequence is known in advance. The
+  reactive Approach B (a `dialog_request`/`dialog_response` that suspends the pump mid-turn) stays
+  parked for a possible future interactive harness. Marked 2d `wip`; next release is `2.8.0`,
+  `protocol_version` bumps 1 → 2.
 
 ## Parking lot
 
@@ -452,9 +565,11 @@ Ideas surfaced but intentionally deferred, so they are not lost:
 - True out-of-band marker push in the stdio protocol (a `marker` line written with no pending
   request) is deferred from Phase 2c until a real background async producer exists; the 2c
   adapter flushes markers synchronously after each request (Spec §9).
-- Driver-scriptable dialog outcomes over the stdio protocol → **Phase 2d** (deferred from the 2c
-  review, finding 1). Shape 2 is default-cancel only in 2c; promote 2d when a black-box workflow
-  needs to drive file/profile/form dialog results.
+- Driver-scriptable dialog outcomes over the stdio protocol → **Phase 2d (now in flight)**,
+  promoted from here after the 2c review (finding 1). Locked in as Approach A (a pre-scripted
+  `set_dialog_responder` request) for deterministic integration testing. Approach B — a reactive
+  `dialog_request`/`dialog_response` that suspends the pump mid-turn for a fully interactive
+  black-box harness — stays parked here for a possible future need.
 - `close_window` / top-level window-close simulation over the stdio protocol (review finding 7):
   out of 2c scope alongside `inject_raw` and keyboard navigation. Reconsider if a host's
   native-close logic needs black-box coverage with no in-UI close affordance.

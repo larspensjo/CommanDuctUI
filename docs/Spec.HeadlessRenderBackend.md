@@ -1,11 +1,10 @@
 # Spec: Headless text-rendering backend for CommanDuctUI
 
 Status: Living design spec — Phase 1 delivered; Phase 2a delivered; Phase 2b delivered;
-Phase 2c (external protocol) in planning — 2026-05-31
+Phase 2c (external protocol) delivered; Phase 2d (external dialog scripting) in planning
+— 2026-05-31
 Owner: Lars Pensjö
-Reviews applied: `docs/Review.HeadlessRenderBackend.md` (design),
-`docs/Review.HeadlessRenderBackend.Phase1.md` (Phase 1 implementation),
-`docs/Review.HeadlessRenderBackend.Phase2c.md` (Phase 2c plan)
+Reviews applied: design review; Phase 1 implementation review; Phase 2c plan review.
 
 > This is the design **spec** (the `Spec.` prefix denotes a design document). The
 > implementation plan is produced separately and follows the repo's `Plan.` convention.
@@ -313,14 +312,19 @@ follow-up native events to quiescence → optionally `wait_for("done")` →
    `serde_json::Value`, making the snapshot schema the stable public view for this wait
    API. External harnesses express conditions by polling snapshots between actions.
 
-   **Dialogs and window close are not driver-scriptable in shape 2.** The protocol exposes only
-   semantic actions, `snapshot`, and `wait_for`; it has no request to script a dialog responder
-   and no `close_window` action. A `Show*Dialog` reached over the protocol therefore resolves to
-   the default cancel/none outcome (§11), and native top-level close cannot be simulated (that uses
-   the in-process `inject_raw` of `WindowCloseRequestedByUser`). Both are out of scope for the
-   first protocol version; driver-scriptable dialog outcomes are a planned follow-up. (The
-   snapshot schema that shape 2 freezes as its external contract must use stable enum name
-   mappings, not `Debug` formatting — §10.)
+   **Window close is not driver-scriptable in shape 2; dialog scripting arrives in protocol v2
+   (Phase 2d).** Protocol version 1 (Phase 2c) exposes only semantic actions, `snapshot`, and
+   `wait_for`: it has no `close_window` action and no request to script a dialog responder, so a
+   `Show*Dialog` reached over v1 resolves to the default cancel/none outcome (§11) and native
+   top-level close cannot be simulated (that uses the in-process `inject_raw` of
+   `WindowCloseRequestedByUser`). **Phase 2d** lifts the dialog limitation by adding a
+   `set_dialog_responder` request (protocol_version → 2): a thin protocol mirror of the in-process
+   ordered responder (§11) that installs a `{matcher, outcome}` script — via headless-owned DTOs,
+   not serde derives on the public dialog types (§10) — *before* the action that opens the dialog;
+   the pump then turns a matched outcome into the precise `…Completed` event exactly as in-process.
+   An unmatched dialog still falls back to default cancel/none, so a missing script never hangs.
+   `close_window` remains out of scope. (The snapshot schema that shape 2 freezes as its external
+   contract must use stable enum name mappings, not `Debug` formatting — §10.)
 
    **All logs go to stderr** so stdout stays clean JSON-lines. Shape 2 is a stdio adapter
    over shape 1. The `run_protocol` adapter writes only protocol JSON to its `writer`, but it
@@ -511,13 +515,20 @@ criteria:
   `SetTabBarStyle` / `SetToggleSwitchStyle`) populating the `style_id` snapshot field;
   `SetScrollPosition` (+ `ControlScrolled`) populating the scroll fields. Goal: the
   unsupported arm shrinks to only commands with no meaningful logical state.
-- **Phase 2c — external protocol.** `--headless` stdio JSON protocol with the versioned
-  request/response envelopes (§9); logs to stderr; demo app `--headless` flag. Dialog scripting
-  and `close_window` are **out of scope** (default-cancel dialogs, no native-close action);
-  snapshot enum fields gain stable-name mappings (§10) before the contract freezes.
-- **Phase 2d — external dialog scripting.** A driver-scriptable dialog-outcome protocol so shape 2
-  can drive `Show*Dialog` results instead of always defaulting to cancel/none. Deferred from the
-  2c review; pursued when a black-box workflow needs file/profile/form dialog coverage.
+- **Phase 2c — external protocol. (Delivered.)** `--headless` stdio JSON protocol with the
+  versioned request/response envelopes (§9); logs to stderr; demo app `--headless` flag. Dialog
+  scripting and `close_window` are **out of scope** (default-cancel dialogs, no native-close
+  action); snapshot enum fields gained stable-name mappings (§10) before the contract froze.
+- **Phase 2d — external dialog scripting.** Add a `set_dialog_responder` protocol request
+  (protocol_version → 2) so shape 2 can drive `Show*Dialog` results instead of always defaulting
+  to cancel/none. A thin protocol mirror of the in-process ordered responder (§11): headless-owned
+  `{matcher, outcome}` DTOs reconstruct the existing `DialogScriptEntry` (no serde on the public
+  dialog types or `FormFieldValue`, §10); the pump's existing match-or-default logic produces the
+  completion event. Framing/DTOs only — no new dialog modeling. Promoted from the 2c review
+  (finding 1). Design locked in: the pre-scripted request (Approach A), chosen because the intended
+  use is deterministic integration testing (the dialog sequence is known in advance); the reactive
+  variant (Approach B, the pump suspends for a driver `dialog_response`) is parked for a possible
+  future interactive harness.
 
 **Phase 3 — toward fidelity-C.**
 - Shared contract-test suite spanning documented behaviors.

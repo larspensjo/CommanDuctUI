@@ -3,9 +3,9 @@
 ## Workflow
 - Build with `cargo build`.
 - When a task is complete, run `cargo clippy --all-targets -- -D warnings` and then `cargo fmt`.
-- For plan-driven work, write commit messages about the code change, not the plan. Follow recommended practices for teh design of the comment.
 - When adding a CLI flag to `harvester_batch`, update `scripts/Start-HarvesterBatch.ps1` in the same change.
 - When creating or saving plan documents, always save them to the `docs/` folder unless explicitly told otherwise. Use the prfix 'Plan.' for plans, 'Spec.' for specifications and 'Review.' for reviews.
+- Review documents are trancient, and never commited. They will never exist in the repository.
 - New handler modules must include a `#[cfg(test)]` block covering at least the pure-logic seam.
 - Keep `docs/EngineeringDiary.md` up to date for noteworthy implementations, important decisions, and bug fixes with reusable lessons. See instructions in the beginning how to add entries.
 
