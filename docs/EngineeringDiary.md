@@ -92,3 +92,9 @@ Type: Implementation
 Context: Phase 2b needed the headless interpreter to cover the remaining logical-state commands instead of leaving tree/menu/chart/style/scroll work in the unsupported bucket.
 Change: Extended `src/headless.rs` with TreeView hierarchy state, chart snapshots, window menus, style application markers, scroll positions, tree selection parity, menu-action dispatch, and the public harness actions for tree selection/toggle, menu clicks, and semantic scrolling; added snapshot coverage for the new model fields.
 Refs: src/headless.rs, src/types.rs, src/styling_primitives.rs, CHANGELOG.md, Cargo.toml
+
+## 2026-05-31 - Headless stdio protocol for external drivers
+Type: Implementation
+Context: Shipped applications need a machine-drivable headless mode so external harnesses can inspect and drive the same app-core flow without linking Rust tests directly.
+Change: Added `HeadlessHarness::run_protocol` with versioned hello/snapshot/action/wait_for/error/marker/bye JSON-lines envelopes, cursor-relative protocol waits, marker and writer flushing, request-id recovery for malformed requests, stable-name serialization for externally visible snapshot enums, and a cross-platform `--headless` example path. The protocol snapshot now omits cumulative `markers` and `quitting`; external clients use `marker` lines and `bye` as the sources of truth, while in-process snapshots retain those fields for Rust-side tests.
+Refs: src/headless.rs, src/types.rs, examples/hello_window.rs, CHANGELOG.md, Cargo.toml, docs/Spec.HeadlessRenderBackend.md, docs/Roadmap.HeadlessRenderBackend.md

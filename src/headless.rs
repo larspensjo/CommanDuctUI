@@ -5,9 +5,10 @@ use crate::{
     SplitterOrientation, StyleId, TreeItemDescriptor, TreeItemId, UiStateProvider, WindowConfig,
     WindowId,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -25,6 +26,21 @@ pub enum DialogKind {
     Form,
     MessageBox,
     FolderPicker,
+}
+
+impl DialogKind {
+    fn stable_name(&self) -> &'static str {
+        match self {
+            DialogKind::SaveFile => "save_file",
+            DialogKind::OpenFile => "open_file",
+            DialogKind::ProfileSelection => "profile_selection",
+            DialogKind::Input => "input",
+            DialogKind::ExcludePatterns => "exclude_patterns",
+            DialogKind::Form => "form",
+            DialogKind::MessageBox => "message_box",
+            DialogKind::FolderPicker => "folder_picker",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +161,111 @@ pub enum DialogRequestDetails {
     },
 }
 
+const HEADLESS_PROTOCOL_VERSION: u32 = 1;
+
+#[derive(Debug, Deserialize)]
+struct ProtocolRequestEnvelope {
+    request_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ProtocolRequest {
+    Action {
+        request_id: u64,
+        #[serde(flatten)]
+        action: ProtocolActionRequest,
+    },
+    Snapshot {
+        request_id: u64,
+    },
+    WaitFor {
+        request_id: u64,
+        label: String,
+        timeout_ms: u64,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum ProtocolActionRequest {
+    Click {
+        window_id: usize,
+        control_id: i32,
+    },
+    SetText {
+        window_id: usize,
+        control_id: i32,
+        text: String,
+    },
+    SelectRow {
+        window_id: usize,
+        control_id: i32,
+        item_id: u64,
+    },
+    SelectCombo {
+        window_id: usize,
+        control_id: i32,
+        index: usize,
+    },
+    SelectTab {
+        window_id: usize,
+        control_id: i32,
+        index: usize,
+    },
+    Toggle {
+        window_id: usize,
+        control_id: i32,
+    },
+    SelectRadio {
+        window_id: usize,
+        control_id: i32,
+    },
+    SelectTree {
+        window_id: usize,
+        control_id: i32,
+        item_id: u64,
+    },
+    ToggleTree {
+        window_id: usize,
+        control_id: i32,
+        item_id: u64,
+    },
+    ClickMenu {
+        window_id: usize,
+        action_id: u32,
+    },
+    Scroll {
+        window_id: usize,
+        control_id: i32,
+        vertical_pos: u32,
+        horizontal_pos: u32,
+    },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ProtocolResponse {
+    Hello {
+        protocol_version: u32,
+    },
+    Snapshot {
+        request_id: u64,
+        model: ProtocolSnapshot,
+    },
+    Ok {
+        request_id: u64,
+    },
+    Error {
+        request_id: Option<u64>,
+        message: String,
+    },
+    Marker {
+        label: String,
+    },
+    Bye,
+}
+
 pub struct HeadlessHarness {
     backend: HeadlessBackend,
     handler: Option<SharedHandler>,
@@ -259,6 +380,128 @@ impl HeadlessHarness {
         })
     }
 
+    pub fn run_protocol<R, W>(&mut self, mut reader: R, mut writer: W) -> PlatformResult<()>
+    where
+        R: BufRead,
+        W: Write,
+    {
+        Self::write_protocol_line(
+            &mut writer,
+            &ProtocolResponse::Hello {
+                protocol_version: HEADLESS_PROTOCOL_VERSION,
+            },
+        )?;
+        Self::flush_protocol_writer(&mut writer)?;
+
+        let mut marker_cursor = self.backend.markers.len();
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            let bytes_read = reader.read_line(&mut line).map_err(|err| {
+                PlatformError::OperationFailed(format!(
+                    "Failed to read headless protocol input: {err}"
+                ))
+            })?;
+            if bytes_read == 0 {
+                self.emit_protocol_markers(&mut writer, &mut marker_cursor)?;
+                Self::write_protocol_line(&mut writer, &ProtocolResponse::Bye)?;
+                Self::flush_protocol_writer(&mut writer)?;
+                return Ok(());
+            }
+
+            let raw_value = match serde_json::from_str::<Value>(&line) {
+                Ok(value) => value,
+                Err(err) => {
+                    Self::respond_protocol_error(
+                        &mut writer,
+                        None,
+                        format!("Malformed headless protocol request: {err}"),
+                    )?;
+                    continue;
+                }
+            };
+
+            let envelope =
+                match serde_json::from_value::<ProtocolRequestEnvelope>(raw_value.clone()) {
+                    Ok(envelope) => envelope,
+                    Err(err) => {
+                        Self::respond_protocol_error(
+                            &mut writer,
+                            None,
+                            format!("Malformed headless protocol request: {err}"),
+                        )?;
+                        continue;
+                    }
+                };
+            let request_id = envelope.request_id;
+
+            let request = match serde_json::from_value::<ProtocolRequest>(raw_value) {
+                Ok(request) => request,
+                Err(err) => {
+                    Self::respond_protocol_error(
+                        &mut writer,
+                        request_id,
+                        format!("Malformed headless protocol request: {err}"),
+                    )?;
+                    continue;
+                }
+            };
+
+            let response_result: Result<ProtocolResponse, (Option<u64>, PlatformError)> =
+                match request {
+                    ProtocolRequest::Action { request_id, action } => {
+                        match self.execute_protocol_action(action) {
+                            Ok(()) => Ok(ProtocolResponse::Ok { request_id }),
+                            Err(err) => Err((Some(request_id), err)),
+                        }
+                    }
+                    ProtocolRequest::Snapshot { request_id } => match self.pump() {
+                        Ok(()) => Ok(ProtocolResponse::Snapshot {
+                            request_id,
+                            model: self.backend.protocol_snapshot(),
+                        }),
+                        Err(err) => Err((Some(request_id), err)),
+                    },
+                    ProtocolRequest::WaitFor {
+                        request_id,
+                        label,
+                        timeout_ms,
+                    } => match self.wait_for_protocol_marker(
+                        &label,
+                        Duration::from_millis(timeout_ms),
+                        marker_cursor,
+                    ) {
+                        Ok(()) => Ok(ProtocolResponse::Ok { request_id }),
+                        Err(err) => Err((Some(request_id), err)),
+                    },
+                };
+
+            match response_result {
+                Ok(response) => {
+                    self.emit_protocol_markers(&mut writer, &mut marker_cursor)?;
+                    Self::write_protocol_line(&mut writer, &response)?;
+                    if self.finish_protocol_response_group(&mut writer)? {
+                        return Ok(());
+                    }
+                }
+                Err((request_id, err)) => {
+                    self.emit_protocol_markers(&mut writer, &mut marker_cursor)?;
+                    Self::write_protocol_line(
+                        &mut writer,
+                        &ProtocolResponse::Error {
+                            request_id,
+                            message: err.to_string(),
+                        },
+                    )?;
+                    if self.finish_protocol_response_group(&mut writer)? {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
     /// Installs the ordered dialog responder script used by subsequent `Show*Dialog` commands.
     pub fn set_dialog_responder(&mut self, script: Vec<DialogScriptEntry>) {
         self.backend.dialog_responder = script.into();
@@ -268,6 +511,174 @@ impl HeadlessHarness {
         serde_json::to_value(self.backend.snapshot()).map_err(|err| {
             PlatformError::OperationFailed(format!("Failed to serialize headless snapshot: {err}"))
         })
+    }
+
+    fn emit_protocol_markers<W: Write>(
+        &self,
+        writer: &mut W,
+        marker_cursor: &mut usize,
+    ) -> PlatformResult<()> {
+        while *marker_cursor < self.backend.markers.len() {
+            let label = self.backend.markers[*marker_cursor].clone();
+            Self::write_protocol_line(writer, &ProtocolResponse::Marker { label })?;
+            *marker_cursor += 1;
+        }
+        Ok(())
+    }
+
+    fn write_protocol_line<W: Write, T: Serialize>(
+        writer: &mut W,
+        value: &T,
+    ) -> PlatformResult<()> {
+        serde_json::to_writer(&mut *writer, value).map_err(|err| {
+            PlatformError::OperationFailed(format!(
+                "Failed to serialize headless protocol line: {err}"
+            ))
+        })?;
+        writer.write_all(b"\n").map_err(|err| {
+            PlatformError::OperationFailed(format!("Failed to write headless protocol line: {err}"))
+        })?;
+        Ok(())
+    }
+
+    fn respond_protocol_error<W: Write>(
+        writer: &mut W,
+        request_id: Option<u64>,
+        message: String,
+    ) -> PlatformResult<()> {
+        Self::write_protocol_line(
+            writer,
+            &ProtocolResponse::Error {
+                request_id,
+                message,
+            },
+        )?;
+        Self::flush_protocol_writer(writer)
+    }
+
+    fn finish_protocol_response_group<W: Write>(&self, writer: &mut W) -> PlatformResult<bool> {
+        if self.backend.quitting {
+            Self::write_protocol_line(writer, &ProtocolResponse::Bye)?;
+            Self::flush_protocol_writer(writer)?;
+            return Ok(true);
+        }
+        Self::flush_protocol_writer(writer)?;
+        Ok(false)
+    }
+
+    fn flush_protocol_writer<W: Write>(writer: &mut W) -> PlatformResult<()> {
+        writer.flush().map_err(|err| {
+            PlatformError::OperationFailed(format!(
+                "Failed to flush headless protocol output: {err}"
+            ))
+        })
+    }
+
+    fn wait_for_protocol_marker(
+        &mut self,
+        label: &str,
+        timeout: Duration,
+        marker_cursor: usize,
+    ) -> PlatformResult<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self
+                .backend
+                .markers
+                .get(marker_cursor..)
+                .unwrap_or(&[])
+                .iter()
+                .any(|marker| marker == label)
+            {
+                return Ok(());
+            }
+            if self.backend.quitting {
+                return Err(PlatformError::OperationFailed(format!(
+                    "Headless protocol terminated while waiting for checkpoint marker '{label}'"
+                )));
+            }
+            if Instant::now() >= deadline {
+                return Err(PlatformError::OperationFailed(format!(
+                    "Timed out waiting for checkpoint marker '{label}'"
+                )));
+            }
+            self.pump()?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn execute_protocol_action(&mut self, action: ProtocolActionRequest) -> PlatformResult<()> {
+        match action {
+            ProtocolActionRequest::Click {
+                window_id,
+                control_id,
+            } => self.click(WindowId::new(window_id), ControlId::new(control_id)),
+            ProtocolActionRequest::SetText {
+                window_id,
+                control_id,
+                text,
+            } => self.set_text(WindowId::new(window_id), ControlId::new(control_id), text),
+            ProtocolActionRequest::SelectRow {
+                window_id,
+                control_id,
+                item_id,
+            } => self.select_row(
+                WindowId::new(window_id),
+                ControlId::new(control_id),
+                ListBoxItemId::new(item_id),
+            ),
+            ProtocolActionRequest::SelectCombo {
+                window_id,
+                control_id,
+                index,
+            } => self.select_combo(WindowId::new(window_id), ControlId::new(control_id), index),
+            ProtocolActionRequest::SelectTab {
+                window_id,
+                control_id,
+                index,
+            } => self.select_tab(WindowId::new(window_id), ControlId::new(control_id), index),
+            ProtocolActionRequest::Toggle {
+                window_id,
+                control_id,
+            } => self.toggle(WindowId::new(window_id), ControlId::new(control_id)),
+            ProtocolActionRequest::SelectRadio {
+                window_id,
+                control_id,
+            } => self.select_radio(WindowId::new(window_id), ControlId::new(control_id)),
+            ProtocolActionRequest::SelectTree {
+                window_id,
+                control_id,
+                item_id,
+            } => self.select_tree_item(
+                WindowId::new(window_id),
+                ControlId::new(control_id),
+                TreeItemId::new(item_id),
+            ),
+            ProtocolActionRequest::ToggleTree {
+                window_id,
+                control_id,
+                item_id,
+            } => self.toggle_tree_item(
+                WindowId::new(window_id),
+                ControlId::new(control_id),
+                TreeItemId::new(item_id),
+            ),
+            ProtocolActionRequest::ClickMenu {
+                window_id,
+                action_id,
+            } => self.click_menu_action(WindowId::new(window_id), MenuActionId::new(action_id)),
+            ProtocolActionRequest::Scroll {
+                window_id,
+                control_id,
+                vertical_pos,
+                horizontal_pos,
+            } => self.scroll(
+                WindowId::new(window_id),
+                ControlId::new(control_id),
+                vertical_pos,
+                horizontal_pos,
+            ),
+        }
     }
 
     /// Injects a raw `AppEvent` into the harness.
@@ -545,6 +956,18 @@ impl HeadlessBackend {
             app_name: self.app_name.clone(),
             quitting: self.quitting,
             markers: self.markers.clone(),
+            dialog_requests: self
+                .dialog_requests
+                .iter()
+                .map(DialogRequestSnapshot::from)
+                .collect(),
+            windows: self.windows.values().map(WindowState::snapshot).collect(),
+        }
+    }
+
+    fn protocol_snapshot(&self) -> ProtocolSnapshot {
+        ProtocolSnapshot {
+            app_name: self.app_name.clone(),
             dialog_requests: self
                 .dialog_requests
                 .iter()
@@ -2706,6 +3129,13 @@ struct HeadlessSnapshot {
 }
 
 #[derive(Debug, Serialize)]
+struct ProtocolSnapshot {
+    app_name: String,
+    dialog_requests: Vec<DialogRequestSnapshot>,
+    windows: Vec<WindowSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
 struct WindowSnapshot {
     id: usize,
     title: String,
@@ -2734,7 +3164,7 @@ impl From<&LayoutRule> for LayoutRuleSnapshot {
         Self {
             control_id: rule.control_id.raw(),
             parent_control_id: rule.parent_control_id.map(|id| id.raw()),
-            dock_style: format!("{:?}", rule.dock_style),
+            dock_style: rule.dock_style.stable_name().to_string(),
             order: rule.order,
             fixed_size: rule.fixed_size,
             margin: [rule.margin.0, rule.margin.1, rule.margin.2, rule.margin.3],
@@ -3041,8 +3471,8 @@ impl From<&ControlState> for ControlSnapshot {
                 scroll_horizontal: common.5,
                 style_id: common.6,
                 text: text.clone(),
-                class: format!("{class:?}"),
-                severity: format!("{severity:?}"),
+                class: class.stable_name().to_string(),
+                severity: severity.stable_name().to_string(),
             },
             ControlKind::Input {
                 text,
@@ -3088,7 +3518,7 @@ impl From<&ControlState> for ControlSnapshot {
                 items: items.iter().map(ListBoxItemSnapshot::from).collect(),
                 selected_item_id: selected_item_id.map(|id| id.raw()),
                 badge_column_width: *badge_column_width,
-                density: format!("{density:?}"),
+                density: density.stable_name().to_string(),
             },
             ControlKind::ComboBox {
                 items,
@@ -3200,7 +3630,7 @@ impl From<&ControlState> for ControlSnapshot {
                 scroll_vertical: common.4,
                 scroll_horizontal: common.5,
                 style_id: common.6,
-                orientation: format!("{orientation:?}"),
+                orientation: orientation.stable_name().to_string(),
             },
         }
     }
@@ -3219,7 +3649,7 @@ struct DialogRequestSnapshot {
 impl From<&DialogRequest> for DialogRequestSnapshot {
     fn from(request: &DialogRequest) -> Self {
         Self {
-            kind: format!("{:?}", request.kind),
+            kind: request.kind.stable_name().to_string(),
             window_id: request.window_id.raw(),
             title: request.title.clone(),
             prompt: request.prompt.clone(),
@@ -3297,7 +3727,7 @@ impl From<&DialogRequestDetails> for DialogRequestDetailsSnapshot {
             },
             DialogRequestDetails::MessageBox { message, severity } => Self::MessageBox {
                 message: message.clone(),
-                severity: format!("{severity:?}"),
+                severity: severity.stable_name().to_string(),
             },
             DialogRequestDetails::FolderPicker { initial_dir } => Self::FolderPicker {
                 initial_dir: initial_dir.clone(),
@@ -3343,7 +3773,7 @@ impl From<&crate::FormRow> for FormRowSnapshot {
             },
             crate::FormRow::Note { text, severity } => Self::Note {
                 text: text.clone(),
-                severity: format!("{severity:?}"),
+                severity: severity.stable_name().to_string(),
             },
         }
     }
@@ -3379,7 +3809,7 @@ impl From<&crate::FormField> for FormFieldSnapshot {
                 field_id: field_id.clone(),
                 label: label.clone(),
                 value: value.clone(),
-                validation: format!("{validation:?}"),
+                validation: validation.stable_name().to_string(),
                 live_warning: live_warning
                     .as_ref()
                     .map(FormFileExistsWarningSnapshot::from),
@@ -3460,7 +3890,7 @@ impl From<&BadgeDescriptor> for BadgeSnapshot {
     fn from(badge: &BadgeDescriptor) -> Self {
         Self {
             text: badge.text.clone(),
-            style: format!("{:?}", badge.style),
+            style: badge.style.stable_name().to_string(),
         }
     }
 }
@@ -3474,8 +3904,11 @@ mod tests {
         FormButtons, FormDialogDescriptor, FormField, FormFieldValue, FormRow, FormTextValidation,
     };
     use serde_json::Value;
+    use std::io::{Cursor, Write};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    const BTN_CLICK_ME: ControlId = ControlId::new(101);
 
     struct TestHandler {
         events: Vec<AppEvent>,
@@ -3498,6 +3931,43 @@ mod tests {
         fn is_tree_item_new(&self, _window_id: WindowId, _item_id: TreeItemId) -> bool {
             false
         }
+    }
+
+    struct RecordingWriter {
+        bytes: Vec<u8>,
+        flushes: usize,
+    }
+
+    impl RecordingWriter {
+        fn new() -> Self {
+            Self {
+                bytes: Vec::new(),
+                flushes: 0,
+            }
+        }
+
+        fn into_string(self) -> String {
+            String::from_utf8(self.bytes).unwrap()
+        }
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes += 1;
+            Ok(())
+        }
+    }
+
+    fn parse_protocol_lines(output: &str) -> Vec<Value> {
+        output
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     }
 
     fn started_harness(
@@ -3525,6 +3995,311 @@ mod tests {
             .start(handler.clone(), provider.clone(), initial_commands)
             .unwrap();
         (harness, window_id, handler, provider)
+    }
+
+    #[test]
+    fn protocol_hello_is_first_and_flushes_output_groups() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler,
+                provider,
+                vec![PlatformCommand::ShowWindow { window_id }],
+            )
+            .unwrap();
+
+        let input = Cursor::new(Vec::<u8>::new());
+        let mut writer = RecordingWriter::new();
+        harness.run_protocol(input, &mut writer).unwrap();
+
+        let flushes = writer.flushes;
+        let output = writer.into_string();
+        let lines = parse_protocol_lines(&output);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["type"], "hello");
+        assert_eq!(lines[0]["protocol_version"], HEADLESS_PROTOCOL_VERSION);
+        assert_eq!(lines[1]["type"], "bye");
+        assert_eq!(flushes, 2);
+    }
+
+    #[test]
+    fn protocol_actions_round_trip_and_wait_for_is_cursor_relative() {
+        struct ProtocolHandler {
+            events: Vec<AppEvent>,
+            commands: VecDeque<PlatformCommand>,
+            target_window: WindowId,
+        }
+
+        impl PlatformEventHandler for ProtocolHandler {
+            fn handle_event(&mut self, event: AppEvent) {
+                if matches!(
+                    event,
+                    AppEvent::ButtonClicked {
+                        control_id,
+                        ..
+                    } if control_id == BTN_CLICK_ME
+                ) {
+                    self.commands.push_back(PlatformCommand::SetWindowTitle {
+                        window_id: self.target_window,
+                        title: "Clicked".into(),
+                    });
+                    self.commands.push_back(PlatformCommand::Checkpoint {
+                        label: "done".into(),
+                    });
+                }
+                self.events.push(event);
+            }
+
+            fn try_dequeue_command(&mut self) -> Option<PlatformCommand> {
+                self.commands.pop_front()
+            }
+        }
+
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(ProtocolHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+            target_window: window_id,
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![
+                    PlatformCommand::CreateButton {
+                        window_id,
+                        parent_control_id: None,
+                        control_id: BTN_CLICK_ME,
+                        text: "Click".into(),
+                    },
+                    PlatformCommand::ShowWindow { window_id },
+                ],
+            )
+            .unwrap();
+
+        let protocol_input = format!(
+            "{}\n{}\n{}\n{}\n",
+            serde_json::json!({
+                "type": "snapshot",
+                "request_id": 1
+            }),
+            serde_json::json!({
+                "type": "action",
+                "request_id": 2,
+                "action": "click",
+                "window_id": window_id.raw(),
+                "control_id": BTN_CLICK_ME.raw()
+            }),
+            serde_json::json!({
+                "type": "snapshot",
+                "request_id": 3
+            }),
+            serde_json::json!({
+                "type": "wait_for",
+                "request_id": 4,
+                "label": "done",
+                "timeout_ms": 200
+            })
+        );
+
+        let handler_for_thread = handler.clone();
+        let delayed_marker =
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                handler_for_thread.lock().unwrap().commands.push_back(
+                    PlatformCommand::Checkpoint {
+                        label: "done".into(),
+                    },
+                );
+            });
+
+        let mut writer = RecordingWriter::new();
+        harness
+            .run_protocol(Cursor::new(protocol_input.into_bytes()), &mut writer)
+            .unwrap();
+        delayed_marker.join().unwrap();
+
+        let flushes = writer.flushes;
+        let output = writer.into_string();
+        let lines = parse_protocol_lines(&output);
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "hello", "snapshot", "marker", "ok", "snapshot", "marker", "ok", "bye",
+            ]
+        );
+        assert_eq!(lines[1]["request_id"], 1);
+        assert!(lines[1]["model"].get("markers").is_none());
+        assert!(lines[1]["model"].get("quitting").is_none());
+        assert_eq!(lines[3]["request_id"], 2);
+        assert_eq!(lines[4]["model"]["windows"][0]["title"], "Clicked");
+        assert!(lines[4]["model"].get("markers").is_none());
+        assert!(lines[4]["model"].get("quitting").is_none());
+        assert_eq!(lines[5]["label"], "done");
+        assert_eq!(lines[6]["request_id"], 4);
+        assert_eq!(flushes, 6);
+    }
+
+    #[test]
+    fn protocol_recovers_request_ids_for_malformed_input() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler,
+                provider,
+                vec![PlatformCommand::ShowWindow { window_id }],
+            )
+            .unwrap();
+
+        let protocol_input = concat!(
+            "{",
+            "\"type\":\"action\",",
+            "\"request_id\":42,",
+            "\"action\":\"click\",",
+            "\"window_id\":1",
+            "}\n",
+            "{\"request_id\":99}\n",
+            "{\"type\":\"snapshot\",\"request_id\":7}\n",
+            "{not-json}\n",
+        );
+
+        let mut writer = RecordingWriter::new();
+        harness
+            .run_protocol(Cursor::new(protocol_input.as_bytes().to_vec()), &mut writer)
+            .unwrap();
+
+        let lines = parse_protocol_lines(&writer.into_string());
+        assert_eq!(lines[0]["type"], "hello");
+        assert_eq!(lines[1]["type"], "error");
+        assert_eq!(lines[1]["request_id"], 42);
+        assert!(lines[1]["message"].as_str().unwrap().contains("control_id"));
+        assert_eq!(lines[2]["type"], "error");
+        assert_eq!(lines[2]["request_id"], 99);
+        assert!(lines[2]["message"].as_str().unwrap().contains("type"));
+        assert_eq!(lines[3]["type"], "snapshot");
+        assert_eq!(lines[3]["request_id"], 7);
+        assert_eq!(lines[4]["type"], "error");
+        assert!(lines[4]["request_id"].is_null());
+        assert_eq!(lines[5]["type"], "bye");
+    }
+
+    #[test]
+    fn protocol_dialogs_default_to_cancel_without_driver_scripting() {
+        struct DialogHandler {
+            events: Vec<AppEvent>,
+            commands: VecDeque<PlatformCommand>,
+            target_window: WindowId,
+        }
+
+        impl PlatformEventHandler for DialogHandler {
+            fn handle_event(&mut self, event: AppEvent) {
+                if matches!(event, AppEvent::ButtonClicked { .. }) {
+                    self.commands
+                        .push_back(PlatformCommand::ShowSaveFileDialog {
+                            window_id: self.target_window,
+                            title: "Save".into(),
+                            default_filename: "export.txt".into(),
+                            filter_spec: "*.txt".into(),
+                            initial_dir: None,
+                        });
+                }
+                self.events.push(event);
+            }
+
+            fn try_dequeue_command(&mut self) -> Option<PlatformCommand> {
+                self.commands.pop_front()
+            }
+        }
+
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(DialogHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+            target_window: window_id,
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![
+                    PlatformCommand::CreateButton {
+                        window_id,
+                        parent_control_id: None,
+                        control_id: BTN_CLICK_ME,
+                        text: "Save".into(),
+                    },
+                    PlatformCommand::ShowWindow { window_id },
+                ],
+            )
+            .unwrap();
+
+        let protocol_input = serde_json::json!({
+            "type": "action",
+            "request_id": 1,
+            "action": "click",
+            "window_id": window_id.raw(),
+            "control_id": BTN_CLICK_ME.raw()
+        })
+        .to_string()
+            + "\n";
+
+        let mut writer = RecordingWriter::new();
+        harness
+            .run_protocol(Cursor::new(protocol_input.into_bytes()), &mut writer)
+            .unwrap();
+
+        let events = &handler.lock().unwrap().events;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AppEvent::FileSaveDialogCompleted { result: None, .. }
+        )));
+        let lines = parse_protocol_lines(&writer.into_string());
+        assert_eq!(lines[0]["type"], "hello");
+        assert_eq!(lines[1]["type"], "ok");
+        assert_eq!(lines[2]["type"], "bye");
     }
 
     #[test]
@@ -3876,11 +4651,136 @@ mod tests {
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(json["windows"][0]["controls"][1]["kind"], "button");
         assert_eq!(json["windows"][0]["controls"][2]["text"], "Status");
-        assert_eq!(json["windows"][0]["controls"][2]["severity"], "Warning");
+        assert_eq!(json["windows"][0]["controls"][2]["class"], "status_bar");
+        assert_eq!(json["windows"][0]["controls"][2]["severity"], "warning");
+        assert_eq!(json["windows"][0]["controls"][5]["density"], "compact");
+        assert_eq!(
+            json["windows"][0]["controls"][12]["orientation"],
+            "vertical"
+        );
+        assert_eq!(json["windows"][0]["layout_rules"][0]["dock_style"], "fill");
         assert_eq!(json["windows"][0]["controls"][9]["selected_index"], 1);
         assert_eq!(json["windows"][0]["controls"][9]["items"][0], "Three");
         assert_eq!(json["windows"][0]["controls"][11]["position"], 55);
         assert_eq!(json["windows"][0]["controls"][5]["selected_item_id"], 99);
+    }
+
+    #[test]
+    fn snapshot_uses_stable_names_for_protocol_fields() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        harness
+            .backend
+            .execute_platform_command(PlatformCommand::CreateLabel {
+                window_id,
+                parent_control_id: None,
+                control_id: ControlId::new(1),
+                initial_text: "Label".into(),
+                class: LabelClass::StatusBar,
+            })
+            .unwrap();
+        harness
+            .backend
+            .execute_platform_command(PlatformCommand::UpdateLabelText {
+                window_id,
+                control_id: ControlId::new(1),
+                text: "Updated".into(),
+                severity: MessageSeverity::Error,
+            })
+            .unwrap();
+        harness
+            .backend
+            .execute_platform_command(PlatformCommand::CreateListBox {
+                window_id,
+                parent_control_id: None,
+                control_id: ControlId::new(2),
+            })
+            .unwrap();
+        harness
+            .backend
+            .execute_platform_command(PlatformCommand::SetListBoxRowDensity {
+                window_id,
+                control_id: ControlId::new(2),
+                density: ListBoxRowDensity::Expanded,
+            })
+            .unwrap();
+        harness
+            .backend
+            .execute_platform_command(PlatformCommand::DefineLayout {
+                window_id,
+                rules: vec![LayoutRule {
+                    control_id: ControlId::new(1),
+                    parent_control_id: None,
+                    dock_style: DockStyle::ProportionalFill { weight: 1.0 },
+                    order: 0,
+                    fixed_size: None,
+                    margin: (0, 0, 0, 0),
+                }],
+            })
+            .unwrap();
+        harness
+            .backend
+            .execute_platform_command(PlatformCommand::ShowMessageBox {
+                window_id,
+                title: "Notice".into(),
+                message: "Hello".into(),
+                severity: MessageSeverity::Information,
+            })
+            .unwrap();
+        harness
+            .backend
+            .execute_platform_command(PlatformCommand::ShowFormDialog {
+                window_id,
+                form: FormDialogDescriptor {
+                    title: "Form".into(),
+                    context_tag: "ctx".into(),
+                    rows: vec![FormRow::Note {
+                        text: "Note".into(),
+                        severity: MessageSeverity::Warning,
+                    }],
+                    fields: vec![FormField::TextInput {
+                        field_id: "field".into(),
+                        label: "Field".into(),
+                        value: String::new(),
+                        validation: FormTextValidation::PathSegment,
+                        live_warning: None,
+                    }],
+                    buttons: FormButtons {
+                        confirm_label: "OK".into(),
+                        cancel_label: "Cancel".into(),
+                        confirm_enabled: true,
+                    },
+                },
+            })
+            .unwrap();
+
+        let snapshot = serde_json::from_str::<Value>(&harness.snapshot().unwrap()).unwrap();
+        assert_eq!(snapshot["windows"][0]["controls"][0]["class"], "status_bar");
+        assert_eq!(snapshot["windows"][0]["controls"][0]["severity"], "error");
+        assert_eq!(snapshot["windows"][0]["controls"][1]["density"], "expanded");
+        assert_eq!(
+            snapshot["windows"][0]["layout_rules"][0]["dock_style"],
+            "proportional_fill"
+        );
+        assert_eq!(snapshot["dialog_requests"][0]["kind"], "message_box");
+        assert_eq!(
+            snapshot["dialog_requests"][0]["details"]["severity"],
+            "information"
+        );
+        assert_eq!(
+            snapshot["dialog_requests"][1]["details"]["form"]["rows"][0]["severity"],
+            "warning"
+        );
+        assert_eq!(
+            snapshot["dialog_requests"][1]["details"]["form"]["fields"][0]["validation"],
+            "path_segment"
+        );
     }
 
     #[test]
@@ -4924,14 +5824,14 @@ mod tests {
             snapshot["dialog_requests"][5]["details"]["form"]["buttons"]["confirm_label"],
             "OK"
         );
-        assert_eq!(snapshot["dialog_requests"][7]["kind"], "MessageBox");
+        assert_eq!(snapshot["dialog_requests"][7]["kind"], "message_box");
         assert_eq!(
             snapshot["dialog_requests"][7]["details"]["kind"],
             "message_box"
         );
         assert_eq!(
             snapshot["dialog_requests"][7]["details"]["severity"],
-            "Information"
+            "information"
         );
     }
 

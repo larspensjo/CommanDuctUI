@@ -300,6 +300,12 @@ follow-up native events to quiescence → optionally `wait_for("done")` →
    - `{"type":"bye"}` (terminal; emitted once on quit/EOF, see *Termination*)
    - top-level `protocol_version` is sent in a handshake/`hello` message.
 
+   Protocol `snapshot` responses use a protocol-specific view of the in-process snapshot:
+   it includes the app name, windows, controls, menus, layout, and dialog requests, but omits
+   cumulative `markers` and `quitting`. Markers are delivered exactly once through `marker`
+   response lines, and termination is delivered through `bye`; those protocol channels are the
+   external sources of truth for marker and quit state.
+
    **Protocol boundary:** the protocol exposes marker waits (`wait_for`) and snapshot
    polling, but **not** `wait_until(predicate, …)` — a Rust predicate closure cannot cross
    the process boundary, so `wait_until` is **in-process (shape 1) only**, alongside
@@ -336,10 +342,11 @@ follow-up native events to quiescence → optionally `wait_for("done")` →
      constructors before calling the matching harness action. An id that names no live control
      surfaces as an `error` response (the same validation `Err` the in-process action returns).
    - **Malformed input (two-stage parse).** Each line is parsed in two stages: first a minimal
-     envelope (`type` + optional `request_id`), then the full typed request. A line that parses as
-     the envelope but fails the full parse (unknown variant, missing/ill-typed fields) yields an
-     `error` correlated with `request_id: Some(id)`; only a line that fails even the envelope parse
-     yields `request_id: null`. Malformed input never panics or aborts the loop.
+     envelope (optional `request_id`), then the full typed request. A line that parses as the
+     envelope but fails the full parse (unknown variant, missing/ill-typed fields, or missing
+     `type`) yields an `error` correlated with `request_id: Some(id)` when an id was present; only
+     a line that fails even the envelope parse yields `request_id: null`. Malformed input never
+     panics or aborts the loop.
    - **`wait_for` is cursor-relative.** Protocol `wait_for(label, timeout)` waits for a checkpoint
      observed **at or after the adapter's current marker cursor**, not anywhere in the cumulative
      marker history. This prevents a reused app-defined label (`done`, `ready`) from being
@@ -359,8 +366,8 @@ follow-up native events to quiescence → optionally `wait_for("done")` →
      observes. When a request triggers quit, the adapter preserves correlation order: service the
      request → flush newly observed markers → write the request's tagged response → write
      `{"type":"bye"}` → flush → return. `bye` is a terminal notification, **not** a replacement for
-     the request's response. On reader EOF (no triggering request) the adapter emits `bye` and
-     returns.
+     the request's response. On reader EOF (no triggering request), the adapter flushes any newly
+     observed markers, emits `bye`, flushes, and returns.
 
 ## 10. Serialization and dependency boundary
 
@@ -379,13 +386,13 @@ non-Rust harnesses). Explicit boundary:
   including form rows/fields/buttons. They must not expose Rust `Debug` strings because
   Phase 2c clients consume this data as machine-readable JSON.
 - **Enum-valued snapshot fields use stable name mappings, not `Debug`.** Because the stdio
-  protocol (§9) freezes `HeadlessSnapshot` as an external machine contract, every externally
-  visible enum field (e.g. `dock_style`, dialog `kind`, badge `style`, label `class`/`severity`,
-  listbox `density`, splitter `orientation`, `MessageSeverity`, form note `severity`, form
-  `validation`) must serialize through an explicit stable-name helper — the same treatment Phase
-  2b gave `CheckState` / `ChartLineEmphasis` / `StyleId`. A field deliberately left as a `Debug`
-  string must be documented as intentionally stable. This keeps a future enum rename from silently
-  breaking the protocol contract.
+  protocol (§9) freezes the protocol snapshot view as an external machine contract, every
+  externally visible enum field (e.g. `dock_style`, dialog `kind`, badge `style`, label
+  `class`/`severity`, listbox `density`, splitter `orientation`, `MessageSeverity`, form note
+  `severity`, form `validation`) must serialize through an explicit stable-name helper — the same
+  treatment Phase 2b gave `CheckState` / `ChartLineEmphasis` / `StyleId`. A field deliberately
+  left as a `Debug` string must be documented as intentionally stable. This keeps a future enum
+  rename from silently breaking the protocol contract.
 - **Dependency impact:** always-compiled headless mode makes `serde` and `serde_json`
   **default dependencies** (today only `log` is unconditional). This is accepted; if a
   lean release ever needs to drop them, a *default-on* feature can be introduced later

@@ -6,6 +6,10 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.7.0 - 2026-05-31
+- **Feature**: Add the `HeadlessHarness::run_protocol` stdio JSON-lines adapter so shipped binaries can drive the in-process headless backend from a separate process.
+- **Feature**: Extend the demo example with a runtime `--headless` switch and a cross-platform headless execution path that keeps protocol output on stdout.
+
 ## 2.6.0 - 2026-05-30
 - **Feature**: Extend the headless backend with TreeView, chart, menu, styling, and scroll logical state, including tree selection parity, hidden-row toggle suppression, menu-action clicks, and deterministic snapshot coverage for the new control data.
 - **API**: Add in-process headless harness actions for tree selection/toggle, menu action clicks, and semantic scrolling so tests can drive the new logical state directly.

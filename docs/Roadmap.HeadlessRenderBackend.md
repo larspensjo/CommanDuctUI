@@ -1,7 +1,7 @@
 # Roadmap: Headless text-rendering backend for CommanDuctUI
 
-Status: Active — Phase 1 done; Phase 2a done; Phase 2b done; Phase 2c planning
-(review applied) — 2026-05-31
+Status: Active — Phase 1 done; Phase 2a done; Phase 2b done; Phase 2c implemented,
+review pending — 2026-05-31
 Design spec: `docs/Spec.HeadlessRenderBackend.md`
 Review notes: `docs/Review.HeadlessRenderBackend.md` (design),
 `docs/Review.HeadlessRenderBackend.Phase1.md` (Phase 1),
@@ -199,9 +199,9 @@ actions / `snapshot` / `wait_for`.
   no top-level window-close action; this is documented out of scope alongside `inject_raw` and
   keyboard navigation. Drivers exercise close paths via in-UI button/menu actions.
 - **Snapshot enum strings are a prerequisite (finding 6).** Because shape 2 freezes
-  `HeadlessSnapshot` as the external contract, the remaining externally-visible `Debug`-formatted
-  enum fields must get explicit stable-name mappings (or be documented as intentionally stable)
-  **before** the DTOs ship.
+  the protocol snapshot view as the external contract, the remaining externally-visible
+  `Debug`-formatted enum fields must get explicit stable-name mappings (or be documented as
+  intentionally stable) **before** the DTOs ship.
 
 **Audit / starting point (2026-05-31).**
 - The harness exposes the full in-process surface already (`headless.rs`): `start`, `pump`,
@@ -246,7 +246,9 @@ Completion checklist:
       uses `request_id: null`.
 - [ ] Add response DTOs serialized binary → driver: `hello` (`protocol_version`), `snapshot`
       (`model`), `ok`, `error` (`message`), the asynchronous `marker` (`label`), and the terminal
-      `bye`. Tag with `#[serde(tag = "type")]`; reuse the existing `HeadlessSnapshot` for `model`.
+      `bye`. Tag with `#[serde(tag = "type")]`; use a protocol-specific snapshot view for `model`
+      that omits cumulative `markers` and `quitting`, leaving `marker` and `bye` as the protocol
+      sources of truth.
       **`error` carries `request_id: Option<u64>`** (`Some` when recoverable, `null` otherwise —
       finding 3); the correlated responses (`ok` / `snapshot`) carry the request's `request_id`.
 - [ ] Define `protocol_version` as a single source of truth (const) and document the envelope
@@ -286,7 +288,7 @@ Completion checklist:
       service the request → flush newly observed markers → write the request's tagged response →
       write `{"type":"bye"}` → flush → return. `bye` is a terminal notification, never a
       replacement for the request's correlated response. On reader EOF (no triggering request),
-      emit `bye` and return.
+      flush newly observed markers, emit `bye`, flush, and return.
 - [ ] Malformed/un-parseable input line → `error` response (`request_id` per the two-stage parse,
       finding 3), never a panic.
 - [ ] All protocol output goes to `writer` (stdout); **all `log` output and diagnostics go to
@@ -426,6 +428,15 @@ Roadmap deltas.
   `validation`) before the DTOs freeze the contract. (7, Low) Documented `close_window` out of 2c
   scope alongside `inject_raw`/keyboard nav. (8, Low) Required the demo `--headless` path to keep
   stdout clean (logger → stderr) and documented the same obligation for downstream embedders.
+- 2026-05-31 — Phase 2c implementation landed. Added the `run_protocol` stdio adapter with the
+  versioned JSON-lines envelope, request-id recovery for malformed input, cursor-relative
+  `wait_for`, marker flushing, stable-name snapshot serialization, and the demo `--headless`
+  execution path. Phase remains `wip` pending external review.
+- 2026-05-31 — Phase 2c implementation review follow-up applied. Collapsed repeated protocol
+  error/flush/termination scaffolding, removed the unused envelope `type` field so malformed
+  requests with a recoverable `request_id` stay correlated, flushed markers before EOF `bye`,
+  normalized the demo headless env flag, and made the protocol snapshot omit cumulative
+  `markers`/`quitting` while keeping those fields in the in-process snapshot.
 
 ## Parking lot
 

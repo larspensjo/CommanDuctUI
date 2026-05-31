@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
+use std::io;
 use std::sync::{Arc, Mutex};
 
 use commanductui::{
     AppEvent, ControlId, DockStyle, LayoutRule, PlatformCommand, PlatformEventHandler,
-    PlatformResult, UiStateProvider, WindowId,
+    PlatformResult, UiStateProvider, WindowId, headless::HeadlessHarness,
 };
 
 const BTN_CLICK_ME: ControlId = ControlId::new(101);
@@ -85,6 +86,29 @@ fn build_app_core(
 }
 
 #[cfg(target_os = "windows")]
+fn headless_requested() -> bool {
+    std::env::args().any(|arg| arg == "--headless")
+        || std::env::var("COMMANDUCTUI_HEADLESS")
+            .map(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                !matches!(value.as_str(), "" | "0" | "false" | "off" | "no")
+            })
+            .unwrap_or(false)
+}
+
+fn run_headless_example() -> PlatformResult<()> {
+    let mut harness = HeadlessHarness::new("CommanDuctUIExample");
+    let main_window_id = harness.create_window(commanductui::WindowConfig {
+        title: "My App",
+        width: 400,
+        height: 300,
+    })?;
+    let (app_logic, ui_state_provider, initial_commands) = build_app_core(main_window_id);
+    harness.start(app_logic, ui_state_provider, initial_commands)?;
+    harness.run_protocol(io::stdin().lock(), io::stdout().lock())
+}
+
+#[cfg(target_os = "windows")]
 fn run_windows_example() -> PlatformResult<()> {
     let platform = commanductui::PlatformInterface::new("CommanDuctUIExample".to_string())?;
     let main_window_id = platform.create_window(commanductui::WindowConfig {
@@ -98,10 +122,14 @@ fn run_windows_example() -> PlatformResult<()> {
 
 #[cfg(target_os = "windows")]
 fn main() -> PlatformResult<()> {
-    run_windows_example()
+    if headless_requested() {
+        run_headless_example()
+    } else {
+        run_windows_example()
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
-fn main() {
-    let _ = build_app_core(WindowId::new(1));
+fn main() -> PlatformResult<()> {
+    run_headless_example()
 }

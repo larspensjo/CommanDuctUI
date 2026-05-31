@@ -80,6 +80,16 @@ pub enum ListBoxRowDensity {
     Compact,
 }
 
+impl ListBoxRowDensity {
+    /// Returns the stable public name used in headless snapshots and protocol DTOs.
+    pub(crate) fn stable_name(self) -> &'static str {
+        match self {
+            ListBoxRowDensity::Expanded => "expanded",
+            ListBoxRowDensity::Compact => "compact",
+        }
+    }
+}
+
 /// Logical identifier for a control managed by the platform layer.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -234,6 +244,21 @@ pub enum DockStyle {
     Fill,
     /// Fill space along the main axis proportionally with siblings.
     ProportionalFill { weight: f32 },
+}
+
+impl DockStyle {
+    /// Returns the stable public name used in headless snapshots and protocol DTOs.
+    pub(crate) fn stable_name(self) -> &'static str {
+        match self {
+            DockStyle::None => "none",
+            DockStyle::Top => "top",
+            DockStyle::Bottom => "bottom",
+            DockStyle::Left => "left",
+            DockStyle::Right => "right",
+            DockStyle::Fill => "fill",
+            DockStyle::ProportionalFill { .. } => "proportional_fill",
+        }
+    }
 }
 
 /// Associates a control with a docking style inside a parent container.
@@ -422,11 +447,33 @@ pub enum MessageSeverity {
     Error,
 }
 
+impl MessageSeverity {
+    /// Returns the stable public name used in headless snapshots and protocol DTOs.
+    pub(crate) fn stable_name(self) -> &'static str {
+        match self {
+            MessageSeverity::None => "none",
+            MessageSeverity::Information => "information",
+            MessageSeverity::Warning => "warning",
+            MessageSeverity::Error => "error",
+        }
+    }
+}
+
 /// Semantic classification for label controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelClass {
     Default,
     StatusBar,
+}
+
+impl LabelClass {
+    /// Returns the stable public name used in headless snapshots and protocol DTOs.
+    pub(crate) fn stable_name(self) -> &'static str {
+        match self {
+            LabelClass::Default => "default",
+            LabelClass::StatusBar => "status_bar",
+        }
+    }
 }
 
 /// Defines the orientation of a splitter control.
@@ -440,6 +487,16 @@ pub enum LabelClass {
 pub enum SplitterOrientation {
     Vertical,   // Divides left/right (user drags horizontally)
     Horizontal, // Divides top/bottom (future extension)
+}
+
+impl SplitterOrientation {
+    /// Returns the stable public name used in headless snapshots and protocol DTOs.
+    pub(crate) fn stable_name(self) -> &'static str {
+        match self {
+            SplitterOrientation::Vertical => "vertical",
+            SplitterOrientation::Horizontal => "horizontal",
+        }
+    }
 }
 
 /// Visual emphasis level for a chart line.
@@ -510,6 +567,17 @@ pub enum FormTextValidation {
     Any,
     NonEmpty,
     PathSegment,
+}
+
+impl FormTextValidation {
+    /// Returns the stable public name used in headless snapshots and protocol DTOs.
+    pub(crate) fn stable_name(&self) -> &'static str {
+        match self {
+            FormTextValidation::Any => "any",
+            FormTextValidation::NonEmpty => "non_empty",
+            FormTextValidation::PathSegment => "path_segment",
+        }
+    }
 }
 
 /// Optional live warning attached to a text input field.
