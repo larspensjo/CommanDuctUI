@@ -1,6 +1,7 @@
+use super::state::ControlKind;
 use super::{
-    ControlKind, DialogKind, DialogMatcher, DialogOutcome, DialogScriptEntry,
-    HEADLESS_PROTOCOL_VERSION, HeadlessBackend, HeadlessHarness,
+    DialogKind, DialogMatcher, DialogOutcome, DialogScriptEntry, HEADLESS_PROTOCOL_VERSION,
+    HeadlessBackend, HeadlessHarness,
 };
 use crate::{
     AppEvent, ChartDataPacket, ChartLineData, ChartLineEmphasis, CheckState, Color, ControlId,

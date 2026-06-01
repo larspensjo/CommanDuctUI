@@ -104,3 +104,9 @@ Type: Implementation
 Context: External headless drivers needed a way to pre-script modal dialog outcomes instead of always falling back to the default cancel/none behavior.
 Change: Added a protocol v2 `set_dialog_responder` request plus headless-owned matcher/outcome DTOs that reconstruct the existing dialog responder script, including form field values, and validated the kind pairing before installing the script. Review follow-up unified file/folder outcomes on the external `path` field, made `message_box` entries validate but stay out of the FIFO so they cannot block later dialogs, documented replace/install-before-action semantics near the request, and added protocol tests for scripted form completion, mismatched and unknown kinds, malformed script recovery, nonmatching-script default cancel, and message-box no-op handling. Bumped the crate version to 2.8.0.
 Refs: src/headless.rs, CHANGELOG.md, Cargo.toml
+
+## 2026-06-01 - Headless module split started
+Type: Implementation
+Context: The headless backend had grown large enough that its tests, stable JSON snapshot DTOs, and command interpreter obscured the harness and protocol flow.
+Change: Moved the extracted headless tests into `src/headless/tests.rs`, moved the `*Snapshot` DTOs and their `From` serializers into `src/headless/snapshot.rs`, moved `HeadlessBackend` plus its command handlers/validators into `src/headless/backend.rs`, moved JSON-lines protocol wire DTOs/conversions into `src/headless/protocol.rs`, and moved the window/control/tree/menu/chart state model into `src/headless/state.rs`. Visibility remains scoped to the parent module so the public `headless` API is unchanged.
+Refs: src/headless.rs, src/headless/backend.rs, src/headless/protocol.rs, src/headless/snapshot.rs, src/headless/state.rs, src/headless/tests.rs
