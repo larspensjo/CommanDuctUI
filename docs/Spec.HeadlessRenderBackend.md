@@ -1,10 +1,11 @@
 # Spec: Headless text-rendering backend for CommanDuctUI
 
 Status: Living design spec — Phase 1 delivered; Phase 2a delivered; Phase 2b delivered;
-Phase 2c (external protocol) delivered; Phase 2d (external dialog scripting) in planning
-— 2026-05-31
+Phase 2c (external protocol) delivered; Phase 2d (external dialog scripting) delivered;
+Phase 3a (shared contract suite, toward fidelity-C) in planning — 2026-06-01
 Owner: Lars Pensjö
-Reviews applied: design review; Phase 1 implementation review; Phase 2c plan review.
+Reviews applied: design review; Phase 1 implementation review; Phase 2c plan review;
+Phase 2d implementation review.
 
 > This is the design **spec** (the `Spec.` prefix denotes a design document). The
 > implementation plan is produced separately and follows the repo's `Plan.` convention.
@@ -478,9 +479,32 @@ criteria:
   `wait_until`, timeout backstop, quit.
 - **Snapshot-stability tests** — deterministic JSON shape.
 - **Shared contract tests** — the road to fidelity-C: data-driven behavior specs (e.g.
-  disabled-row-selectable) asserted on the backend.
+  disabled-row-selectable) asserted on the backend. Organized around the **contract catalog**
+  (below).
 - **Demo app + end-to-end example test** — the downstream reference, with the app-core
   path compiling on non-Windows.
+
+### The contract catalog (fidelity-C)
+
+A single referenceable list of the documented behavioral contracts that **both** the Win32 and
+headless backends must honor. Each entry is tagged with how parity is guaranteed:
+
+- **shared-pure** — the behavior is a pure function of its inputs (no `HWND`, no geometry, no native
+  state). These are extracted into **one shared source of truth** both backends call, so the two
+  cannot drift. Tested once against the shared seam. First target: `validate_layout_rules` (today
+  duplicated verbatim — see §3 caveat). Candidates to confirm: radio grouping by `group_start`, the
+  disabled-row-selectable predicate.
+- **parity-only** — the behavior legitimately differs in implementation because Win32 routes through
+  native messages (it cannot be deduplicated without changing the production Win32 contract).
+  Guaranteed instead by a **data-driven parity table** (input → expected logical outcome) asserted
+  on the headless backend and mirrored on Win32 behind `#[cfg(target_os = "windows")]` where
+  feasible. The table is the shared source of truth. Examples: programmatic-`Set*` silence and the
+  `SetTreeViewSelection` event-bearing exception (§7); hidden-state tree-toggle suppression (no
+  event, state stays `Hidden`); disabled listbox rows remain selectable.
+
+The catalog is **append-only and load-bearing**: every newly landed behavior that both backends must
+share gets an entry and the matching test, which is how the "mirror only the dispatch `match`"
+insufficiency (§3, §13) is paid down over time rather than re-accruing.
 
 ## 15. Phasing (YAGNI)
 
@@ -519,21 +543,39 @@ criteria:
   versioned request/response envelopes (§9); logs to stderr; demo app `--headless` flag. Dialog
   scripting and `close_window` are **out of scope** (default-cancel dialogs, no native-close
   action); snapshot enum fields gained stable-name mappings (§10) before the contract froze.
-- **Phase 2d — external dialog scripting.** Add a `set_dialog_responder` protocol request
-  (protocol_version → 2) so shape 2 can drive `Show*Dialog` results instead of always defaulting
-  to cancel/none. A thin protocol mirror of the in-process ordered responder (§11): headless-owned
-  `{matcher, outcome}` DTOs reconstruct the existing `DialogScriptEntry` (no serde on the public
-  dialog types or `FormFieldValue`, §10); the pump's existing match-or-default logic produces the
-  completion event. Framing/DTOs only — no new dialog modeling. Promoted from the 2c review
-  (finding 1). Design locked in: the pre-scripted request (Approach A), chosen because the intended
-  use is deterministic integration testing (the dialog sequence is known in advance); the reactive
-  variant (Approach B, the pump suspends for a driver `dialog_response`) is parked for a possible
-  future interactive harness.
+- **Phase 2d — external dialog scripting. (Delivered.)** Added a `set_dialog_responder` protocol
+  request (protocol_version → 2) so shape 2 can drive `Show*Dialog` results instead of always
+  defaulting to cancel/none. A thin protocol mirror of the in-process ordered responder (§11):
+  headless-owned `{matcher, outcome}` DTOs reconstruct the existing `DialogScriptEntry` (no serde on
+  the public dialog types or `FormFieldValue`, §10); the pump's existing match-or-default logic
+  produces the completion event. Framing/DTOs only — no new dialog modeling. Promoted from the 2c
+  review (finding 1). Design locked in: the pre-scripted request (Approach A), chosen because the
+  intended use is deterministic integration testing (the dialog sequence is known in advance); the
+  reactive variant (Approach B, the pump suspends for a driver `dialog_response`) is parked for a
+  possible future interactive harness. Released as `2.8.0`.
 
-**Phase 3 — toward fidelity-C.**
-- Shared contract-test suite spanning documented behaviors.
-- Optional harness-owned executor for deterministic async.
-- Broaden vocabulary (keyboard navigation, scroll).
+**Phase 3 — toward fidelity-C.** Split into rolling-wave sub-phases; only the in-flight sub-phase
+is detailed (the others stay one-liners until reached, per the Roadmap workflow).
+
+- **Phase 3a — shared contract-test suite (in flight).** The road to fidelity-C and the principal
+  mitigation for fidelity drift (§16). Establish the **contract catalog** (§14) — a single
+  referenceable list of the documented behavioral contracts, each tagged *shared-pure* or
+  *parity-only* — and the **divergence register** (§16) recording every known Win32↔headless
+  divergence with a deliberate disposition. Two mechanisms back the catalog:
+  - *Dedup where pure.* Behaviors that are pure functions of their inputs (no `HWND`, no geometry)
+    are extracted into **one shared source of truth** both backends call, so drift becomes
+    structurally impossible. The first target is `validate_layout_rules`, today duplicated
+    verbatim across the Win32 and headless backends; further genuinely-pure seams fold in as
+    confirmed.
+  - *Parity tables for the rest.* Behaviors that legitimately differ in implementation because
+    Win32 routes through native messages (e.g. programmatic-`Set*` silence and its
+    `SetTreeViewSelection` exception, hidden-state tree-toggle suppression) get data-driven
+    contract tables asserted on the headless backend, mirrored on Win32 behind
+    `#[cfg(target_os = "windows")]` where feasible. The table is the shared source of truth.
+- **Phase 3b — deterministic async.** Optional harness-owned executor for fully deterministic
+  background work (§8).
+- **Phase 3c — broader input vocabulary.** Keyboard navigation; listbox scroll (`ListBoxScrolled`)
+  and any remaining user-input gaps.
 - Geometry remains out of scope unless a concrete need appears.
 
 ## 16. Open questions / risks
@@ -543,14 +585,38 @@ criteria:
 - **Marker discipline.** Fidelity of async "DONE" depends on apps emitting `Checkpoint`
   at the right point; the timeout backstop bounds the failure mode.
 - **Fidelity drift.** The headless backend must honor the same documented contracts as
-  Win32; shared contract tests are the mitigation, but they must actually be written as
-  new behaviors land. Mirroring only the dispatch `match` is insufficient (§3, §13).
+  Win32; shared contract tests (the contract catalog, §14) are the mitigation, but they must
+  actually be written as new behaviors land. Mirroring only the dispatch `match` is insufficient
+  (§3, §13). *Shared-pure* contracts are extracted to one source of truth so they cannot drift;
+  *parity-only* contracts are pinned by data-driven tables.
 - **Dialog tags vs. ordered matching.** If first-class `context_tag` fields are added to
   tagless dialog commands, that is a semver/changelog change (§11).
 - **Versioning of `Checkpoint`.** Adding a `PlatformCommand` variant is a public,
   releasable change; update `Cargo.toml` version and `CHANGELOG.md` together.
-- **Modal completion ordering.** Win32 modal dialogs block command execution until the
-  dialog closes. Headless intentionally queues dialog completions as follow-up events for
-  pump consistency, so commands already queued after a `Show*Dialog` can run before the
-  completion event. Most hosts wait for the completion before issuing dependent work, but
-  shared fidelity tests should keep this documented divergence visible.
+### Divergence register and the fix-or-pin rule
+
+Some Win32↔headless behaviors legitimately diverge. The standing rule (established in Phase 3a):
+**every known divergence gets a deliberate disposition** — either *fix-to-match* (make headless
+match the Win32 contract) or *accept-with-pinning-test* (lock the documented current behavior with a
+test and record why matching is not pursued). No divergence is left undocumented or untested. A
+future divergence that turns out to be a real bug is dispositioned *fix*; this register is not a
+license to accept drift.
+
+Current entries:
+
+- **Modal completion ordering — accepted (pinned).** Win32 modal dialogs block command execution
+  until the dialog closes; headless intentionally queues dialog completions as follow-up events for
+  pump consistency (§7), so commands already queued after a `Show*Dialog` can run before the
+  completion event. *Disposition: accept* — matching would mean simulating blocking, which
+  contradicts the non-blocking synchronous-quiescence pump for little test value. A pinning test
+  keeps the divergence visible; most hosts wait for the completion before issuing dependent work.
+- **`ExpandVisibleTreeItems` vs `ExpandAllTreeItems` — accepted (pinned).** Headless expands the
+  full logical tree for both; native `expand_visible_tree_items` walks `TVGN_FIRSTVISIBLE`/
+  `TVGN_NEXTVISIBLE`, i.e. "visible" is a **viewport/geometry** concept. *Disposition: accept* —
+  geometry is out of headless scope (§2), so headless cannot faithfully model viewport visibility
+  without rectangles; approximating an ill-defined native set would add debt. A pinning test records
+  the behavior; revisit only if a concrete geometry-bearing need appears.
+- **Protocol `wait_for` cursor-relative vs in-process cumulative — accepted (documented).** The
+  stdio protocol's `wait_for` is cursor-relative; the in-process `wait_for` scans the cumulative
+  marker list (§9). *Disposition: accept* — the divergence is intentional and already documented at
+  §9; the protocol has already emitted prior markers to the driver.

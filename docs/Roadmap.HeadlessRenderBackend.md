@@ -1,7 +1,7 @@
 # Roadmap: Headless text-rendering backend for CommanDuctUI
 
 Status: Active — Phase 1 done; Phase 2a done; Phase 2b done; Phase 2c done;
-Phase 2d in planning — 2026-05-31
+Phase 2d done; Phase 3a (shared contract suite) in planning — 2026-06-01
 Design spec: `docs/Spec.HeadlessRenderBackend.md`
 
 This is the **living control document** for an iterative, review-driven build. The spec
@@ -32,8 +32,10 @@ dedicated `Plan.HeadlessRenderBackend.PhaseN.md` and link it from the table.
 | 2a | `wait_until`; dialog responder + 8 dialog commands; harden `inject_raw` | `done` | §"Phase 2a (done)" below |
 | 2b | Remaining controls/commands: treeview, chart, menu, styling, scroll | `done` | §"Phase 2b (done)" below |
 | 2c | `--headless` stdio JSON protocol | `done` | §"Phase 2c (done)" below |
-| 2d | External dialog-scripting protocol (drive `Show*Dialog` outcomes from shape 2) | `wip` | §"Phase 2d (wip)" below |
-| 3 | Fidelity-C: shared contract suite; deterministic async; broader input vocabulary | `todo` | Spec §15 (expand when reached) |
+| 2d | External dialog-scripting protocol (drive `Show*Dialog` outcomes from shape 2) | `done` | §"Phase 2d (done)" below |
+| 3a | Fidelity-C: shared contract-test suite (catalog + dedup-where-pure + parity tables + divergence register) | `wip` | §"Phase 3a (wip)" below |
+| 3b | Fidelity-C: optional harness-owned executor for deterministic async | `todo` | Spec §15 (expand when reached) |
+| 3c | Fidelity-C: broader input vocabulary (keyboard nav, listbox scroll) | `todo` | Spec §15 (expand when reached) |
 
 ## Phase 1 (done)
 
@@ -344,7 +346,16 @@ Completion checklist:
 - [x] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
       `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
 
-## Phase 2d (wip)
+## Phase 2d (done)
+
+**Delivered.** The protocol v2 `set_dialog_responder` request landed: headless-owned matcher/outcome
+DTOs reconstruct the existing in-process `DialogScriptEntry` script (including `FormFieldValue`s)
+across the stdio boundary, the dispatch arm installs the script with replace-semantics, and the
+existing pump turns a matched outcome into the precise `…Completed` event. The review follow-up
+unified file/folder outcomes on the external `path` field, kept `message_box` entries out of the
+FIFO so they cannot block later dialogs, and documented replace/install-before-action semantics.
+Released as `2.8.0`, `protocol_version` 1 → 2. The full delivered checklist is retained below for
+traceability.
 
 **Goal (Spec §9, §11, §15).** Let an external (shape 2) driver **script `Show*Dialog`
 outcomes** over the stdio protocol, lifting the 2c default-cancel-only limitation. Like 2c,
@@ -385,58 +396,140 @@ future interactive black-box harness.
 Completion checklist:
 
 ### Protocol DTOs (serde boundary, Spec §10)
-- [ ] Add a `set_dialog_responder` request DTO: `request_id` plus `script: Vec<DialogScriptEntryDto>`,
+- [x] Add a `set_dialog_responder` request DTO: `request_id` plus `script: Vec<DialogScriptEntryDto>`,
       where `DialogScriptEntryDto` = `{ matcher: DialogMatcherDto, outcome: DialogOutcomeDto }`.
       Deserialize into the existing `DialogScriptEntry`; **do not** derive serde on the public
       dialog types.
-- [ ] `DialogMatcherDto`: `kind` (stable `DialogKind` string — add the stable-name mapping if one
+- [x] `DialogMatcherDto`: `kind` (stable `DialogKind` string — add the stable-name mapping if one
       doesn't exist yet, consistent with the §10 enum-string rule), optional `window_id` (raw
       `usize` → `WindowId::new`), optional `title` / `prompt` / `context_tag`.
-- [ ] `DialogOutcomeDto`: tagged by dialog kind, carrying the same logical payload as
+- [x] `DialogOutcomeDto`: tagged by dialog kind, carrying the same logical payload as
       `DialogOutcome` — `save_file`/`open_file`/`folder_picker` (`path: Option<String>` → `PathBuf`),
       `profile_selection` (`chosen_profile_name`, `create_new_requested`, `user_cancelled`),
       `input` (`text: Option<String>`), `exclude_patterns` (`saved`, `patterns`), `form`
       (`confirmed` + `field_values`), `message_box` (no payload). A `matcher.kind` /
       `outcome` mismatch is a validation `error`, not a panic (mirror the in-process
       kind/outcome pairing in `apply_dialog_outcome`).
-- [ ] `FormFieldValueDto` reconstructing `FormFieldValue` (`types.rs:627`): `text`
+- [x] `FormFieldValueDto` reconstructing `FormFieldValue` (`types.rs:627`): `text`
       (`field_id`, `value`) and `checkbox` (`field_id`, `checked`).
-- [ ] Bump `protocol_version` (1 → 2) since the request vocabulary grows; document the new request
+- [x] Bump `protocol_version` (1 → 2) since the request vocabulary grows; document the new request
       next to the existing envelope docs, including that the script **replaces** any prior script
       and must be installed before the triggering action.
 
 ### `run_protocol` dispatch (Spec §9)
-- [ ] Add the `SetDialogResponder` arm to `ProtocolRequest` and dispatch it to
+- [x] Add the `SetDialogResponder` arm to `ProtocolRequest` and dispatch it to
       `set_dialog_responder` after reconstructing the script; respond `ok` (or `error` on a
       malformed/mismatched entry). No model mutation, no pump — the script only affects subsequent
       `Show*Dialog` execution.
-- [ ] Confirm the existing fallback still holds over the protocol: a dialog with no matching script
+- [x] Confirm the existing fallback still holds over the protocol: a dialog with no matching script
       entry resolves to default cancel/none (the 2c behavior), so a missing script never hangs.
-- [ ] Two-stage parse + `request_id` recovery unchanged: a `set_dialog_responder` with a usable
+- [x] Two-stage parse + `request_id` recovery unchanged: a `set_dialog_responder` with a usable
       `request_id` but a bad script entry yields `error` with `request_id: Some(id)`.
 
 ### Demo app reference (Spec §4)
-- [ ] Extend the demo `--headless` reference (or the e2e protocol test) to drive at least one
+- [x] Extend the demo `--headless` reference (or the e2e protocol test) to drive at least one
       `Show*Dialog` to a scripted non-default outcome over the protocol, proving the round-trip
       and documenting it as the shape-2 dialog-scripting reference.
 
 ### Tests
-- [ ] `run_protocol` over in-memory `Cursor`: `set_dialog_responder` → action that opens the
+- [x] `run_protocol` over in-memory `Cursor`: `set_dialog_responder` → action that opens the
       dialog → `snapshot`/`wait_for` shows the scripted `…Completed` effect (e.g. a saved path,
       a confirmed form). Parity with the equivalent in-process `set_dialog_responder` call.
-- [ ] Default-cancel still applies when the script is empty or no entry matches (regression guard
+- [x] Default-cancel still applies when the script is empty or no entry matches (regression guard
       on the 2c limitation now that scripting exists).
-- [ ] `MessageBox` outcome consumes no entry and emits no event over the protocol.
-- [ ] Error paths: matcher/outcome kind mismatch → `error` (loop continues); malformed script
+- [x] `MessageBox` outcome consumes no entry and emits no event over the protocol.
+- [x] Error paths: matcher/outcome kind mismatch → `error` (loop continues); malformed script
       entry with a usable `request_id` → `error` with `request_id: Some(id)`.
-- [ ] `FormFieldValueDto` round-trips text + checkbox fields into the resulting
+- [x] `FormFieldValueDto` round-trips text + checkbox fields into the resulting
       `FormDialogCompleted` field values.
-- [ ] `protocol_version` is `2` and stable.
+- [x] `protocol_version` is `2` and stable.
 
 ### Cross-cutting / definition of done
-- [ ] New `set_dialog_responder` protocol request + the dialog DTOs + `protocol_version` bump are a
+- [x] New `set_dialog_responder` protocol request + the dialog DTOs + `protocol_version` bump are a
       minor, releasable API change → bump `Cargo.toml` version and `CHANGELOG.md` together (next is
       `2.8.0`).
+- [x] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
+      `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
+
+## Phase 3a (wip)
+
+**Goal (Spec §14, §15, §16).** Begin the road to fidelity-C with the **shared contract-test suite** —
+the principal mitigation for fidelity drift (§16). This sub-phase establishes two durable structures
+and seeds them from the contracts that exist today; later behaviors append to the same structures as
+they land. It is **not** about new control modeling or new input vocabulary (that is 3b/3c).
+
+The two structures (Spec §14, §16):
+- **Contract catalog** — a single referenceable list of documented behaviors both backends must
+  honor, each tagged *shared-pure* (extracted to one source of truth) or *parity-only* (pinned by a
+  data-driven table).
+- **Divergence register** — every known Win32↔headless divergence with a deliberate disposition
+  under the standing **fix-or-pin rule**: fix headless to match, or accept-with-pinning-test plus a
+  recorded rationale.
+
+**Design decisions (locked in from this prep cycle).**
+- **Dedup where pure; parity tables for the rest.** Genuinely-pure behaviors (no `HWND`, no
+  geometry) are extracted into one shared source of truth so drift is structurally impossible;
+  irreducible behaviors (Win32 routes through native messages) are pinned by data-driven tables
+  asserted on headless and mirrored on Win32 behind `#[cfg(target_os = "windows")]` where feasible.
+  Aggressive whole-reducer extraction is rejected (YAGNI; risk to the production Win32 path).
+- **Both current divergences are dispositioned `accept` + pinning test**, for different reasons:
+  modal-completion ordering is an intentional non-blocking-pump choice; `ExpandVisible`/`ExpandAll`
+  hinges on viewport visibility, which is geometry and therefore out of scope (Spec §2).
+
+**Audit / starting point (2026-06-01).**
+- `validate_layout_rules` is **duplicated verbatim**: `src/window_common.rs:995` (Win32) and
+  `src/headless/backend.rs:922` (headless) — same checks, character-identical error strings, pure
+  function of `&[LayoutRule]`. This is the canonical *shared-pure* extraction target and the first
+  concrete deliverable.
+- Other *shared-pure* candidates to confirm during 3a: radio grouping by `group_start`
+  (`src/controls/radiobutton_handler.rs`), and the disabled-row-selectable predicate.
+- *Parity-only* contracts already implemented on both sides but not asserted as a shared table:
+  programmatic-`Set*` silence + the `SetTreeViewSelection` event-bearing exception (Spec §7);
+  hidden-state tree-toggle suppression (`src/controls/treeview_handler.rs:1587`); disabled listbox
+  rows remain selectable.
+- Native `expand_visible_tree_items` (`src/controls/treeview_handler.rs:722`) walks
+  `TVGN_FIRSTVISIBLE`/`TVGN_NEXTVISIBLE` — confirms the expand-visible divergence is geometry-bound.
+
+Completion checklist:
+
+### Contract catalog
+- [ ] Add the contract-catalog list (Spec §14) as the index of the documented behaviors, each tagged
+      *shared-pure* or *parity-only*. Seed it with the behaviors enumerated in the audit; document
+      that it is append-only and load-bearing.
+- [ ] Decide the catalog's physical home (a `#[cfg(test)]` contract module that enumerates the
+      data-driven cases, referenced from the Spec) so future behaviors have an obvious place to land.
+
+### Dedup the shared-pure seams (one source of truth)
+- [ ] Extract `validate_layout_rules` into a single shared pure function both backends call; delete
+      the headless copy and the Win32 copy's body in favor of the shared seam. No behavior change,
+      no geometry — the error strings stay identical.
+- [ ] Test the shared seam once (table of layout-rule inputs → expected `Ok`/`PlatformError`),
+      covering the docked-edge-needs-`fixed_size`, negative-`fixed_size`, and one-`Fill`-per-parent
+      rules.
+- [ ] Confirm the further *shared-pure* candidates (radio grouping by `group_start`,
+      disabled-row-selectable predicate); extract the ones that are genuinely pure, or reclassify
+      them *parity-only* in the catalog with a note on why they can't be deduplicated.
+
+### Parity tables (irreducible behaviors)
+- [ ] Add data-driven parity tables for the *parity-only* contracts asserted on the headless backend:
+      programmatic-`Set*` silence + the `SetTreeViewSelection` exception; hidden-state tree-toggle
+      suppression; disabled-row-selectable. Each row is (input → expected logical outcome / emitted
+      event-or-silence).
+- [ ] Mirror the same tables on Win32 behind `#[cfg(target_os = "windows")]` where a pure seam is
+      reachable; where Win32 truly needs an `HWND`, document the table as headless-asserted with the
+      Win32 contract referenced by code location.
+
+### Divergence register
+- [ ] Record the divergence register (Spec §16) with both current entries dispositioned `accept`:
+      modal-completion ordering (non-blocking pump) and `ExpandVisible`/`ExpandAll` (geometry-bound).
+- [ ] Add a pinning test for each accepted divergence that locks the documented current behavior, so
+      an accidental change to either surfaces as a test failure rather than silent drift.
+- [ ] Document the standing **fix-or-pin rule** so every future divergence gets a disposition.
+
+### Cross-cutting / definition of done
+- [ ] Determine the release impact: if the dedup is internal-only (no public API change), **no
+      version bump** is required; if any public surface changes, bump `Cargo.toml` + `CHANGELOG.md`
+      together. Decide and record during implementation.
 - [ ] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
       `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
 
@@ -550,26 +643,52 @@ Roadmap deltas.
   reactive Approach B (a `dialog_request`/`dialog_response` that suspends the pump mid-turn) stays
   parked for a possible future interactive harness. Marked 2d `wip`; next release is `2.8.0`,
   `protocol_version` bumps 1 → 2.
+- 2026-06-01 — Phase 2d implemented + review follow-up applied. Added the protocol v2
+  `set_dialog_responder` request with headless-owned matcher/outcome DTOs that reconstruct the
+  in-process `DialogScriptEntry` script (including `FormFieldValue`s), the dispatch arm with
+  replace-semantics, and the demo/e2e dialog-scripting reference. Review follow-up unified
+  file/folder outcomes on the external `path` field, kept `message_box` entries out of the FIFO so
+  they cannot block later dialogs, and documented replace/install-before-action semantics. Released
+  as `2.8.0`, `protocol_version` 1 → 2. Subsequently split the monolithic `headless.rs` into the
+  `src/headless/` module (`backend` / `protocol` / `snapshot` / `state` / `tests`); behavior
+  unchanged. Marked 2d `done`.
+- 2026-06-01 — Phase 3 prep / planning (toward fidelity-C). Split Phase 3 into rolling-wave
+  sub-phases — 3a shared contract-test suite (in flight), 3b deterministic-async executor, 3c
+  broader input vocabulary — detailing only 3a. Audited the documented behaviors: confirmed
+  `validate_layout_rules` is duplicated **verbatim** across `window_common.rs:995` and
+  `headless/backend.rs:922` (the canonical *shared-pure* extraction target), and that
+  `expand_visible_tree_items` (`treeview_handler.rs:722`) keys on `TVGN_*VISIBLE`, confirming the
+  expand-visible divergence is geometry-bound. Locked in two design decisions: (1) **dedup
+  where pure, parity tables for the rest** — extract genuinely-pure seams to one source of truth
+  (drift becomes impossible), pin irreducible behaviors with data-driven tables; aggressive
+  whole-reducer extraction rejected (YAGNI / Win32-path risk); (2) a standing **fix-or-pin rule**
+  for divergences, with both current divergences (modal-completion ordering; expand-visible/all)
+  dispositioned `accept` + pinning test for distinct reasons (intentional non-blocking pump;
+  geometry out of scope). Refined Spec §14 (contract catalog), §15 (Phase 3 split), and §16
+  (divergence register + fix-or-pin rule). Expanded the in-flight 3a checklist into
+  catalog / dedup / parity-table / divergence-register / DoD workstreams. Marked 3a `wip`; no
+  release planned yet (likely internal-only, version TBD during implementation).
 
 ## Parking lot
 
 Ideas surfaced but intentionally deferred, so they are not lost:
 
 - RON snapshot output for Rust-side `insta` tests (model already serde-derived).
-- Harness-owned executor for fully deterministic async (Spec §8, Phase 3).
+- Harness-owned executor for fully deterministic async (Spec §8) → **Phase 3b**.
 - First-class `context_tag` fields on tagless dialog commands (semver impact — Spec §11).
 - Optional default-on feature to strip headless from lean release builds (Spec §10).
 - Headless currently treats `ExpandVisibleTreeItems` and `ExpandAllTreeItems` identically
-  by expanding the full logical tree. Native only expands visible nodes for the former;
-  revisit this if Phase 3 contract tests need strict parity.
+  by expanding the full logical tree. Native only expands visible nodes for the former → moved
+  into the **Phase 3a divergence register** (Spec §16), dispositioned `accept` + pinning test
+  because "visible" is geometry (out of scope, Spec §2). Revisit only if a geometry-bearing need
+  appears.
 - True out-of-band marker push in the stdio protocol (a `marker` line written with no pending
   request) is deferred from Phase 2c until a real background async producer exists; the 2c
   adapter flushes markers synchronously after each request (Spec §9).
-- Driver-scriptable dialog outcomes over the stdio protocol → **Phase 2d (now in flight)**,
-  promoted from here after the 2c review (finding 1). Locked in as Approach A (a pre-scripted
-  `set_dialog_responder` request) for deterministic integration testing. Approach B — a reactive
-  `dialog_request`/`dialog_response` that suspends the pump mid-turn for a fully interactive
-  black-box harness — stays parked here for a possible future need.
+- Driver-scriptable dialog outcomes over the stdio protocol → **delivered in Phase 2d** as
+  Approach A (the pre-scripted `set_dialog_responder` request) for deterministic integration
+  testing. Approach B — a reactive `dialog_request`/`dialog_response` that suspends the pump mid-turn
+  for a fully interactive black-box harness — stays parked here for a possible future need.
 - `close_window` / top-level window-close simulation over the stdio protocol (review finding 7):
   out of 2c scope alongside `inject_raw` and keyboard navigation. Reconsider if a host's
   native-close logic needs black-box coverage with no in-UI close affordance.
