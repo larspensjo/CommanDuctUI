@@ -41,6 +41,20 @@ impl DialogKind {
             DialogKind::FolderPicker => "folder_picker",
         }
     }
+
+    fn from_stable_name(name: &str) -> Option<Self> {
+        match name {
+            "save_file" => Some(DialogKind::SaveFile),
+            "open_file" => Some(DialogKind::OpenFile),
+            "profile_selection" => Some(DialogKind::ProfileSelection),
+            "input" => Some(DialogKind::Input),
+            "exclude_patterns" => Some(DialogKind::ExcludePatterns),
+            "form" => Some(DialogKind::Form),
+            "message_box" => Some(DialogKind::MessageBox),
+            "folder_picker" => Some(DialogKind::FolderPicker),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +133,21 @@ pub enum DialogOutcome {
     MessageBox,
 }
 
+impl DialogOutcome {
+    fn kind(&self) -> DialogKind {
+        match self {
+            Self::SaveFile { .. } => DialogKind::SaveFile,
+            Self::OpenFile { .. } => DialogKind::OpenFile,
+            Self::ProfileSelection { .. } => DialogKind::ProfileSelection,
+            Self::Input { .. } => DialogKind::Input,
+            Self::ExcludePatterns { .. } => DialogKind::ExcludePatterns,
+            Self::Form { .. } => DialogKind::Form,
+            Self::FolderPicker { .. } => DialogKind::FolderPicker,
+            Self::MessageBox => DialogKind::MessageBox,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DialogRequest {
     pub kind: DialogKind,
@@ -161,7 +190,7 @@ pub enum DialogRequestDetails {
     },
 }
 
-const HEADLESS_PROTOCOL_VERSION: u32 = 1;
+const HEADLESS_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize)]
 struct ProtocolRequestEnvelope {
@@ -175,6 +204,12 @@ enum ProtocolRequest {
         request_id: u64,
         #[serde(flatten)]
         action: ProtocolActionRequest,
+    },
+    /// Replaces the ordered dialog responder script used by later `Show*Dialog` commands.
+    /// Install this before the action that opens the dialog.
+    SetDialogResponder {
+        request_id: u64,
+        script: Vec<ProtocolDialogScriptEntry>,
     },
     Snapshot {
         request_id: u64,
@@ -241,6 +276,59 @@ enum ProtocolActionRequest {
         vertical_pos: u32,
         horizontal_pos: u32,
     },
+}
+
+#[derive(Debug, Deserialize)]
+struct ProtocolDialogScriptEntry {
+    matcher: ProtocolDialogMatcher,
+    outcome: ProtocolDialogOutcome,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProtocolDialogMatcher {
+    kind: String,
+    window_id: Option<usize>,
+    title: Option<String>,
+    prompt: Option<String>,
+    context_tag: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ProtocolDialogOutcome {
+    SaveFile {
+        path: Option<String>,
+    },
+    OpenFile {
+        path: Option<String>,
+    },
+    ProfileSelection {
+        chosen_profile_name: Option<String>,
+        create_new_requested: bool,
+        user_cancelled: bool,
+    },
+    Input {
+        text: Option<String>,
+    },
+    ExcludePatterns {
+        saved: bool,
+        patterns: String,
+    },
+    Form {
+        confirmed: bool,
+        field_values: Vec<ProtocolFormFieldValue>,
+    },
+    FolderPicker {
+        path: Option<String>,
+    },
+    MessageBox,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ProtocolFormFieldValue {
+    Text { field_id: String, value: String },
+    CheckBox { field_id: String, checked: bool },
 }
 
 #[derive(Debug, Serialize)]
@@ -475,6 +563,12 @@ impl HeadlessHarness {
                         Ok(()) => Ok(ProtocolResponse::Ok { request_id }),
                         Err(err) => Err((Some(request_id), err)),
                     },
+                    ProtocolRequest::SetDialogResponder { request_id, script } => {
+                        match self.set_protocol_dialog_responder(script) {
+                            Ok(()) => Ok(ProtocolResponse::Ok { request_id }),
+                            Err(err) => Err((Some(request_id), err)),
+                        }
+                    }
                 };
 
             match response_result {
@@ -916,6 +1010,20 @@ impl HeadlessHarness {
             }
             self.quit_notified = true;
         }
+        Ok(())
+    }
+
+    fn set_protocol_dialog_responder(
+        &mut self,
+        script: Vec<ProtocolDialogScriptEntry>,
+    ) -> PlatformResult<()> {
+        let mut script = script
+            .into_iter()
+            .map(ProtocolDialogScriptEntry::into_runtime)
+            .collect::<PlatformResult<Vec<_>>>()?;
+        // Message boxes have no completion event and never consult the responder queue.
+        script.retain(|entry| entry.matcher.kind != DialogKind::MessageBox);
+        self.set_dialog_responder(script);
         Ok(())
     }
 }
@@ -3736,6 +3844,90 @@ impl From<&DialogRequestDetails> for DialogRequestDetailsSnapshot {
     }
 }
 
+impl ProtocolDialogScriptEntry {
+    fn into_runtime(self) -> PlatformResult<DialogScriptEntry> {
+        let matcher = self.matcher.into_runtime()?;
+        let outcome = self.outcome.into_runtime()?;
+        if matcher.kind != outcome.kind() {
+            return Err(PlatformError::OperationFailed(format!(
+                "Dialog responder matcher kind '{}' does not match outcome kind '{}'",
+                matcher.kind.stable_name(),
+                outcome.kind().stable_name()
+            )));
+        }
+        Ok(DialogScriptEntry { matcher, outcome })
+    }
+}
+
+impl ProtocolDialogMatcher {
+    fn into_runtime(self) -> PlatformResult<DialogMatcher> {
+        let kind = DialogKind::from_stable_name(&self.kind).ok_or_else(|| {
+            PlatformError::OperationFailed(format!(
+                "Unknown dialog responder matcher kind '{}'",
+                self.kind
+            ))
+        })?;
+        Ok(DialogMatcher {
+            kind,
+            window_id: self.window_id.map(WindowId::new),
+            title: self.title,
+            prompt: self.prompt,
+            context_tag: self.context_tag,
+        })
+    }
+}
+
+impl ProtocolDialogOutcome {
+    fn into_runtime(self) -> PlatformResult<DialogOutcome> {
+        Ok(match self {
+            Self::SaveFile { path } => DialogOutcome::SaveFile {
+                result: path.map(PathBuf::from),
+            },
+            Self::OpenFile { path } => DialogOutcome::OpenFile {
+                result: path.map(PathBuf::from),
+            },
+            Self::ProfileSelection {
+                chosen_profile_name,
+                create_new_requested,
+                user_cancelled,
+            } => DialogOutcome::ProfileSelection {
+                chosen_profile_name,
+                create_new_requested,
+                user_cancelled,
+            },
+            Self::Input { text } => DialogOutcome::Input { text },
+            Self::ExcludePatterns { saved, patterns } => {
+                DialogOutcome::ExcludePatterns { saved, patterns }
+            }
+            Self::Form {
+                confirmed,
+                field_values,
+            } => DialogOutcome::Form {
+                confirmed,
+                field_values: field_values
+                    .into_iter()
+                    .map(ProtocolFormFieldValue::into_runtime)
+                    .collect::<PlatformResult<Vec<_>>>()?,
+            },
+            Self::FolderPicker { path } => DialogOutcome::FolderPicker {
+                path: path.map(PathBuf::from),
+            },
+            Self::MessageBox => DialogOutcome::MessageBox,
+        })
+    }
+}
+
+impl ProtocolFormFieldValue {
+    fn into_runtime(self) -> PlatformResult<crate::FormFieldValue> {
+        Ok(match self {
+            Self::Text { field_id, value } => crate::FormFieldValue::Text { field_id, value },
+            Self::CheckBox { field_id, checked } => {
+                crate::FormFieldValue::CheckBox { field_id, checked }
+            }
+        })
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct FormDialogSnapshot {
     title: String,
@@ -4300,6 +4492,599 @@ mod tests {
         assert_eq!(lines[0]["type"], "hello");
         assert_eq!(lines[1]["type"], "ok");
         assert_eq!(lines[2]["type"], "bye");
+    }
+
+    #[test]
+    fn protocol_set_dialog_responder_scripts_form_dialog_and_round_trips_field_values() {
+        struct DialogHandler {
+            events: Vec<AppEvent>,
+            commands: VecDeque<PlatformCommand>,
+            target_window: WindowId,
+        }
+
+        impl PlatformEventHandler for DialogHandler {
+            fn handle_event(&mut self, event: AppEvent) {
+                if matches!(event, AppEvent::ButtonClicked { .. }) {
+                    self.commands.push_back(PlatformCommand::ShowFormDialog {
+                        window_id: self.target_window,
+                        form: FormDialogDescriptor {
+                            title: "Form".into(),
+                            context_tag: "form-tag".into(),
+                            rows: vec![],
+                            fields: vec![
+                                FormField::TextInput {
+                                    field_id: "name".into(),
+                                    label: "Name".into(),
+                                    value: String::new(),
+                                    validation: FormTextValidation::Any,
+                                    live_warning: None,
+                                },
+                                FormField::CheckBox {
+                                    field_id: "enabled".into(),
+                                    label: "Enabled".into(),
+                                    checked: false,
+                                },
+                            ],
+                            buttons: FormButtons {
+                                confirm_label: "OK".into(),
+                                cancel_label: "Cancel".into(),
+                                confirm_enabled: true,
+                            },
+                        },
+                    });
+                }
+                self.events.push(event);
+            }
+
+            fn try_dequeue_command(&mut self) -> Option<PlatformCommand> {
+                self.commands.pop_front()
+            }
+        }
+
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(DialogHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+            target_window: window_id,
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![
+                    PlatformCommand::CreateButton {
+                        window_id,
+                        parent_control_id: None,
+                        control_id: BTN_CLICK_ME,
+                        text: "Open".into(),
+                    },
+                    PlatformCommand::ShowWindow { window_id },
+                ],
+            )
+            .unwrap();
+
+        let protocol_input = format!(
+            "{}\n{}\n{}\n",
+            serde_json::json!({
+                "type": "set_dialog_responder",
+                "request_id": 1,
+                "script": [
+                    {
+                        "matcher": {
+                            "kind": "message_box",
+                            "window_id": window_id.raw(),
+                            "title": "Notice",
+                            "prompt": "Ignored",
+                            "context_tag": null
+                        },
+                        "outcome": {
+                            "kind": "message_box"
+                        }
+                    },
+                    {
+                        "matcher": {
+                            "kind": "form",
+                            "window_id": window_id.raw(),
+                            "title": "Form",
+                            "prompt": null,
+                            "context_tag": "form-tag"
+                        },
+                        "outcome": {
+                            "kind": "form",
+                            "confirmed": true,
+                            "field_values": [
+                                {
+                                    "kind": "text",
+                                    "field_id": "name",
+                                    "value": "Alice"
+                                },
+                                {
+                                    "kind": "check_box",
+                                    "field_id": "enabled",
+                                    "checked": true
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }),
+            serde_json::json!({
+                "type": "action",
+                "request_id": 2,
+                "action": "click",
+                "window_id": window_id.raw(),
+                "control_id": BTN_CLICK_ME.raw()
+            }),
+            serde_json::json!({
+                "type": "snapshot",
+                "request_id": 3
+            })
+        );
+
+        let mut writer = RecordingWriter::new();
+        harness
+            .run_protocol(Cursor::new(protocol_input.into_bytes()), &mut writer)
+            .unwrap();
+
+        let lines = parse_protocol_lines(&writer.into_string());
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["hello", "ok", "ok", "snapshot", "bye",]
+        );
+        assert_eq!(lines[0]["protocol_version"], HEADLESS_PROTOCOL_VERSION);
+        assert_eq!(lines[1]["request_id"], 1);
+        assert_eq!(lines[2]["request_id"], 2);
+        assert_eq!(lines[3]["request_id"], 3);
+        assert_eq!(
+            lines[3]["model"]["dialog_requests"][0]["details"]["kind"],
+            "form"
+        );
+        assert_eq!(
+            lines[3]["model"]["dialog_requests"][0]["details"]["form"]["fields"][0]["kind"],
+            "text_input"
+        );
+        assert_eq!(
+            lines[3]["model"]["dialog_requests"][0]["details"]["form"]["buttons"]["confirm_label"],
+            "OK"
+        );
+
+        let events = &handler.lock().unwrap().events;
+        assert!(matches!(
+            events.as_slice(),
+            [
+                AppEvent::ButtonClicked { control_id, .. },
+                AppEvent::FormDialogCompleted {
+                    confirmed: true,
+                    field_values,
+                    ..
+                }
+            ] if *control_id == BTN_CLICK_ME && field_values == &vec![
+                FormFieldValue::Text {
+                    field_id: "name".into(),
+                    value: "Alice".into(),
+                },
+                FormFieldValue::CheckBox {
+                    field_id: "enabled".into(),
+                    checked: true,
+                },
+            ]
+        ));
+        assert!(harness.backend.dialog_responder.is_empty());
+    }
+
+    #[test]
+    fn protocol_set_dialog_responder_rejects_mismatched_entry_kinds() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler,
+                provider,
+                vec![PlatformCommand::ShowWindow { window_id }],
+            )
+            .unwrap();
+
+        let protocol_input = serde_json::json!({
+            "type": "set_dialog_responder",
+            "request_id": 11,
+            "script": [
+                {
+                    "matcher": {
+                        "kind": "save_file",
+                        "window_id": window_id.raw(),
+                        "title": "Save",
+                        "prompt": null,
+                        "context_tag": null
+                    },
+                    "outcome": {
+                        "kind": "input",
+                        "text": "oops"
+                    }
+                }
+            ]
+        })
+        .to_string()
+            + "\n";
+
+        let mut writer = RecordingWriter::new();
+        harness
+            .run_protocol(Cursor::new(protocol_input.into_bytes()), &mut writer)
+            .unwrap();
+
+        let lines = parse_protocol_lines(&writer.into_string());
+        assert_eq!(lines[0]["type"], "hello");
+        assert_eq!(lines[1]["type"], "error");
+        assert_eq!(lines[1]["request_id"], 11);
+        assert!(
+            lines[1]["message"]
+                .as_str()
+                .unwrap()
+                .contains("does not match")
+        );
+        assert_eq!(lines[2]["type"], "bye");
+    }
+
+    #[test]
+    fn protocol_set_dialog_responder_rejects_unknown_matcher_kind() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler,
+                provider,
+                vec![PlatformCommand::ShowWindow { window_id }],
+            )
+            .unwrap();
+
+        let protocol_input = serde_json::json!({
+            "type": "set_dialog_responder",
+            "request_id": 12,
+            "script": [
+                {
+                    "matcher": {
+                        "kind": "unknown_dialog",
+                        "window_id": window_id.raw(),
+                        "title": "Save",
+                        "prompt": null,
+                        "context_tag": null
+                    },
+                    "outcome": {
+                        "kind": "save_file",
+                        "path": "export.txt"
+                    }
+                }
+            ]
+        })
+        .to_string()
+            + "\n";
+
+        let mut writer = RecordingWriter::new();
+        harness
+            .run_protocol(Cursor::new(protocol_input.into_bytes()), &mut writer)
+            .unwrap();
+
+        let lines = parse_protocol_lines(&writer.into_string());
+        assert_eq!(lines[0]["type"], "hello");
+        assert_eq!(lines[1]["type"], "error");
+        assert_eq!(lines[1]["request_id"], 12);
+        assert!(
+            lines[1]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Unknown dialog responder matcher kind")
+        );
+        assert_eq!(lines[2]["type"], "bye");
+    }
+
+    #[test]
+    fn protocol_set_dialog_responder_reports_malformed_script_entries_with_request_id() {
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(TestHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler,
+                provider,
+                vec![PlatformCommand::ShowWindow { window_id }],
+            )
+            .unwrap();
+
+        let protocol_input = concat!(
+            "{",
+            "\"type\":\"set_dialog_responder\",",
+            "\"request_id\":77,",
+            "\"script\":[{",
+            "\"matcher\":{",
+            "\"kind\":\"form\",",
+            "\"window_id\":1,",
+            "\"title\":\"Form\"",
+            "},",
+            "\"outcome\":{",
+            "\"kind\":\"form\",",
+            "\"confirmed\":true,",
+            "\"field_values\":[{",
+            "\"field_id\":\"name\",",
+            "\"value\":\"Alice\"",
+            "}]", // missing `kind`
+            "}",
+            "}]",
+            "}\n",
+            "{\"type\":\"snapshot\",\"request_id\":78}\n",
+        );
+
+        let mut writer = RecordingWriter::new();
+        harness
+            .run_protocol(Cursor::new(protocol_input.as_bytes().to_vec()), &mut writer)
+            .unwrap();
+
+        let lines = parse_protocol_lines(&writer.into_string());
+        assert_eq!(lines[0]["type"], "hello");
+        assert_eq!(lines[1]["type"], "error");
+        assert_eq!(lines[1]["request_id"], 77);
+        assert!(lines[1]["message"].as_str().unwrap().contains("kind"));
+        assert_eq!(lines[2]["type"], "snapshot");
+        assert_eq!(lines[2]["request_id"], 78);
+        assert_eq!(lines[3]["type"], "bye");
+    }
+
+    #[test]
+    fn protocol_nonmatching_dialog_script_defaults_to_cancel() {
+        struct DialogHandler {
+            events: Vec<AppEvent>,
+            commands: VecDeque<PlatformCommand>,
+            target_window: WindowId,
+        }
+
+        impl PlatformEventHandler for DialogHandler {
+            fn handle_event(&mut self, event: AppEvent) {
+                if matches!(event, AppEvent::ButtonClicked { .. }) {
+                    self.commands
+                        .push_back(PlatformCommand::ShowSaveFileDialog {
+                            window_id: self.target_window,
+                            title: "Actual".into(),
+                            default_filename: "export.txt".into(),
+                            filter_spec: "*.txt".into(),
+                            initial_dir: None,
+                        });
+                }
+                self.events.push(event);
+            }
+
+            fn try_dequeue_command(&mut self) -> Option<PlatformCommand> {
+                self.commands.pop_front()
+            }
+        }
+
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(DialogHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+            target_window: window_id,
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![
+                    PlatformCommand::CreateButton {
+                        window_id,
+                        parent_control_id: None,
+                        control_id: BTN_CLICK_ME,
+                        text: "Save".into(),
+                    },
+                    PlatformCommand::ShowWindow { window_id },
+                ],
+            )
+            .unwrap();
+
+        let protocol_input = format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "type": "set_dialog_responder",
+                "request_id": 1,
+                "script": [
+                    {
+                        "matcher": {
+                            "kind": "save_file",
+                            "window_id": window_id.raw(),
+                            "title": "Different",
+                            "prompt": null,
+                            "context_tag": null
+                        },
+                        "outcome": {
+                            "kind": "save_file",
+                            "path": "scripted.txt"
+                        }
+                    }
+                ]
+            }),
+            serde_json::json!({
+                "type": "action",
+                "request_id": 2,
+                "action": "click",
+                "window_id": window_id.raw(),
+                "control_id": BTN_CLICK_ME.raw()
+            })
+        );
+
+        let mut writer = RecordingWriter::new();
+        harness
+            .run_protocol(Cursor::new(protocol_input.into_bytes()), &mut writer)
+            .unwrap();
+
+        let events = &handler.lock().unwrap().events;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AppEvent::FileSaveDialogCompleted { result: None, .. }
+        )));
+        assert_eq!(harness.backend.dialog_responder.len(), 1);
+
+        let lines = parse_protocol_lines(&writer.into_string());
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["hello", "ok", "ok", "bye"]
+        );
+    }
+
+    #[test]
+    fn protocol_message_box_script_entries_are_accepted_but_not_queued() {
+        struct MessageBoxHandler {
+            events: Vec<AppEvent>,
+            commands: VecDeque<PlatformCommand>,
+            target_window: WindowId,
+        }
+
+        impl PlatformEventHandler for MessageBoxHandler {
+            fn handle_event(&mut self, event: AppEvent) {
+                if matches!(event, AppEvent::ButtonClicked { .. }) {
+                    self.commands.push_back(PlatformCommand::ShowMessageBox {
+                        window_id: self.target_window,
+                        title: "Notice".into(),
+                        message: "Hello".into(),
+                        severity: MessageSeverity::Information,
+                    });
+                }
+                self.events.push(event);
+            }
+
+            fn try_dequeue_command(&mut self) -> Option<PlatformCommand> {
+                self.commands.pop_front()
+            }
+        }
+
+        let mut harness = HeadlessHarness::new("app");
+        let window_id = harness
+            .create_window(WindowConfig {
+                title: "Window",
+                width: 320,
+                height: 240,
+            })
+            .unwrap();
+        let handler = Arc::new(Mutex::new(MessageBoxHandler {
+            events: Vec::new(),
+            commands: VecDeque::new(),
+            target_window: window_id,
+        }));
+        let provider = Arc::new(Mutex::new(SilentProvider));
+        harness
+            .start(
+                handler.clone(),
+                provider,
+                vec![
+                    PlatformCommand::CreateButton {
+                        window_id,
+                        parent_control_id: None,
+                        control_id: BTN_CLICK_ME,
+                        text: "Notice".into(),
+                    },
+                    PlatformCommand::ShowWindow { window_id },
+                ],
+            )
+            .unwrap();
+
+        let protocol_input = format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "type": "set_dialog_responder",
+                "request_id": 1,
+                "script": [
+                    {
+                        "matcher": {
+                            "kind": "message_box",
+                            "window_id": window_id.raw(),
+                            "title": "Notice",
+                            "prompt": "Hello",
+                            "context_tag": null
+                        },
+                        "outcome": {
+                            "kind": "message_box"
+                        }
+                    }
+                ]
+            }),
+            serde_json::json!({
+                "type": "action",
+                "request_id": 2,
+                "action": "click",
+                "window_id": window_id.raw(),
+                "control_id": BTN_CLICK_ME.raw()
+            })
+        );
+
+        let mut writer = RecordingWriter::new();
+        harness
+            .run_protocol(Cursor::new(protocol_input.into_bytes()), &mut writer)
+            .unwrap();
+
+        let events = &handler.lock().unwrap().events;
+        assert!(matches!(
+            events.as_slice(),
+            [AppEvent::ButtonClicked { .. }]
+        ));
+        assert!(harness.backend.dialog_responder.is_empty());
+
+        let lines = parse_protocol_lines(&writer.into_string());
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["hello", "ok", "ok", "bye"]
+        );
     }
 
     #[test]

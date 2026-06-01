@@ -98,3 +98,9 @@ Type: Implementation
 Context: Shipped applications need a machine-drivable headless mode so external harnesses can inspect and drive the same app-core flow without linking Rust tests directly.
 Change: Added `HeadlessHarness::run_protocol` with versioned hello/snapshot/action/wait_for/error/marker/bye JSON-lines envelopes, cursor-relative protocol waits, marker and writer flushing, request-id recovery for malformed requests, stable-name serialization for externally visible snapshot enums, and a cross-platform `--headless` example path. The protocol snapshot now omits cumulative `markers` and `quitting`; external clients use `marker` lines and `bye` as the sources of truth, while in-process snapshots retain those fields for Rust-side tests.
 Refs: src/headless.rs, src/types.rs, examples/hello_window.rs, CHANGELOG.md, Cargo.toml, docs/Spec.HeadlessRenderBackend.md, docs/Roadmap.HeadlessRenderBackend.md
+
+## 2026-06-01 - Protocol dialog scripting for headless drivers
+Type: Implementation
+Context: External headless drivers needed a way to pre-script modal dialog outcomes instead of always falling back to the default cancel/none behavior.
+Change: Added a protocol v2 `set_dialog_responder` request plus headless-owned matcher/outcome DTOs that reconstruct the existing dialog responder script, including form field values, and validated the kind pairing before installing the script. Review follow-up unified file/folder outcomes on the external `path` field, made `message_box` entries validate but stay out of the FIFO so they cannot block later dialogs, documented replace/install-before-action semantics near the request, and added protocol tests for scripted form completion, mismatched and unknown kinds, malformed script recovery, nonmatching-script default cancel, and message-box no-op handling. Bumped the crate version to 2.8.0.
+Refs: src/headless.rs, CHANGELOG.md, Cargo.toml

@@ -6,6 +6,10 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.8.0 - 2026-06-01
+- **Feature**: Add protocol v2 `set_dialog_responder` support so shipped headless drivers can script ordered modal-dialog outcomes over the stdio protocol.
+- **API**: Add the headless dialog scripting DTOs needed to round-trip matcher/outcome scripts, including form field values, across the protocol boundary.
+
 ## 2.7.0 - 2026-05-31
 - **Feature**: Add the `HeadlessHarness::run_protocol` stdio JSON-lines adapter so shipped binaries can drive the in-process headless backend from a separate process.
 - **Feature**: Extend the demo example with a runtime `--headless` switch and a cross-platform headless execution path that keeps protocol output on stdout.
