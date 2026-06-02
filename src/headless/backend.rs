@@ -5,7 +5,7 @@ use super::state::{
 };
 use super::{DialogKind, DialogOutcome, DialogRequest, DialogRequestDetails, DialogScriptEntry};
 use crate::{
-    AppEvent, ChartDataPacket, CheckState, ControlId, ControlStyle, DockStyle, LayoutRule,
+    AppEvent, ChartDataPacket, CheckState, ControlId, ControlStyle, LayoutRule,
     ListBoxItemDescriptor, ListBoxItemId, ListBoxRowDensity, MenuActionId, MessageSeverity,
     PlatformCommand, PlatformError, PlatformResult, StyleId, TreeItemDescriptor, TreeItemId,
     WindowConfig, WindowId,
@@ -896,7 +896,7 @@ impl HeadlessBackend {
         window_id: WindowId,
         rules: Vec<LayoutRule>,
     ) -> PlatformResult<()> {
-        Self::validate_layout_rules(&rules)?;
+        crate::contracts::validate_layout_rules(&rules)?;
         self.with_window_mut(window_id, |window| {
             for rule in &rules {
                 if !window.controls.contains_key(&rule.control_id.raw()) {
@@ -917,59 +917,6 @@ impl HeadlessBackend {
             window.layout_rules = rules;
             Ok(())
         })
-    }
-
-    pub(super) fn validate_layout_rules(rules: &[LayoutRule]) -> PlatformResult<()> {
-        let mut fill_by_parent: BTreeMap<Option<i32>, Vec<i32>> = BTreeMap::new();
-        for rule in rules {
-            match rule.dock_style {
-                DockStyle::Top | DockStyle::Bottom | DockStyle::Left | DockStyle::Right => {
-                    if rule.fixed_size.is_none() {
-                        return Err(PlatformError::OperationFailed(format!(
-                            "DefineLayout rejected: control {} uses {:?} without fixed_size. Docked edges require explicit fixed_size.",
-                            rule.control_id.raw(),
-                            rule.dock_style
-                        )));
-                    }
-                    if let Some(size) = rule.fixed_size
-                        && size < 0
-                    {
-                        return Err(PlatformError::OperationFailed(format!(
-                            "DefineLayout rejected: control {} has negative fixed_size {} for {:?}.",
-                            rule.control_id.raw(),
-                            size,
-                            rule.dock_style
-                        )));
-                    }
-                }
-                _ => {}
-            }
-
-            if rule.dock_style == DockStyle::Fill {
-                fill_by_parent
-                    .entry(rule.parent_control_id.map(|id| id.raw()))
-                    .or_default()
-                    .push(rule.control_id.raw());
-            }
-        }
-
-        for (parent_id, fill_controls) in fill_by_parent {
-            if fill_controls.len() > 1 {
-                let parent_desc = parent_id
-                    .map(|id| format!("control {id}"))
-                    .unwrap_or_else(|| "main window".to_string());
-                let control_ids = fill_controls
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(PlatformError::OperationFailed(format!(
-                    "DefineLayout rejected: parent {parent_desc} has multiple DockStyle::Fill children ({control_ids}). CommanDuctUI supports exactly one Fill child per parent."
-                )));
-            }
-        }
-
-        Ok(())
     }
 
     pub(super) fn populate_list_box(

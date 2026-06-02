@@ -16,6 +16,7 @@
 pub mod app;
 #[cfg(target_os = "windows")]
 pub(crate) mod command_executor;
+pub(crate) mod contracts;
 #[cfg(target_os = "windows")]
 pub(crate) mod controls;
 pub mod error;

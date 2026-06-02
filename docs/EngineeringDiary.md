@@ -110,3 +110,9 @@ Type: Implementation
 Context: The headless backend had grown large enough that its tests, stable JSON snapshot DTOs, and command interpreter obscured the harness and protocol flow.
 Change: Moved the extracted headless tests into `src/headless/tests.rs`, moved the `*Snapshot` DTOs and their `From` serializers into `src/headless/snapshot.rs`, moved `HeadlessBackend` plus its command handlers/validators into `src/headless/backend.rs`, moved JSON-lines protocol wire DTOs/conversions into `src/headless/protocol.rs`, and moved the window/control/tree/menu/chart state model into `src/headless/state.rs`. Visibility remains scoped to the parent module so the public `headless` API is unchanged.
 Refs: src/headless.rs, src/headless/backend.rs, src/headless/protocol.rs, src/headless/snapshot.rs, src/headless/state.rs, src/headless/tests.rs
+
+## 2026-06-02 - Headless contract catalog seeded
+Type: Implementation
+Context: The headless backend needed a durable way to prevent Win32/headless fidelity drift as the contract surface grows.
+Change: Added `src/contracts.rs` as the shared pure-contract home, extracted `validate_layout_rules` so Win32 and headless call the same validator, seeded an append-only contract catalog in tests, and added headless parity/pinning tests for programmatic `Set*` silence plus state mutation, the `SetTreeViewSelection` event exception, disabled listbox row selection, modal completion ordering, and `ExpandVisibleTreeItems` expanding the full logical tree. The shared validator also makes Win32's multi-parent layout-violation error ordering deterministic. No public API changed.
+Refs: src/contracts.rs, src/window_common.rs, src/headless/backend.rs, src/headless/tests.rs, docs/Roadmap.HeadlessRenderBackend.md

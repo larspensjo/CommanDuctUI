@@ -1638,6 +1638,383 @@ fn hidden_tree_toggle_is_silent() {
 }
 
 #[test]
+fn parity_table_programmatic_set_commands_are_silent_except_tree_selection() {
+    let mut backend = HeadlessBackend::new("app".into());
+    let window_id = backend.create_window(WindowConfig {
+        title: "Window",
+        width: 320,
+        height: 240,
+    });
+    for command in [
+        PlatformCommand::CreateListBox {
+            window_id,
+            parent_control_id: None,
+            control_id: ControlId::new(1),
+        },
+        PlatformCommand::PopulateListBox {
+            window_id,
+            control_id: ControlId::new(1),
+            items: vec![ListBoxItemDescriptor {
+                id: ListBoxItemId::new(10),
+                badges: vec![],
+                title: "Disabled row".into(),
+                metadata: String::new(),
+                enabled: false,
+            }],
+            badge_column_width: 0,
+        },
+        PlatformCommand::CreateComboBox {
+            window_id,
+            parent_control_id: None,
+            control_id: ControlId::new(2),
+        },
+        PlatformCommand::SetComboBoxItems {
+            window_id,
+            control_id: ControlId::new(2),
+            items: vec!["A".into(), "B".into()],
+        },
+        PlatformCommand::CreateCheckBox {
+            window_id,
+            parent_control_id: None,
+            control_id: ControlId::new(3),
+            text: "Check".into(),
+        },
+        PlatformCommand::CreateTabBar {
+            window_id,
+            parent_control_id: None,
+            control_id: ControlId::new(4),
+            items: vec!["One".into(), "Two".into()],
+        },
+        PlatformCommand::CreateToggleSwitch {
+            window_id,
+            parent_control_id: None,
+            control_id: ControlId::new(5),
+            label: "Toggle".into(),
+            checked: false,
+        },
+        PlatformCommand::CreateRadioButton {
+            window_id,
+            parent_control_id: None,
+            control_id: ControlId::new(6),
+            text: "Radio".into(),
+            group_start: true,
+        },
+        PlatformCommand::CreateInput {
+            window_id,
+            parent_control_id: None,
+            control_id: ControlId::new(7),
+            initial_text: String::new(),
+            read_only: false,
+            multiline: true,
+            vertical_scroll: true,
+        },
+        PlatformCommand::CreateTreeView {
+            window_id,
+            parent_control_id: None,
+            control_id: ControlId::new(8),
+        },
+        PlatformCommand::PopulateTreeView {
+            window_id,
+            control_id: ControlId::new(8),
+            items: vec![TreeItemDescriptor {
+                id: TreeItemId::new(80),
+                text: "Tree row".into(),
+                is_folder: false,
+                state: CheckState::Unchecked,
+                style_override: None,
+                children: vec![],
+            }],
+        },
+    ] {
+        backend.execute_platform_command(command).unwrap();
+    }
+
+    let silent_rows = vec![
+        (
+            "SetListBoxSelection selects disabled rows silently",
+            PlatformCommand::SetListBoxSelection {
+                window_id,
+                control_id: ControlId::new(1),
+                item_id: ListBoxItemId::new(10),
+            },
+        ),
+        (
+            "SetComboBoxSelection is silent",
+            PlatformCommand::SetComboBoxSelection {
+                window_id,
+                control_id: ControlId::new(2),
+                selected_index: Some(1),
+            },
+        ),
+        (
+            "SetCheckBoxChecked is silent",
+            PlatformCommand::SetCheckBoxChecked {
+                window_id,
+                control_id: ControlId::new(3),
+                checked: true,
+            },
+        ),
+        (
+            "SetTabBarSelection is silent",
+            PlatformCommand::SetTabBarSelection {
+                window_id,
+                control_id: ControlId::new(4),
+                selected_index: 1,
+            },
+        ),
+        (
+            "SetToggleSwitchState is silent",
+            PlatformCommand::SetToggleSwitchState {
+                window_id,
+                control_id: ControlId::new(5),
+                checked: true,
+            },
+        ),
+        (
+            "SetRadioButtonChecked is silent",
+            PlatformCommand::SetRadioButtonChecked {
+                window_id,
+                control_id: ControlId::new(6),
+                checked: true,
+            },
+        ),
+        (
+            "SetScrollPosition is silent",
+            PlatformCommand::SetScrollPosition {
+                window_id,
+                control_id: ControlId::new(7),
+                vertical_pos: 4,
+                horizontal_pos: 5,
+            },
+        ),
+    ];
+
+    for (name, command) in silent_rows {
+        backend.follow_up_events.clear();
+        backend
+            .execute_platform_command(command)
+            .unwrap_or_else(|err| panic!("{name} failed: {err}"));
+        assert!(
+            backend.follow_up_events.is_empty(),
+            "{name} should not enqueue an event"
+        );
+    }
+
+    let snapshot =
+        serde_json::from_str::<Value>(&serde_json::to_string(&backend.snapshot()).unwrap())
+            .unwrap();
+    let controls = snapshot["windows"][0]["controls"].as_array().unwrap();
+    assert_eq!(controls[0]["selected_item_id"], 10);
+    assert_eq!(controls[1]["selected_index"], 1);
+    assert_eq!(controls[2]["checked"], true);
+    assert_eq!(controls[3]["selected_index"], 1);
+    assert_eq!(controls[4]["checked"], true);
+    assert_eq!(controls[5]["checked"], true);
+    assert_eq!(controls[6]["scroll_vertical"], 4);
+    assert_eq!(controls[6]["scroll_horizontal"], 5);
+
+    backend
+        .execute_platform_command(PlatformCommand::SetTreeViewSelection {
+            window_id,
+            control_id: ControlId::new(8),
+            item_id: TreeItemId::new(80),
+        })
+        .unwrap();
+    assert!(matches!(
+        backend.follow_up_events.pop_front(),
+        Some(AppEvent::TreeViewItemSelectionChanged {
+            window_id: got_window_id,
+            item_id,
+        }) if got_window_id == window_id && item_id == TreeItemId::new(80)
+    ));
+}
+
+#[test]
+fn parity_table_disabled_listbox_rows_remain_user_selectable() {
+    let mut harness = HeadlessHarness::new("app");
+    let window_id = harness
+        .create_window(WindowConfig {
+            title: "Window",
+            width: 320,
+            height: 240,
+        })
+        .unwrap();
+    let handler = Arc::new(Mutex::new(TestHandler {
+        events: Vec::new(),
+        commands: VecDeque::new(),
+    }));
+    let provider = Arc::new(Mutex::new(SilentProvider));
+    harness
+        .start(
+            handler.clone(),
+            provider,
+            vec![
+                PlatformCommand::CreateListBox {
+                    window_id,
+                    parent_control_id: None,
+                    control_id: ControlId::new(1),
+                },
+                PlatformCommand::PopulateListBox {
+                    window_id,
+                    control_id: ControlId::new(1),
+                    items: vec![ListBoxItemDescriptor {
+                        id: ListBoxItemId::new(10),
+                        badges: vec![],
+                        title: "Disabled row".into(),
+                        metadata: String::new(),
+                        enabled: false,
+                    }],
+                    badge_column_width: 0,
+                },
+                PlatformCommand::ShowWindow { window_id },
+            ],
+        )
+        .unwrap();
+
+    harness
+        .select_row(window_id, ControlId::new(1), ListBoxItemId::new(10))
+        .unwrap();
+
+    assert!(matches!(
+        handler.lock().unwrap().events.as_slice(),
+        [AppEvent::ListBoxItemSelectionChanged {
+            window_id: got_window_id,
+            control_id,
+            item_id,
+        }] if *got_window_id == window_id
+            && *control_id == ControlId::new(1)
+            && *item_id == ListBoxItemId::new(10)
+    ));
+    let snapshot = serde_json::from_str::<Value>(&harness.snapshot().unwrap()).unwrap();
+    assert_eq!(
+        snapshot["windows"][0]["controls"][0]["selected_item_id"],
+        10
+    );
+}
+
+#[test]
+fn divergence_modal_dialog_completion_runs_after_already_queued_commands() {
+    struct CompletionHandler {
+        commands: VecDeque<PlatformCommand>,
+    }
+
+    impl PlatformEventHandler for CompletionHandler {
+        fn handle_event(&mut self, event: AppEvent) {
+            if matches!(event, AppEvent::GenericInputDialogCompleted { .. }) {
+                self.commands.push_back(PlatformCommand::Checkpoint {
+                    label: "completion-event".into(),
+                });
+            }
+        }
+
+        fn try_dequeue_command(&mut self) -> Option<PlatformCommand> {
+            self.commands.pop_front()
+        }
+    }
+
+    let mut harness = HeadlessHarness::new("app");
+    let window_id = harness
+        .create_window(WindowConfig {
+            title: "Window",
+            width: 320,
+            height: 240,
+        })
+        .unwrap();
+    let handler = Arc::new(Mutex::new(CompletionHandler {
+        commands: VecDeque::new(),
+    }));
+    let provider = Arc::new(Mutex::new(SilentProvider));
+    harness
+        .start(
+            handler,
+            provider,
+            vec![
+                PlatformCommand::ShowInputDialog {
+                    window_id,
+                    title: "Input".into(),
+                    prompt: "Value".into(),
+                    default_text: None,
+                    context_tag: None,
+                },
+                PlatformCommand::Checkpoint {
+                    label: "after-dialog-command".into(),
+                },
+            ],
+        )
+        .unwrap();
+
+    assert_eq!(
+        harness.backend.markers,
+        vec![
+            "after-dialog-command".to_string(),
+            "completion-event".to_string()
+        ]
+    );
+}
+
+#[test]
+fn divergence_expand_visible_tree_items_expands_full_logical_tree() {
+    let mut backend = HeadlessBackend::new("app".into());
+    let window_id = backend.create_window(WindowConfig {
+        title: "Window",
+        width: 320,
+        height: 240,
+    });
+    backend
+        .execute_platform_command(PlatformCommand::CreateTreeView {
+            window_id,
+            parent_control_id: None,
+            control_id: ControlId::new(1),
+        })
+        .unwrap();
+    backend
+        .execute_platform_command(PlatformCommand::PopulateTreeView {
+            window_id,
+            control_id: ControlId::new(1),
+            items: vec![TreeItemDescriptor {
+                id: TreeItemId::new(10),
+                text: "Parent".into(),
+                is_folder: true,
+                state: CheckState::Unchecked,
+                style_override: None,
+                children: vec![TreeItemDescriptor {
+                    id: TreeItemId::new(11),
+                    text: "Child".into(),
+                    is_folder: true,
+                    state: CheckState::Unchecked,
+                    style_override: None,
+                    children: vec![TreeItemDescriptor {
+                        id: TreeItemId::new(12),
+                        text: "Grandchild".into(),
+                        is_folder: false,
+                        state: CheckState::Unchecked,
+                        style_override: None,
+                        children: vec![],
+                    }],
+                }],
+            }],
+        })
+        .unwrap();
+
+    backend
+        .execute_platform_command(PlatformCommand::ExpandVisibleTreeItems {
+            window_id,
+            control_id: ControlId::new(1),
+        })
+        .unwrap();
+
+    let snapshot =
+        serde_json::from_str::<Value>(&serde_json::to_string(&backend.snapshot()).unwrap())
+            .unwrap();
+    let parent = &snapshot["windows"][0]["controls"][0]["items"][0];
+    let child = &parent["children"][0];
+    let grandchild = &child["children"][0];
+    assert_eq!(parent["expanded"], true);
+    assert_eq!(child["expanded"], true);
+    assert_eq!(grandchild["expanded"], true);
+}
+
+#[test]
 fn chart_menu_style_and_scroll_commands_update_snapshot() {
     let mut backend = HeadlessBackend::new("app".into());
     let window_id = backend.create_window(WindowConfig {

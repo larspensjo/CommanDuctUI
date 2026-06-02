@@ -987,61 +987,8 @@ impl NativeWindowData {
     }
 
     pub(crate) fn define_layout(&mut self, rules: Vec<LayoutRule>) -> PlatformResult<()> {
-        Self::validate_layout_rules(&rules)?;
+        crate::contracts::validate_layout_rules(&rules)?;
         self.layout_rules = Some(rules);
-        Ok(())
-    }
-
-    fn validate_layout_rules(rules: &[LayoutRule]) -> PlatformResult<()> {
-        let mut fill_by_parent: HashMap<Option<ControlId>, Vec<ControlId>> = HashMap::new();
-        for rule in rules {
-            match rule.dock_style {
-                DockStyle::Top | DockStyle::Bottom | DockStyle::Left | DockStyle::Right => {
-                    if rule.fixed_size.is_none() {
-                        return Err(PlatformError::OperationFailed(format!(
-                            "DefineLayout rejected: control {} uses {:?} without fixed_size. Docked edges require explicit fixed_size.",
-                            rule.control_id.raw(),
-                            rule.dock_style
-                        )));
-                    }
-                    if let Some(size) = rule.fixed_size
-                        && size < 0
-                    {
-                        return Err(PlatformError::OperationFailed(format!(
-                            "DefineLayout rejected: control {} has negative fixed_size {} for {:?}.",
-                            rule.control_id.raw(),
-                            size,
-                            rule.dock_style
-                        )));
-                    }
-                }
-                _ => {}
-            }
-
-            if rule.dock_style == DockStyle::Fill {
-                fill_by_parent
-                    .entry(rule.parent_control_id)
-                    .or_default()
-                    .push(rule.control_id);
-            }
-        }
-
-        for (parent_id, fill_controls) in fill_by_parent {
-            if fill_controls.len() > 1 {
-                let parent_desc = parent_id
-                    .map(|id| format!("control {}", id.raw()))
-                    .unwrap_or_else(|| "main window".to_string());
-                let control_ids = fill_controls
-                    .iter()
-                    .map(|id| id.raw().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(PlatformError::OperationFailed(format!(
-                    "DefineLayout rejected: parent {parent_desc} has multiple DockStyle::Fill children ({control_ids}). CommanDuctUI supports exactly one Fill child per parent."
-                )));
-            }
-        }
-
         Ok(())
     }
 
@@ -3483,7 +3430,7 @@ mod tests {
             },
         ];
 
-        let err = NativeWindowData::validate_layout_rules(&rules)
+        let err = crate::contracts::validate_layout_rules(&rules)
             .expect_err("multiple Fill siblings should be rejected");
         assert_layout_operation_failed(err, &["Fill", "10", "11"]);
     }
@@ -3517,7 +3464,7 @@ mod tests {
             },
         ];
 
-        NativeWindowData::validate_layout_rules(&rules)
+        crate::contracts::validate_layout_rules(&rules)
             .expect("one Fill child per parent should be valid");
     }
 
@@ -3532,7 +3479,7 @@ mod tests {
             margin: (0, 0, 0, 0),
         }];
 
-        let err = NativeWindowData::validate_layout_rules(&rules)
+        let err = crate::contracts::validate_layout_rules(&rules)
             .expect_err("Top dock without fixed_size should be rejected");
         assert_layout_operation_failed(err, &["30", "Top", "fixed_size"]);
     }
@@ -3548,7 +3495,7 @@ mod tests {
             margin: (0, 0, 0, 0),
         }];
 
-        let err = NativeWindowData::validate_layout_rules(&rules)
+        let err = crate::contracts::validate_layout_rules(&rules)
             .expect_err("Negative fixed_size should be rejected");
         assert_layout_operation_failed(err, &["31", "-1", "Left", "fixed_size"]);
     }

@@ -1,7 +1,7 @@
 # Roadmap: Headless text-rendering backend for CommanDuctUI
 
 Status: Active — Phase 1 done; Phase 2a done; Phase 2b done; Phase 2c done;
-Phase 2d done; Phase 3a (shared contract suite) in planning — 2026-06-01
+Phase 2d done; Phase 3a (shared contract suite) done — 2026-06-02
 Design spec: `docs/Spec.HeadlessRenderBackend.md`
 
 This is the **living control document** for an iterative, review-driven build. The spec
@@ -33,7 +33,7 @@ dedicated `Plan.HeadlessRenderBackend.PhaseN.md` and link it from the table.
 | 2b | Remaining controls/commands: treeview, chart, menu, styling, scroll | `done` | §"Phase 2b (done)" below |
 | 2c | `--headless` stdio JSON protocol | `done` | §"Phase 2c (done)" below |
 | 2d | External dialog-scripting protocol (drive `Show*Dialog` outcomes from shape 2) | `done` | §"Phase 2d (done)" below |
-| 3a | Fidelity-C: shared contract-test suite (catalog + dedup-where-pure + parity tables + divergence register) | `wip` | §"Phase 3a (wip)" below |
+| 3a | Fidelity-C: shared contract-test suite (catalog + dedup-where-pure + parity tables + divergence register) | `done` | §"Phase 3a (done)" below |
 | 3b | Fidelity-C: optional harness-owned executor for deterministic async | `todo` | Spec §15 (expand when reached) |
 | 3c | Fidelity-C: broader input vocabulary (keyboard nav, listbox scroll) | `todo` | Spec §15 (expand when reached) |
 
@@ -451,7 +451,7 @@ Completion checklist:
 - [x] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
       `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
 
-## Phase 3a (wip)
+## Phase 3a (done)
 
 **Goal (Spec §14, §15, §16).** Begin the road to fidelity-C with the **shared contract-test suite** —
 the principal mitigation for fidelity drift (§16). This sub-phase establishes two durable structures
@@ -476,11 +476,11 @@ The two structures (Spec §14, §16):
   modal-completion ordering is an intentional non-blocking-pump choice; `ExpandVisible`/`ExpandAll`
   hinges on viewport visibility, which is geometry and therefore out of scope (Spec §2).
 
-**Audit / starting point (2026-06-01).**
-- `validate_layout_rules` is **duplicated verbatim**: `src/window_common.rs:995` (Win32) and
-  `src/headless/backend.rs:922` (headless) — same checks, character-identical error strings, pure
-  function of `&[LayoutRule]`. This is the canonical *shared-pure* extraction target and the first
-  concrete deliverable.
+**Audit / starting point (2026-06-01; implementation update 2026-06-02).**
+- `validate_layout_rules` started **duplicated verbatim** between Win32 and headless. It is now
+  extracted to `src/contracts.rs`, with both backends calling the shared pure seam and a table test
+  covering the existing validation rules. The extraction also makes Win32's multi-parent
+  layout-violation error ordering deterministic.
 - Other *shared-pure* candidates to confirm during 3a: radio grouping by `group_start`
   (`src/controls/radiobutton_handler.rs`), and the disabled-row-selectable predicate.
 - *Parity-only* contracts already implemented on both sides but not asserted as a shared table:
@@ -493,44 +493,53 @@ The two structures (Spec §14, §16):
 Completion checklist:
 
 ### Contract catalog
-- [ ] Add the contract-catalog list (Spec §14) as the index of the documented behaviors, each tagged
+- [x] Add the contract-catalog list (Spec §14) as the index of the documented behaviors, each tagged
       *shared-pure* or *parity-only*. Seed it with the behaviors enumerated in the audit; document
       that it is append-only and load-bearing.
-- [ ] Decide the catalog's physical home (a `#[cfg(test)]` contract module that enumerates the
+- [x] Decide the catalog's physical home (a `#[cfg(test)]` contract module that enumerates the
       data-driven cases, referenced from the Spec) so future behaviors have an obvious place to land.
+      Decision: `src/contracts.rs` owns shared pure seams and the append-only test catalog; headless
+      parity tables stay in `src/headless/tests.rs` where backend internals are reachable.
 
 ### Dedup the shared-pure seams (one source of truth)
-- [ ] Extract `validate_layout_rules` into a single shared pure function both backends call; delete
+- [x] Extract `validate_layout_rules` into a single shared pure function both backends call; delete
       the headless copy and the Win32 copy's body in favor of the shared seam. No behavior change,
       no geometry — the error strings stay identical.
-- [ ] Test the shared seam once (table of layout-rule inputs → expected `Ok`/`PlatformError`),
+- [x] Test the shared seam once (table of layout-rule inputs → expected `Ok`/`PlatformError`),
       covering the docked-edge-needs-`fixed_size`, negative-`fixed_size`, and one-`Fill`-per-parent
       rules.
-- [ ] Confirm the further *shared-pure* candidates (radio grouping by `group_start`,
+- [x] Confirm the further *shared-pure* candidates (radio grouping by `group_start`,
       disabled-row-selectable predicate); extract the ones that are genuinely pure, or reclassify
       them *parity-only* in the catalog with a note on why they can't be deduplicated.
+      Decision: both stay *parity-only* for now. Radio grouping is native button-group behavior on
+      Win32; disabled-row selection is a user/native-event contract rather than a standalone shared
+      reducer seam.
 
 ### Parity tables (irreducible behaviors)
-- [ ] Add data-driven parity tables for the *parity-only* contracts asserted on the headless backend:
+- [x] Add data-driven parity tables for the *parity-only* contracts asserted on the headless backend:
       programmatic-`Set*` silence + the `SetTreeViewSelection` exception; hidden-state tree-toggle
       suppression; disabled-row-selectable. Each row is (input → expected logical outcome / emitted
       event-or-silence).
-- [ ] Mirror the same tables on Win32 behind `#[cfg(target_os = "windows")]` where a pure seam is
+- [x] Mirror the same tables on Win32 behind `#[cfg(target_os = "windows")]` where a pure seam is
       reachable; where Win32 truly needs an `HWND`, document the table as headless-asserted with the
       Win32 contract referenced by code location.
+      Decision: no extra Win32 mirror was added for native-message-backed contracts because they need
+      HWND/control message routing. Existing Win32 pure tests now call the shared layout seam; the
+      remaining rows are pinned on headless and tied to native code locations in the Spec/Roadmap.
 
 ### Divergence register
-- [ ] Record the divergence register (Spec §16) with both current entries dispositioned `accept`:
+- [x] Record the divergence register (Spec §16) with both current entries dispositioned `accept`:
       modal-completion ordering (non-blocking pump) and `ExpandVisible`/`ExpandAll` (geometry-bound).
-- [ ] Add a pinning test for each accepted divergence that locks the documented current behavior, so
+- [x] Add a pinning test for each accepted divergence that locks the documented current behavior, so
       an accidental change to either surfaces as a test failure rather than silent drift.
-- [ ] Document the standing **fix-or-pin rule** so every future divergence gets a disposition.
+- [x] Document the standing **fix-or-pin rule** so every future divergence gets a disposition.
 
 ### Cross-cutting / definition of done
-- [ ] Determine the release impact: if the dedup is internal-only (no public API change), **no
+- [x] Determine the release impact: if the dedup is internal-only (no public API change), **no
       version bump** is required; if any public surface changes, bump `Cargo.toml` + `CHANGELOG.md`
-      together. Decide and record during implementation.
-- [ ] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
+      together. Decision: no public surface changed; no version bump and no changelog entry.
+- [x] `cargo build` and `cargo test` green during implementation.
+- [x] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
       `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
 
 ## Iteration log
@@ -655,7 +664,7 @@ Roadmap deltas.
 - 2026-06-01 — Phase 3 prep / planning (toward fidelity-C). Split Phase 3 into rolling-wave
   sub-phases — 3a shared contract-test suite (in flight), 3b deterministic-async executor, 3c
   broader input vocabulary — detailing only 3a. Audited the documented behaviors: confirmed
-  `validate_layout_rules` is duplicated **verbatim** across `window_common.rs:995` and
+  `validate_layout_rules` was duplicated **verbatim** across `window_common.rs:995` and
   `headless/backend.rs:922` (the canonical *shared-pure* extraction target), and that
   `expand_visible_tree_items` (`treeview_handler.rs:722`) keys on `TVGN_*VISIBLE`, confirming the
   expand-visible divergence is geometry-bound. Locked in two design decisions: (1) **dedup
@@ -668,6 +677,20 @@ Roadmap deltas.
   (divergence register + fix-or-pin rule). Expanded the in-flight 3a checklist into
   catalog / dedup / parity-table / divergence-register / DoD workstreams. Marked 3a `wip`; no
   release planned yet (likely internal-only, version TBD during implementation).
+- 2026-06-02 — Phase 3a implementation. Added `src/contracts.rs` as the physical home for shared
+  pure contracts and seeded its append-only catalog. Extracted `validate_layout_rules` so Win32 and
+  headless both call the same pure function, with a table test covering the current layout
+  validation rules. Added headless parity tables for programmatic `Set*` silence, the
+  `SetTreeViewSelection` event-bearing exception, disabled listbox row selection, and the existing
+  hidden tree-toggle suppression contract. Added pinning tests for the two accepted divergences:
+  modal dialog completions run after already queued commands in headless, and
+  `ExpandVisibleTreeItems` expands the full logical tree because viewport geometry is out of scope.
+  No public API changed, so no version bump or changelog entry.
+- 2026-06-02 — Phase 3a implementation review follow-up applied. Softened the catalog wording to
+  reflect that parity-only entries are review-enforced rather than compile-time registered, named
+  the backing tests in the catalog, strengthened the programmatic `Set*` table to assert both
+  silence and state mutation, and recorded that sharing `validate_layout_rules` also de-randomized
+  Win32's multi-parent layout-violation error ordering. Marked 3a `done`.
 
 ## Parking lot
 

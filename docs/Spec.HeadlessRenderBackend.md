@@ -2,10 +2,10 @@
 
 Status: Living design spec — Phase 1 delivered; Phase 2a delivered; Phase 2b delivered;
 Phase 2c (external protocol) delivered; Phase 2d (external dialog scripting) delivered;
-Phase 3a (shared contract suite, toward fidelity-C) in planning — 2026-06-01
+Phase 3a (shared contract suite, toward fidelity-C) delivered — 2026-06-02
 Owner: Lars Pensjö
 Reviews applied: design review; Phase 1 implementation review; Phase 2c plan review;
-Phase 2d implementation review.
+Phase 2d implementation review; Phase 3a implementation review.
 
 > This is the design **spec** (the `Spec.` prefix denotes a design document). The
 > implementation plan is produced separately and follows the repo's `Plan.` convention.
@@ -491,9 +491,9 @@ headless backends must honor. Each entry is tagged with how parity is guaranteed
 
 - **shared-pure** — the behavior is a pure function of its inputs (no `HWND`, no geometry, no native
   state). These are extracted into **one shared source of truth** both backends call, so the two
-  cannot drift. Tested once against the shared seam. First target: `validate_layout_rules` (today
-  duplicated verbatim — see §3 caveat). Candidates to confirm: radio grouping by `group_start`, the
-  disabled-row-selectable predicate.
+  cannot drift. Tested once against the shared seam. `validate_layout_rules` is shared by Win32 and
+  headless; this also makes Win32's multi-parent layout-violation error ordering deterministic.
+  Candidates to confirm: radio grouping by `group_start`, the disabled-row-selectable predicate.
 - **parity-only** — the behavior legitimately differs in implementation because Win32 routes through
   native messages (it cannot be deduplicated without changing the production Win32 contract).
   Guaranteed instead by a **data-driven parity table** (input → expected logical outcome) asserted
@@ -502,9 +502,11 @@ headless backends must honor. Each entry is tagged with how parity is guaranteed
   `SetTreeViewSelection` event-bearing exception (§7); hidden-state tree-toggle suppression (no
   event, state stays `Hidden`); disabled listbox rows remain selectable.
 
-The catalog is **append-only and load-bearing**: every newly landed behavior that both backends must
-share gets an entry and the matching test, which is how the "mirror only the dispatch `match`"
-insufficiency (§3, §13) is paid down over time rather than re-accruing.
+The catalog is an **append-only, review-enforced index**: every newly landed behavior that both
+backends must share gets an entry and the matching test. Shared-pure entries are compiler-backed by
+one implementation; parity-only entries are backed by named tests and review discipline. This is how
+the "mirror only the dispatch `match`" insufficiency (§3, §13) is paid down over time rather than
+re-accruing.
 
 ## 15. Phasing (YAGNI)
 
@@ -557,16 +559,15 @@ insufficiency (§3, §13) is paid down over time rather than re-accruing.
 **Phase 3 — toward fidelity-C.** Split into rolling-wave sub-phases; only the in-flight sub-phase
 is detailed (the others stay one-liners until reached, per the Roadmap workflow).
 
-- **Phase 3a — shared contract-test suite (in flight).** The road to fidelity-C and the principal
+- **Phase 3a — shared contract-test suite (delivered).** The road to fidelity-C and the principal
   mitigation for fidelity drift (§16). Establish the **contract catalog** (§14) — a single
   referenceable list of the documented behavioral contracts, each tagged *shared-pure* or
   *parity-only* — and the **divergence register** (§16) recording every known Win32↔headless
   divergence with a deliberate disposition. Two mechanisms back the catalog:
   - *Dedup where pure.* Behaviors that are pure functions of their inputs (no `HWND`, no geometry)
     are extracted into **one shared source of truth** both backends call, so drift becomes
-    structurally impossible. The first target is `validate_layout_rules`, today duplicated
-    verbatim across the Win32 and headless backends; further genuinely-pure seams fold in as
-    confirmed.
+    structurally impossible. The first target, `validate_layout_rules`, is now shared by the Win32
+    and headless backends; further genuinely-pure seams fold in as confirmed.
   - *Parity tables for the rest.* Behaviors that legitimately differ in implementation because
     Win32 routes through native messages (e.g. programmatic-`Set*` silence and its
     `SetTreeViewSelection` exception, hidden-state tree-toggle suppression) get data-driven
