@@ -2,7 +2,9 @@
 
 Status: Living design spec — Phase 1 delivered; Phase 2a delivered; Phase 2b delivered;
 Phase 2c (external protocol) delivered; Phase 2d (external dialog scripting) delivered;
-Phase 3a (shared contract suite, toward fidelity-C) delivered — 2026-06-02
+Phase 3a (shared contract suite, toward fidelity-C) delivered — 2026-06-02;
+Phase 3b (deterministic-async executor) deferred to the parking lot;
+Phase 3c (broader input vocabulary) in flight — 2026-06-02
 Owner: Lars Pensjö
 Reviews applied: design review; Phase 1 implementation review; Phase 2c plan review;
 Phase 2d implementation review; Phase 3a implementation review.
@@ -573,10 +575,23 @@ is detailed (the others stay one-liners until reached, per the Roadmap workflow)
     `SetTreeViewSelection` exception, hidden-state tree-toggle suppression) get data-driven
     contract tables asserted on the headless backend, mirrored on Win32 behind
     `#[cfg(target_os = "windows")]` where feasible. The table is the shared source of truth.
-- **Phase 3b — deterministic async.** Optional harness-owned executor for fully deterministic
-  background work (§8).
-- **Phase 3c — broader input vocabulary.** Keyboard navigation; listbox scroll (`ListBoxScrolled`)
-  and any remaining user-input gaps.
+- **Phase 3b — deterministic async (deferred).** An optional harness-owned executor for fully
+  deterministic background work (§8). **Deferred to the parking lot (2026-06-02):** the intended
+  integration-test shape — a pre-defined input/state sequence ending in a `wait_for` over a
+  `Checkpoint` — is already served by the existing pump + `Checkpoint` + `wait_for` (with a timeout
+  backstop), so the executor unblocks no test today. Revisit only if real-thread timing makes
+  `wait_for` flaky, or async work must bypass the command channel.
+- **Phase 3c — broader input vocabulary (in flight).** Expose the three Win32 user-input events that
+  have no headless semantic action yet — listbox user scroll (`ListBoxScrolled`), listbox key-down
+  (`ListBoxItemKeyDown`), and input key-down (`InputKeyDown { modifiers }`) — each as a new harness
+  action emitting the canonical `AppEvent` and appending a parity-only row to the contract catalog
+  (§14). All three are anchored to the existing pure `translate_*` seams in `window_common.rs`. The
+  listbox-scroll action also resolves the Phase 2b parking-lot item (2b scoped the `scroll` action to
+  edit-family controls and rejected listboxes). **Scope decision: key/scroll *events* only — no
+  logical focus/tab-order model.** Win32 keyboard navigation
+  (`src/controls/keyboard_navigation.rs`) is tab-stop / `WM_GETDLGCODE` wiring with no logical
+  snapshot surface, so modeling traversal order would invent state Win32 exposes only natively — out
+  of scope A (§2), parked unless a concrete need appears.
 - Geometry remains out of scope unless a concrete need appears.
 
 ## 16. Open questions / risks
