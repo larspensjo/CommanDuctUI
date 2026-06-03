@@ -17,6 +17,41 @@ This approach creates a strong boundary between your application's core logic an
 -   **`AppEvent`**: An enum representing a notification *from* the UI layer. The library sends these to your application when a user does something.
 -   **`PlatformEventHandler`**: A trait your application logic must implement to receive events and provide commands to the library.
 
+## Headless / testable mode
+
+Alongside the Win32 backend, CommanDuctUI ships a **headless backend** that interprets the
+same `PlatformCommand` stream into an in-memory UI model and serializes it as JSON — no
+window, no Win32, no human in the loop. It exists so you can drive a real application on
+synthetic or live data and assert on the resulting UI state. It is **not** a TUI; the output
+only needs to be faithful and machine-parseable.
+
+The headless backend is pure Rust (model + `serde`) and is **always compiled, on every
+platform** — including Linux and CI. Two ways to drive it:
+
+- **In-process Rust harness** for integration tests — link your app-core and call
+  `HeadlessHarness` methods directly:
+
+  ```rust
+  let mut harness = HeadlessHarness::new("MyApp");
+  let window_id = harness.create_window(config)?;
+  let (handler, provider, initial_commands) = build_app_core(window_id);
+  harness.start(handler, provider, initial_commands)?;
+
+  harness.click(window_id, some_button)?;
+  harness.wait_for("done", std::time::Duration::from_secs(5))?;
+  let json = harness.snapshot()?;   // assert on this
+  ```
+
+- **`--headless` stdio JSON protocol** for external / AI-driven harnesses — a separate
+  process drives the shipped binary over JSON lines:
+
+  ```powershell
+  cargo run --example hello_window -- --headless
+  ```
+
+See **[docs/HeadlessMode.md](docs/HeadlessMode.md)** for the full guide (the app-core
+pattern, both delivery shapes, the protocol, and dialog scripting).
+
 ## Integration as a Git Submodule
 
 This library is designed to be integrated as a Git submodule, allowing for tight, coordinated development between the library and its consumer while maintaining a clean project separation.
