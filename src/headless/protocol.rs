@@ -4,7 +4,7 @@ use crate::{PlatformError, PlatformResult, WindowId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub(super) const HEADLESS_PROTOCOL_VERSION: u32 = 2;
+pub(super) const HEADLESS_PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ProtocolRequestEnvelope {
@@ -89,6 +89,27 @@ pub(super) enum ProtocolActionRequest {
         control_id: i32,
         vertical_pos: u32,
         horizontal_pos: u32,
+    },
+    #[serde(rename = "scroll_listbox")]
+    ScrollListBox {
+        window_id: usize,
+        control_id: i32,
+        position: u32,
+    },
+    #[serde(rename = "key_listbox")]
+    KeyListBox {
+        window_id: usize,
+        control_id: i32,
+        key_code: u16,
+    },
+    #[serde(rename = "key_input")]
+    KeyInput {
+        window_id: usize,
+        control_id: i32,
+        key_code: u16,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
     },
 }
 

@@ -6,7 +6,7 @@ use super::{
 use crate::{
     AppEvent, ChartDataPacket, ChartLineData, ChartLineEmphasis, CheckState, Color, ControlId,
     ControlStyle, DockStyle, FormButtons, FormDialogDescriptor, FormField, FormFieldValue, FormRow,
-    FormTextValidation, LabelClass, LayoutRule, ListBoxItemDescriptor, ListBoxItemId,
+    FormTextValidation, KeyModifiers, LabelClass, LayoutRule, ListBoxItemDescriptor, ListBoxItemId,
     ListBoxRowDensity, MenuActionId, MenuItemConfig, MessageSeverity, PlatformCommand,
     PlatformError, PlatformEventHandler, SplitterOrientation, StyleId, TreeItemDescriptor,
     TreeItemId, UiStateProvider, WindowConfig, WindowId,
@@ -272,6 +272,161 @@ fn protocol_actions_round_trip_and_wait_for_is_cursor_relative() {
     assert_eq!(lines[5]["label"], "done");
     assert_eq!(lines[6]["request_id"], 4);
     assert_eq!(flushes, 6);
+}
+
+#[test]
+fn protocol_broader_input_vocabulary_actions_round_trip() {
+    struct ProtocolHandler {
+        events: Vec<AppEvent>,
+        commands: VecDeque<PlatformCommand>,
+    }
+
+    impl PlatformEventHandler for ProtocolHandler {
+        fn handle_event(&mut self, event: AppEvent) {
+            self.events.push(event);
+        }
+
+        fn try_dequeue_command(&mut self) -> Option<PlatformCommand> {
+            self.commands.pop_front()
+        }
+    }
+
+    let mut harness = HeadlessHarness::new("app");
+    let window_id = harness
+        .create_window(WindowConfig {
+            title: "Window",
+            width: 320,
+            height: 240,
+        })
+        .unwrap();
+    let handler = Arc::new(Mutex::new(ProtocolHandler {
+        events: Vec::new(),
+        commands: VecDeque::new(),
+    }));
+    let provider = Arc::new(Mutex::new(SilentProvider));
+    harness
+        .start(
+            handler.clone(),
+            provider,
+            vec![
+                PlatformCommand::CreateListBox {
+                    window_id,
+                    parent_control_id: None,
+                    control_id: ControlId::new(1),
+                },
+                PlatformCommand::PopulateListBox {
+                    window_id,
+                    control_id: ControlId::new(1),
+                    items: vec![ListBoxItemDescriptor {
+                        id: ListBoxItemId::new(17),
+                        badges: vec![],
+                        title: "Row".into(),
+                        metadata: String::new(),
+                        enabled: true,
+                    }],
+                    badge_column_width: 0,
+                },
+                PlatformCommand::CreateInput {
+                    window_id,
+                    parent_control_id: None,
+                    control_id: ControlId::new(2),
+                    initial_text: String::new(),
+                    read_only: true,
+                    multiline: false,
+                    vertical_scroll: false,
+                },
+                PlatformCommand::ShowWindow { window_id },
+            ],
+        )
+        .unwrap();
+
+    let protocol_input = format!(
+        "{}\n{}\n{}\n{}\n{}\n",
+        serde_json::json!({
+            "type": "action",
+            "request_id": 1,
+            "action": "scroll_listbox",
+            "window_id": window_id.raw(),
+            "control_id": 1,
+            "position": 48
+        }),
+        serde_json::json!({
+            "type": "snapshot",
+            "request_id": 2
+        }),
+        serde_json::json!({
+            "type": "action",
+            "request_id": 3,
+            "action": "key_listbox",
+            "window_id": window_id.raw(),
+            "control_id": 1,
+            "key_code": 13
+        }),
+        serde_json::json!({
+            "type": "action",
+            "request_id": 4,
+            "action": "key_input",
+            "window_id": window_id.raw(),
+            "control_id": 2,
+            "key_code": 27,
+            "ctrl": true,
+            "shift": false,
+            "alt": true
+        }),
+        serde_json::json!({
+            "type": "snapshot",
+            "request_id": 5
+        })
+    );
+
+    let mut writer = RecordingWriter::new();
+    harness
+        .run_protocol(Cursor::new(protocol_input.into_bytes()), &mut writer)
+        .unwrap();
+
+    let lines = parse_protocol_lines(&writer.into_string());
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["hello", "ok", "snapshot", "ok", "ok", "snapshot", "bye"]
+    );
+    assert_eq!(lines[1]["request_id"], 1);
+    assert_eq!(lines[2]["request_id"], 2);
+    assert_eq!(lines[3]["request_id"], 3);
+    assert_eq!(lines[4]["request_id"], 4);
+    assert_eq!(lines[5]["request_id"], 5);
+    assert_eq!(
+        lines[2]["model"]["windows"][0]["controls"][0]["scroll_vertical"],
+        48
+    );
+    assert_eq!(
+        lines[5]["model"]["windows"][0]["controls"][0]["scroll_vertical"],
+        48
+    );
+    assert_eq!(lines[2]["model"], lines[5]["model"]);
+
+    let events = &handler.lock().unwrap().events;
+    assert!(matches!(
+        events.as_slice(),
+        [
+            AppEvent::ListBoxScrolled {
+                position: 48,
+                ..
+            },
+            AppEvent::ListBoxItemKeyDown { key_code: 13, .. },
+            AppEvent::InputKeyDown {
+                key_code: 27,
+                modifiers,
+                ..
+            }
+        ] if *modifiers == KeyModifiers {
+            ctrl: true,
+            shift: false,
+            alt: true,
+        }
+    ));
 }
 
 #[test]
@@ -2203,6 +2358,117 @@ fn scroll_action_emits_event_and_rejects_list_box() {
         44
     );
     assert!(harness.scroll(window_id, ControlId::new(2), 1, 1).is_err());
+}
+
+#[test]
+fn broader_input_vocabulary_actions_emit_expected_events() {
+    let mut harness = HeadlessHarness::new("app");
+    let window_id = harness
+        .create_window(WindowConfig {
+            title: "Window",
+            width: 320,
+            height: 240,
+        })
+        .unwrap();
+    let handler = Arc::new(Mutex::new(TestHandler {
+        events: Vec::new(),
+        commands: VecDeque::new(),
+    }));
+    let provider = Arc::new(Mutex::new(SilentProvider));
+    harness
+        .start(
+            handler.clone(),
+            provider,
+            vec![
+                PlatformCommand::CreateListBox {
+                    window_id,
+                    parent_control_id: None,
+                    control_id: ControlId::new(1),
+                },
+                PlatformCommand::PopulateListBox {
+                    window_id,
+                    control_id: ControlId::new(1),
+                    items: vec![ListBoxItemDescriptor {
+                        id: ListBoxItemId::new(11),
+                        badges: vec![],
+                        title: "Row".into(),
+                        metadata: String::new(),
+                        enabled: true,
+                    }],
+                    badge_column_width: 0,
+                },
+                PlatformCommand::CreateInput {
+                    window_id,
+                    parent_control_id: None,
+                    control_id: ControlId::new(2),
+                    initial_text: String::new(),
+                    read_only: true,
+                    multiline: false,
+                    vertical_scroll: false,
+                },
+                PlatformCommand::ShowWindow { window_id },
+            ],
+        )
+        .unwrap();
+
+    harness
+        .scroll_listbox(window_id, ControlId::new(1), 77)
+        .unwrap();
+    let after_scroll = serde_json::from_str::<Value>(&harness.snapshot().unwrap()).unwrap();
+    harness
+        .key_listbox(window_id, ControlId::new(1), 0x0D)
+        .unwrap();
+    harness
+        .key_input(
+            window_id,
+            ControlId::new(2),
+            0x1B,
+            KeyModifiers {
+                ctrl: true,
+                shift: false,
+                alt: true,
+            },
+        )
+        .unwrap();
+    let after_keys = serde_json::from_str::<Value>(&harness.snapshot().unwrap()).unwrap();
+
+    let events = &handler.lock().unwrap().events;
+    assert!(matches!(
+        events[0],
+        AppEvent::ListBoxScrolled {
+            control_id,
+            position,
+            ..
+        } if control_id == ControlId::new(1) && position == 77
+    ));
+    assert!(matches!(
+        events[1],
+        AppEvent::ListBoxItemKeyDown {
+            control_id,
+            key_code,
+            ..
+        } if control_id == ControlId::new(1) && key_code == 0x0D
+    ));
+    assert!(matches!(
+        events[2],
+        AppEvent::InputKeyDown {
+            control_id,
+            key_code,
+            modifiers,
+            ..
+        } if control_id == ControlId::new(2)
+            && key_code == 0x1B
+            && modifiers == KeyModifiers {
+                ctrl: true,
+                shift: false,
+                alt: true,
+            }
+    ));
+    assert_eq!(after_scroll, after_keys);
+    assert_eq!(
+        after_scroll["windows"][0]["controls"][0]["scroll_vertical"],
+        77
+    );
 }
 
 #[test]

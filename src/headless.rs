@@ -1,7 +1,7 @@
 use crate::{
-    AppEvent, ControlId, ListBoxItemId, MenuActionId, MessageSeverity, PlatformCommand,
-    PlatformError, PlatformEventHandler, PlatformResult, TreeItemId, UiStateProvider, WindowConfig,
-    WindowId,
+    AppEvent, ControlId, KeyModifiers, ListBoxItemId, MenuActionId, MessageSeverity,
+    PlatformCommand, PlatformError, PlatformEventHandler, PlatformResult, TreeItemId,
+    UiStateProvider, WindowConfig, WindowId,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -612,6 +612,37 @@ impl HeadlessHarness {
                 vertical_pos,
                 horizontal_pos,
             ),
+            ProtocolActionRequest::ScrollListBox {
+                window_id,
+                control_id,
+                position,
+            } => self.scroll_listbox(
+                WindowId::new(window_id),
+                ControlId::new(control_id),
+                position,
+            ),
+            ProtocolActionRequest::KeyListBox {
+                window_id,
+                control_id,
+                key_code,
+            } => self.key_listbox(
+                WindowId::new(window_id),
+                ControlId::new(control_id),
+                key_code,
+            ),
+            ProtocolActionRequest::KeyInput {
+                window_id,
+                control_id,
+                key_code,
+                ctrl,
+                shift,
+                alt,
+            } => self.key_input(
+                WindowId::new(window_id),
+                ControlId::new(control_id),
+                key_code,
+                KeyModifiers { ctrl, shift, alt },
+            ),
         }
     }
 
@@ -788,6 +819,56 @@ impl HeadlessHarness {
             control_id,
             vertical_pos,
             horizontal_pos,
+        });
+        self.pump()
+    }
+
+    pub fn scroll_listbox(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        position: u32,
+    ) -> PlatformResult<()> {
+        self.backend
+            .set_list_box_scroll_position(window_id, control_id, position)?;
+        self.enqueue_follow_up_event(AppEvent::ListBoxScrolled {
+            window_id,
+            control_id,
+            position,
+        });
+        self.pump()
+    }
+
+    pub fn key_listbox(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        key_code: u16,
+    ) -> PlatformResult<()> {
+        self.backend
+            .validate_visible_enabled_list_box(window_id, control_id)?;
+        self.enqueue_follow_up_event(AppEvent::ListBoxItemKeyDown {
+            window_id,
+            control_id,
+            key_code,
+        });
+        self.pump()
+    }
+
+    pub fn key_input(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        key_code: u16,
+        modifiers: KeyModifiers,
+    ) -> PlatformResult<()> {
+        self.backend
+            .validate_visible_enabled_input_keydown(window_id, control_id)?;
+        self.enqueue_follow_up_event(AppEvent::InputKeyDown {
+            window_id,
+            control_id,
+            key_code,
+            modifiers,
         });
         self.pump()
     }

@@ -116,3 +116,9 @@ Type: Implementation
 Context: The headless backend needed a durable way to prevent Win32/headless fidelity drift as the contract surface grows.
 Change: Added `src/contracts.rs` as the shared pure-contract home, extracted `validate_layout_rules` so Win32 and headless call the same validator, seeded an append-only contract catalog in tests, and added headless parity/pinning tests for programmatic `Set*` silence plus state mutation, the `SetTreeViewSelection` event exception, disabled listbox row selection, modal completion ordering, and `ExpandVisibleTreeItems` expanding the full logical tree. The shared validator also makes Win32's multi-parent layout-violation error ordering deterministic. No public API changed.
 Refs: src/contracts.rs, src/window_common.rs, src/headless/backend.rs, src/headless/tests.rs, docs/Roadmap.HeadlessRenderBackend.md
+
+## 2026-06-02 - Headless broader input vocabulary
+Type: Implementation
+Context: Phase 3c needed parity for the remaining Win32 user-input events that had no headless action yet: listbox scroll, listbox key-down, and input key-down.
+Change: Added `HeadlessHarness::scroll_listbox`, `HeadlessHarness::key_listbox`, and `HeadlessHarness::key_input` plus the corresponding protocol v3 action requests, wired them through the headless dispatcher with read-only inputs allowed for key-down events, and added protocol/back-end tests that pin the event stream and snapshot stability. Implementation review removed an accidental trio of dead public `PlatformCommand` variants so the feature remains a harness/protocol action surface, not a command-stream API. Bumped the crate to `2.9.0`.
+Refs: Cargo.toml, CHANGELOG.md, src/headless.rs, src/headless/backend.rs, src/headless/protocol.rs, src/headless/tests.rs, src/contracts.rs

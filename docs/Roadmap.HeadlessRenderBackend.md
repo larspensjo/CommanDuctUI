@@ -3,7 +3,7 @@
 Status: Active — Phase 1 done; Phase 2a done; Phase 2b done; Phase 2c done;
 Phase 2d done; Phase 3a (shared contract suite) done — 2026-06-02;
 Phase 3b (deterministic-async executor) deferred to parking lot;
-Phase 3c (broader input vocabulary) in flight (prep done — 2026-06-02)
+Phase 3c (broader input vocabulary) done — 2026-06-02
 Design spec: `docs/Spec.HeadlessRenderBackend.md`
 
 This is the **living control document** for an iterative, review-driven build. The spec
@@ -37,7 +37,7 @@ dedicated `Plan.HeadlessRenderBackend.PhaseN.md` and link it from the table.
 | 2d | External dialog-scripting protocol (drive `Show*Dialog` outcomes from shape 2) | `done` | §"Phase 2d (done)" below |
 | 3a | Fidelity-C: shared contract-test suite (catalog + dedup-where-pure + parity tables + divergence register) | `done` | §"Phase 3a (done)" below |
 | 3b | Fidelity-C: optional harness-owned executor for deterministic async | `deferred` | Parking lot — revisit only if real-thread timing makes `wait_for` flaky (see §"Parking lot") |
-| 3c | Fidelity-C: broader input vocabulary (listbox scroll + key-down events) | `wip` | §"Phase 3c (wip)" below |
+| 3c | Fidelity-C: broader input vocabulary (listbox scroll + key-down events) | `done` | §"Phase 3c (done)" below |
 
 ## Phase 1 (done)
 
@@ -544,7 +544,7 @@ Completion checklist:
 - [x] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
       `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
 
-## Phase 3c (wip)
+## Phase 3c (done)
 
 **Goal (Spec §14, §15).** Close the *broader input vocabulary* gap on the road to fidelity-C:
 expose the three Win32 user-input events that exist on the native side but have **no headless
@@ -594,66 +594,66 @@ existing Win32 unit test — clean parity anchors):
 - Snapshot needs **no new fields**: listbox scroll reuses the reserved `scroll_vertical`; key-down
   carries no logical state.
 
-**Design decision (flag for external review): expose the three actions over the stdio protocol too,
-bumping `protocol_version` 2 → 3.** For shape-1/shape-2 parity the protocol `action` DTO grows
+**Design decision (confirmed by implementation review): expose the three actions over the stdio
+protocol too, bumping `protocol_version` 2 → 3.** For shape-1/shape-2 parity the protocol `action`
+DTO grows
 `scroll_listbox` / `key_listbox` / `key_input` variants (additive; old drivers unaffected). The
 alternative is in-process (shape 1) only, deferring protocol exposure until a black-box harness needs
-keyboard input. **Default: include them** (keeps the two delivery shapes at feature parity, matching
-the 2c/2d precedent that every new action vocabulary bumps `protocol_version`). Flagged for the
-external review to confirm the bump is worth it for input events an LLM driver rarely needs.
+keyboard input. **Decision: include them** (keeps the two delivery shapes at feature parity, matching
+the 2c/2d precedent that every new action vocabulary bumps `protocol_version`).
 
 Completion checklist:
 
 ### Listbox scroll action
-- [ ] Add `HeadlessHarness::scroll_listbox(window_id, control_id, position)`: validate the control is
+- [x] Add `HeadlessHarness::scroll_listbox(window_id, control_id, position)`: validate the control is
       a **listbox** that is visible+enabled (reject edit-family/other kinds — the inverse of the 2b
       `scroll` restriction so the two actions partition cleanly); set the reserved `scroll_vertical`
       field; emit `ListBoxScrolled { position }`; pump.
-- [ ] **Programmatic vs user parity:** confirm `SetScrollPosition` on a listbox stays event-silent
+- [x] **Programmatic vs user parity:** confirm `SetScrollPosition` on a listbox stays event-silent
       (2b already populates the field silently; native suppresses the echo via
       `is_scroll_event_suppressed`, `window_common.rs:173/2393`). The user action is the only
       `ListBoxScrolled` source.
-- [ ] Tests: `scroll_listbox` sets the field + emits `ListBoxScrolled`; `scroll_listbox` on a
+- [x] Tests: `scroll_listbox` sets the field + emits `ListBoxScrolled`; `scroll_listbox` on a
       non-listbox (button/input) → `Err`; the 2b `scroll` action on a listbox still → `Err`
       (regression guard that the two actions don't overlap).
 
 ### Listbox key-down action
-- [ ] Add `HeadlessHarness::key_listbox(window_id, control_id, key_code: u16)`: validate visible+enabled
+- [x] Add `HeadlessHarness::key_listbox(window_id, control_id, key_code: u16)`: validate visible+enabled
       listbox; emit `ListBoxItemKeyDown { key_code }`; **no model mutation**; pump.
-- [ ] Tests: emits the event with the given `key_code`; no snapshot change; invalid/invisible control
+- [x] Tests: emits the event with the given `key_code`; no snapshot change; invalid/invisible control
       → `Err`.
 
 ### Input key-down action
-- [ ] **Add a distinct validator — do NOT reuse `validate_visible_enabled_input`.** That validator is
+- [x] **Add a distinct validator — do NOT reuse `validate_visible_enabled_input`.** That validator is
       `set_text`-specific and **rejects read-only inputs** (`src/headless/backend.rs:1695-1715`), but
       native `InputKeyDown` is delivered by the `CreateInput` keydown subclass on every `WM_KEYDOWN`
       regardless of read-only (`src/controls/input_handler.rs:39-55`; event docs do not exclude
       read-only, `src/types.rs:322-338`). Add a `validate_visible_enabled_input_for_key` (or similar)
       seam: input kind + window shown + control enabled, **read-only allowed**.
-- [ ] Add `HeadlessHarness::key_input(window_id, control_id, key_code: u16, modifiers: KeyModifiers)`:
+- [x] Add `HeadlessHarness::key_input(window_id, control_id, key_code: u16, modifiers: KeyModifiers)`:
       validate via the new read-only-allowing seam; emit `InputKeyDown { key_code, modifiers }`;
       **no model mutation**; pump.
-- [ ] Tests: emits the event preserving `key_code` + all `KeyModifiers` combinations; no snapshot
+- [x] Tests: emits the event preserving `key_code` + all `KeyModifiers` combinations; no snapshot
       change; **`key_input` on a read-only `CreateInput` still succeeds** (regression guard against
       reusing the `set_text` validator); non-input control → `Err`.
 
 ### Contract catalog + parity tables (Spec §14)
-- [ ] Append three catalog rows (all **parity-only**, anchored to the Win32 `translate_*` seams):
+- [x] Append three catalog rows (all **parity-only**, anchored to the Win32 `translate_*` seams):
       listbox-scroll sets `scroll_vertical` + emits `ListBoxScrolled`; listbox key-down emits
       `ListBoxItemKeyDown` only (no mutation); input key-down emits `InputKeyDown` only (no mutation).
-- [ ] Add data-driven parity-table rows on the headless backend for each (input → expected emitted
+- [x] Add data-driven parity-table rows on the headless backend for each (input → expected emitted
       event / model delta or silence), in the same place as the 3a parity tables
       (`src/headless/tests.rs`). The Win32 side is already pinned by the existing `translate_*` unit
       tests (`window_common.rs:3863/3874/3885`); reference them by location in the catalog rather than
       duplicating an `HWND`-bound mirror.
 
-### Protocol exposure (Spec §9) — pending review confirmation of the bump
-- [ ] Add `scroll_listbox` / `key_listbox` / `key_input` variants to the protocol `action` request DTO
+### Protocol exposure (Spec §9)
+- [x] Add `scroll_listbox` / `key_listbox` / `key_input` variants to the protocol `action` request DTO
       (raw integer ids + raw `key_code`; `key_input` carries `ctrl`/`shift`/`alt` booleans →
       `KeyModifiers`). Dispatch each to the matching harness action; validation `Err` → `error`
       response (not abort).
-- [ ] Bump `protocol_version` 2 → 3; document the new actions next to the existing envelope docs.
-- [ ] Tests: `run_protocol` over in-memory `Cursor` drives each new action and asserts an `ok`
+- [x] Bump `protocol_version` 2 → 3; document the new actions next to the existing envelope docs.
+- [x] Tests: `run_protocol` over in-memory `Cursor` drives each new action and asserts an `ok`
       response with parity to the equivalent direct harness call. **Observe results per action kind:**
       `scroll_listbox` via the changed `scroll_vertical` snapshot field; the two **emit-only** key-down
       actions by inspecting the in-process test handler's recorded events (`handler.events` for
@@ -661,11 +661,11 @@ Completion checklist:
       snapshot is unchanged. `protocol_version` is `3` and stable.
 
 ### Cross-cutting / definition of done
-- [ ] New public `scroll_listbox` / `key_listbox` / `key_input` actions (and, if confirmed, the
+- [x] New public `scroll_listbox` / `key_listbox` / `key_input` actions (and the
       protocol variants + `protocol_version` bump) are a minor, releasable API change → bump
       `Cargo.toml` version and `CHANGELOG.md` together (next is `2.9.0`).
-- [ ] `cargo build` and `cargo test` green during implementation.
-- [ ] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
+- [x] `cargo build` and `cargo test` green during implementation.
+- [x] `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt` applied;
       `docs/EngineeringDiary.md` entry added; external review applied; Spec/Roadmap refined.
 
 ## Iteration log
@@ -845,6 +845,19 @@ Roadmap deltas.
   regression test. (3, Low) Reworked the protocol test recipe: emit-only key-down actions have no
   snapshot delta, so assert `ok` + inspect the test handler's recorded `events` and separately assert
   the snapshot is unchanged; only `scroll_listbox` is observed via the `scroll_vertical` field.
+- 2026-06-02 — Phase 3c implementation landed. Added the broader-input headless actions
+  (`scroll_listbox`, `key_listbox`, `key_input`), wired the protocol v3 DTOs through `run_protocol`,
+  allowed read-only inputs for key-down delivery, and added parity/catalog tests that pin the new
+  event stream and snapshot stability. Crate bumped to `2.9.0`; `cargo build`, `cargo test`,
+  `cargo clippy --all-targets -- -D warnings`, and `cargo fmt` are all green in this turn; external
+  review is still pending.
+- 2026-06-02 — Phase 3c implementation review follow-up applied. Removed the three public
+  `PlatformCommand` variants (`ScrollListBox`, `KeyListBox`, `KeyInput`) because they were
+  unreachable dead API and outside the semantic-action scope; the feature remains exposed through
+  `HeadlessHarness` and protocol v3 action requests. Folded the listbox-scroll validation into the
+  backend mutation helper so the action path validates the control kind once. `cargo build`,
+  `cargo test`, `cargo clippy --all-targets -- -D warnings`, and `cargo fmt` are green. Marked 3c
+  `done`.
 
 ## Parking lot
 

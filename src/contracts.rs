@@ -107,6 +107,24 @@ mod tests {
             pinning: "Asserted by parity_table_disabled_listbox_rows_remain_user_selectable and documented on ListBoxItemDescriptor::enabled.",
         },
         ContractCatalogEntry {
+            id: "listbox-scroll-user-event",
+            kind: ContractKind::ParityOnly,
+            summary: "Listbox user scroll emits ListBoxScrolled and updates the logical scroll position.",
+            pinning: "Asserted by broader_input_vocabulary_actions_emit_expected_events and protocol_broader_input_vocabulary_actions_round_trip; Win32 coverage lives in window_common::translate_listbox_scrolled.",
+        },
+        ContractCatalogEntry {
+            id: "listbox-keydown-user-event",
+            kind: ContractKind::ParityOnly,
+            summary: "Listbox key-down emits ListBoxItemKeyDown without mutating model state.",
+            pinning: "Asserted by broader_input_vocabulary_actions_emit_expected_events and protocol_broader_input_vocabulary_actions_round_trip; Win32 coverage lives in window_common::translate_listbox_keydown.",
+        },
+        ContractCatalogEntry {
+            id: "input-keydown-user-event",
+            kind: ContractKind::ParityOnly,
+            summary: "Input key-down emits InputKeyDown without mutating model state, including read-only inputs.",
+            pinning: "Asserted by broader_input_vocabulary_actions_emit_expected_events and protocol_broader_input_vocabulary_actions_round_trip; Win32 coverage lives in window_common::translate_input_keydown.",
+        },
+        ContractCatalogEntry {
             id: "radio-group-start-scoping",
             kind: ContractKind::ParityOnly,
             summary: "Radio button grouping is scoped by parent and group_start boundaries.",
@@ -149,6 +167,9 @@ mod tests {
                 "tree-view-programmatic-selection-event",
                 "hidden-tree-toggle-suppression",
                 "disabled-listbox-row-selectable",
+                "listbox-scroll-user-event",
+                "listbox-keydown-user-event",
+                "input-keydown-user-event",
                 "radio-group-start-scoping",
             ]
         );

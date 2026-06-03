@@ -1358,6 +1358,19 @@ impl HeadlessBackend {
         })
     }
 
+    pub(super) fn set_list_box_scroll_position(
+        &mut self,
+        window_id: WindowId,
+        control_id: ControlId,
+        position: u32,
+    ) -> PlatformResult<()> {
+        self.validate_visible_enabled_list_box(window_id, control_id)?;
+        self.with_control_mut(window_id, control_id, |control| {
+            control.scroll_vertical = position;
+            Ok(())
+        })
+    }
+
     pub(super) fn click_menu_action(
         &self,
         window_id: WindowId,
@@ -1396,6 +1409,32 @@ impl HeadlessBackend {
         match &control.kind {
             ControlKind::Input { .. } | ControlKind::RichEdit { .. } => Ok(()),
             _ => Err(Self::unsupported_control_kind("scroll", "Input/RichEdit")),
+        }
+    }
+
+    pub(super) fn validate_visible_enabled_list_box(
+        &self,
+        window_id: WindowId,
+        control_id: ControlId,
+    ) -> PlatformResult<()> {
+        self.validate_visible_enabled_control(window_id, control_id, "listbox action")?;
+        let control = self.with_control_ref(window_id, control_id)?;
+        match &control.kind {
+            ControlKind::ListBox { .. } => Ok(()),
+            _ => Err(Self::unsupported_control_kind("listbox action", "ListBox")),
+        }
+    }
+
+    pub(super) fn validate_visible_enabled_input_keydown(
+        &self,
+        window_id: WindowId,
+        control_id: ControlId,
+    ) -> PlatformResult<()> {
+        self.validate_visible_enabled_control(window_id, control_id, "key_input")?;
+        let control = self.with_control_ref(window_id, control_id)?;
+        match &control.kind {
+            ControlKind::Input { .. } => Ok(()),
+            _ => Err(Self::unsupported_control_kind("key_input", "Input")),
         }
     }
 

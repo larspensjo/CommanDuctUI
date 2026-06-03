@@ -6,6 +6,10 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.9.0 - 2026-06-02
+- **Feature**: Add headless listbox scroll, listbox key-down, and input key-down actions so in-process and protocol drivers can cover the broader Win32 input vocabulary.
+- **API**: Extend the headless stdio protocol to version 3 with `scroll_listbox`, `key_listbox`, and `key_input` action requests.
+
 ## 2.8.0 - 2026-06-01
 - **Feature**: Add protocol v2 `set_dialog_responder` support so shipped headless drivers can script ordered modal-dialog outcomes over the stdio protocol.
 - **API**: Add the headless dialog scripting DTOs needed to round-trip matcher/outcome scripts, including form field values, across the protocol boundary.
