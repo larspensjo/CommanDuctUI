@@ -72,12 +72,17 @@ impl HeadlessBackend {
 
     pub(super) fn create_window(&mut self, config: WindowConfig<'_>) -> WindowId {
         let window_id = WindowId::new(self.next_window_id);
-        self.next_window_id += 1;
+        self.create_window_with_id(window_id, config);
+        window_id
+    }
+
+    /// Inserts a window into the shadow model under an externally supplied `WindowId`.
+    pub(super) fn create_window_with_id(&mut self, window_id: WindowId, config: WindowConfig<'_>) {
         self.windows.insert(
             window_id.raw(),
             WindowState::new(window_id, config.title, config.width, config.height),
         );
-        window_id
+        self.next_window_id = self.next_window_id.max(window_id.raw() + 1);
     }
 
     pub(super) fn execute_platform_command(

@@ -108,6 +108,67 @@ fn started_harness(
 }
 
 #[test]
+fn create_window_with_id_preserves_exact_id() {
+    let mut backend = HeadlessBackend::new("test".to_string());
+    let config = WindowConfig {
+        title: "Main",
+        width: 800,
+        height: 600,
+    };
+
+    backend.create_window_with_id(WindowId::new(7), config);
+
+    let window = backend
+        .window(WindowId::new(7))
+        .expect("window 7 should exist after mirroring");
+    assert_eq!(window.title, "Main");
+    assert_eq!(window.width, 800);
+    assert_eq!(window.height, 600);
+}
+
+#[test]
+fn create_window_with_id_advances_generator_past_mirrored_id() {
+    let mut backend = HeadlessBackend::new("test".to_string());
+    backend.create_window_with_id(
+        WindowId::new(7),
+        WindowConfig {
+            title: "A",
+            width: 10,
+            height: 10,
+        },
+    );
+
+    let next = backend.create_window(WindowConfig {
+        title: "B",
+        width: 10,
+        height: 10,
+    });
+    assert_eq!(next.raw(), 8);
+}
+
+#[test]
+fn mirrored_window_accepts_window_referencing_command() {
+    let mut backend = HeadlessBackend::new("test".to_string());
+    backend.create_window_with_id(
+        WindowId::new(3),
+        WindowConfig {
+            title: "Main",
+            width: 640,
+            height: 480,
+        },
+    );
+
+    let result = backend.execute_platform_command(PlatformCommand::ShowWindow {
+        window_id: WindowId::new(3),
+    });
+
+    assert!(
+        result.is_ok(),
+        "command on mirrored window should succeed: {result:?}"
+    );
+}
+
+#[test]
 fn protocol_hello_is_first_and_flushes_output_groups() {
     let mut harness = HeadlessHarness::new("app");
     let window_id = harness
