@@ -1,8 +1,7 @@
-//! Pure, platform-agnostic flight-recorder core (Phase 2). Owns a shadow `HeadlessBackend`
-//! and a generic `Write` sink; on each command it emits one flat JSON-line per changed
-//! control. No `HWND`, no file I/O - fully CI-testable.
-//!
-//! Gated `#[cfg(test)]` until Phase 3 wires the `pub(crate)` facade and Win32 tap.
+//! Pure, platform-agnostic flight-recorder core plus the file-backed facade.
+//! The core owns a shadow `HeadlessBackend` and a generic `Write` sink; on each
+//! command it emits one flat JSON-line per changed control. The facade wraps the
+//! core with best-effort file I/O for the Win32 path.
 
 use super::backend::HeadlessBackend;
 use super::snapshot::ControlSnapshot;
@@ -10,7 +9,9 @@ use super::state::{ControlState, WindowState};
 use crate::{PlatformCommand, PlatformResult, WindowConfig, WindowId};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
+use std::path::Path;
 
 /// Result of feeding one command to the recorder.
 pub(super) struct RecordOutcome {
@@ -26,6 +27,12 @@ pub(super) struct RecorderCore<W: Write> {
     sink: W,
     seq: u64,
     prev: HashMap<(usize, i32), String>,
+}
+
+/// File-backed, infallible flight-recorder facade.
+pub(crate) struct FlightRecorder<W: Write = BufWriter<File>> {
+    /// `None` once disabled by a write error - all further calls become no-ops.
+    core: Option<RecorderCore<W>>,
 }
 
 impl<W: Write> RecorderCore<W> {
@@ -105,6 +112,89 @@ impl<W: Write> RecorderCore<W> {
             lines_emitted,
             shadow_result,
         })
+    }
+}
+
+impl FlightRecorder<BufWriter<File>> {
+    /// Best-effort construction. A file-open failure logs a warning and yields `None`.
+    pub(crate) fn from_path(app_name: impl Into<String>, path: &Path) -> Option<Self> {
+        match File::create(path) {
+            Ok(file) => Some(Self {
+                core: Some(RecorderCore::new(app_name, BufWriter::new(file))),
+            }),
+            Err(err) => {
+                log::warn!(
+                    "flight recorder: cannot open trace file {}: {err}",
+                    path.display()
+                );
+                None
+            }
+        }
+    }
+}
+
+impl<W: Write> FlightRecorder<W> {
+    #[cfg(test)]
+    fn from_writer(app_name: impl Into<String>, sink: W) -> Self {
+        Self {
+            core: Some(RecorderCore::new(app_name, sink)),
+        }
+    }
+
+    #[cfg(test)]
+    fn is_active(&self) -> bool {
+        self.core.is_some()
+    }
+
+    /// Mirror a Win32-created window into the shadow. Infallible.
+    pub(crate) fn record_window_created(
+        &mut self,
+        window_id: WindowId,
+        title: &str,
+        width: i32,
+        height: i32,
+    ) {
+        if let Some(core) = self.core.as_mut() {
+            core.record_window_created(window_id, title, width, height);
+        }
+    }
+
+    /// Feed a successfully-executed command to the shadow and emit its trace lines.
+    pub(crate) fn record_command(&mut self, command: PlatformCommand) {
+        let Some(core) = self.core.as_mut() else {
+            return;
+        };
+
+        match core.record_command(command) {
+            Ok(outcome) => {
+                // The facade does not act on the count, but observing it keeps the
+                // core's test-visible outcome field live in non-test builds.
+                let _ = outcome.lines_emitted;
+                if let Err(err) = outcome.shadow_result {
+                    log::warn!(
+                        "flight recorder: shadow rejected a command (headless/Win32 fidelity gap): {err:?}"
+                    );
+                }
+            }
+            Err(err) => {
+                log::warn!("flight recorder: trace write failed, disabling recorder: {err}");
+                self.core = None;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+struct FailingSink;
+
+#[cfg(test)]
+impl Write for FailingSink {
+    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+        Err(io::Error::other("boom"))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -339,18 +429,6 @@ mod tests {
         assert_eq!(core.sink.len(), before);
     }
 
-    struct FailingSink;
-
-    impl Write for FailingSink {
-        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
-            Err(io::Error::other("boom"))
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
     #[test]
     fn write_failure_surfaces_io_error_without_panicking() {
         let mut core = RecorderCore::new("test", FailingSink);
@@ -363,5 +441,101 @@ mod tests {
             text: "OK".to_string(),
         });
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod facade_tests {
+    use super::*;
+    use crate::{ControlId, PlatformCommand, WindowId};
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    fn temp_path(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "commanductui_fr_{}_{}.jsonl",
+            name,
+            std::process::id()
+        ));
+        path
+    }
+
+    #[test]
+    fn flight_recorder_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<FlightRecorder>();
+        assert_send::<Option<FlightRecorder>>();
+    }
+
+    #[test]
+    fn from_path_on_unopenable_path_returns_none() {
+        let blocking_file = temp_path("blocking_file");
+        let _ = std::fs::remove_file(&blocking_file);
+        std::fs::write(&blocking_file, b"x").expect("seed temp file");
+        let unopenable = blocking_file.join("trace.jsonl");
+        assert!(FlightRecorder::from_path("test", &unopenable).is_none());
+        let _ = std::fs::remove_file(&blocking_file);
+    }
+
+    #[test]
+    fn records_window_and_command_to_file() {
+        let path = temp_path("roundtrip");
+        let _ = std::fs::remove_file(&path);
+        {
+            let mut rec = FlightRecorder::from_path("test", &path).expect("temp file should open");
+            rec.record_window_created(WindowId::new(1), "Main", 800, 600);
+            rec.record_command(PlatformCommand::CreateButton {
+                window_id: WindowId::new(1),
+                parent_control_id: None,
+                control_id: ControlId::new(10),
+                text: "OK".to_string(),
+            });
+        }
+
+        let contents = std::fs::read_to_string(&path).expect("trace file exists");
+        let line: Value =
+            serde_json::from_str(contents.lines().next().expect("one line").trim()).unwrap();
+        assert_eq!(line["id"], serde_json::json!(10));
+        assert_eq!(line["kind"], serde_json::json!("button"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_failure_disables_recorder_and_subsequent_calls_no_op() {
+        let mut rec = FlightRecorder::from_writer("test", FailingSink);
+        rec.record_window_created(WindowId::new(1), "Main", 800, 600);
+        assert!(rec.is_active(), "still active before any line is written");
+        rec.record_command(PlatformCommand::CreateButton {
+            window_id: WindowId::new(1),
+            parent_control_id: None,
+            control_id: ControlId::new(10),
+            text: "OK".to_string(),
+        });
+        assert!(!rec.is_active(), "write failure must disable the recorder");
+        rec.record_command(PlatformCommand::CreateButton {
+            window_id: WindowId::new(1),
+            parent_control_id: None,
+            control_id: ControlId::new(11),
+            text: "Cancel".to_string(),
+        });
+        assert!(!rec.is_active());
+    }
+
+    #[test]
+    fn shadow_rejection_keeps_recorder_active() {
+        let path = temp_path("shadow_reject");
+        let _ = std::fs::remove_file(&path);
+        let mut rec = FlightRecorder::from_path("test", &path).expect("temp file should open");
+        rec.record_command(PlatformCommand::SetProgressBarPosition {
+            window_id: WindowId::new(1),
+            control_id: ControlId::new(99),
+            position: 50,
+        });
+        assert!(
+            rec.is_active(),
+            "a shadow rejection must not disable the recorder"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

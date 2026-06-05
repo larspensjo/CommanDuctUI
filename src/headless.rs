@@ -957,7 +957,8 @@ mod state;
 
 mod snapshot;
 
-#[cfg(test)]
 mod flight_recorder;
+pub(crate) use flight_recorder::FlightRecorder;
+
 #[cfg(test)]
 mod tests;

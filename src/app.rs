@@ -8,6 +8,7 @@ use crate::{
     },
     error::{PlatformError, Result as PlatformResult},
     ffi_safety,
+    headless::FlightRecorder,
     styling::{ControlStyle, FontWeight, ParsedControlStyle, StyleId, TextAlignment},
     types::{
         AppEvent, ControlId, PlatformCommand, PlatformEventHandler, UiStateProvider, WindowConfig,
@@ -38,6 +39,7 @@ use windows::{
 };
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{
     Arc, Mutex, Once, RwLock, Weak,
     atomic::{AtomicUsize, Ordering},
@@ -73,6 +75,8 @@ pub(crate) struct Win32ApiInternalState {
     // The application name, used for window class registration.
     app_name_for_class: String,
     is_quitting: AtomicUsize, // 0 = false, 1 = true
+    // Optional read-only shadow recorder; Some only when COMMANDUCTUI_FLIGHT_RECORDER is set.
+    flight_recorder: Mutex<Option<FlightRecorder>>,
 }
 
 // SAFETY: All fields are Send + Sync or wrapped in thread-safe containers, and trait objects are required to be Send + Sync.
@@ -80,6 +84,11 @@ unsafe impl Send for Win32ApiInternalState {}
 unsafe impl Sync for Win32ApiInternalState {}
 
 impl Win32ApiInternalState {
+    fn flight_recorder_from_env(app_name: &str) -> Option<FlightRecorder> {
+        let path = std::env::var_os("COMMANDUCTUI_FLIGHT_RECORDER")?;
+        FlightRecorder::from_path(app_name, Path::new(&path))
+    }
+
     /*
      * Generates a new unique `WindowId`.
      */
@@ -177,6 +186,7 @@ impl Win32ApiInternalState {
             });
 
             let h_instance = HINSTANCE(GetModuleHandleW(PCWSTR::null())?.0);
+            let flight_recorder = Self::flight_recorder_from_env(&app_name_for_class);
             Ok(Arc::new(Self {
                 h_instance,
                 next_window_id_counter: AtomicUsize::new(1),
@@ -186,6 +196,7 @@ impl Win32ApiInternalState {
                 defined_styles: RwLock::new(HashMap::new()),
                 app_name_for_class,
                 is_quitting: AtomicUsize::new(0),
+                flight_recorder: Mutex::new(flight_recorder),
             }))
         }
     }
@@ -446,6 +457,28 @@ impl Win32ApiInternalState {
      * or now directly to control handlers (e.g., `treeview_handler`).
      */
     fn execute_platform_command(self: &Arc<Self>, command: PlatformCommand) -> PlatformResult<()> {
+        let shadow_copy = match self.flight_recorder.lock() {
+            Ok(guard) if guard.is_some() => Some(command.clone()),
+            Ok(_) => None,
+            Err(_) => None,
+        };
+
+        let result = self.dispatch_platform_command(command);
+
+        if result.is_ok() {
+            if let Some(shadow_copy) = shadow_copy {
+                if let Ok(mut guard) = self.flight_recorder.lock() {
+                    if let Some(recorder) = guard.as_mut() {
+                        recorder.record_command(shadow_copy);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    fn dispatch_platform_command(self: &Arc<Self>, command: PlatformCommand) -> PlatformResult<()> {
         log::trace!("Platform: Executing command: {command:?}");
         match command {
             PlatformCommand::SetWindowTitle { window_id, title } => {
@@ -1353,6 +1386,17 @@ impl PlatformInterface {
             }
             self.internal_state.remove_window_data(window_id);
             return Err(e);
+        }
+
+        if let Ok(mut guard) = self.internal_state.flight_recorder.lock() {
+            if let Some(recorder) = guard.as_mut() {
+                recorder.record_window_created(
+                    window_id,
+                    config.title,
+                    config.width,
+                    config.height,
+                );
+            }
         }
 
         Ok(window_id)
