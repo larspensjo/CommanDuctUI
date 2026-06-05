@@ -30,9 +30,9 @@ This plan follows the repo's rolling-wave convention (see memory: *Iterative roa
 ## File structure
 
 - `src/headless/backend.rs` — ✅ **Phase 1**: added `create_window_with_id` seam; `create_window` now delegates.
-- `src/headless/tests.rs` — ✅ **Phase 1**: unit + regression tests for the seam. **Phase 2**: change-detection / projection tests (or a `flight_recorder` submodule with explicit imports).
+- `src/headless/tests.rs` — ✅ **Phase 1**: unit + regression tests for the seam. **Phase 2**: change-detection / projection tests live in the new module's inline `#[cfg(test)]` block (not here), per the design below.
 - `src/headless/flight_recorder.rs` *(new)* — **Phase 2**: trace projection + `RecorderCore<W: Write>` change-detection core. **Phase 3**: the `pub(crate)` `FlightRecorder` facade.
-- `src/headless.rs` — **Phase 2**: declare `mod flight_recorder;` (private). **Phase 3**: re-export the `pub(crate)` facade.
+- `src/headless.rs` — **Phase 2**: declare `#[cfg(test)] mod flight_recorder;` (private, test-gated). **Phase 3**: drop the gate and re-export the `pub(crate)` facade.
 - `src/app.rs` — **Phase 3**: `Win32ApiInternalState` holds `Mutex<Option<FlightRecorder>>` (the recorder must live where command execution does — see Phase 3); tap in `Win32ApiInternalState::execute_platform_command`; mirror in `PlatformInterface::create_window` via `self.internal_state`; env-var read in `Win32ApiInternalState::new`.
 - `Cargo.toml`, `CHANGELOG.md`, `docs/HeadlessMode.md`, `docs/EngineeringDiary.md` — **Phase 4**.
 
@@ -65,32 +65,39 @@ This plan follows the repo's rolling-wave convention (see memory: *Iterative roa
 
 ### Design (locked)
 
-**Module access.** `flight_recorder` is a child of `headless`, so it can reach the `pub(super)` (i.e. `pub(in headless)`) items it needs: `super::backend::HeadlessBackend` and its `windows` field; `super::state::{WindowState, ControlState}` and their `controls`/`control_id`/`parent_control_id`/`creation_order`/`kind` fields; and `super::snapshot::ControlSnapshot` with its `From<&ControlState>` impl and `Serialize` derive. No visibility changes are required anywhere — that is the whole point of housing the recorder inside `headless`.
+**Module access (verified against source).** `flight_recorder` is a child of `headless`, so it can reach the `pub(super)` (i.e. `pub(in crate::headless)`) items it needs without any visibility changes:
+- `super::backend::HeadlessBackend` ([src/headless/backend.rs:17](../src/headless/backend.rs#L17)) and its `pub(super) windows: BTreeMap<usize, WindowState>` field ([backend.rs:20](../src/headless/backend.rs#L20)).
+- `super::state::{WindowState, ControlState}` with `pub(super)` fields `controls: BTreeMap<i32, ControlState>` ([state.rs:20](../src/headless/state.rs#L20)), `control_id`, `parent_control_id`, `creation_order`, `kind` ([state.rs:82-95](../src/headless/state.rs#L82-L95)).
+- `super::snapshot::ControlSnapshot` ([snapshot.rs:79-248](../src/headless/snapshot.rs#L79-L248)) with its `From<&ControlState>` impl ([snapshot.rs:317](../src/headless/snapshot.rs#L317)) and `#[derive(Serialize)]` + `#[serde(tag = "kind", rename_all = "snake_case")]`.
+- `crate` re-exports used in tests: `WindowConfig<'a>` (fields `title: &str`, `width: i32`, `height: i32` — [types.rs:151-158](../src/types.rs#L151-L158)), `WindowId::new(usize)`, `ControlId::new(i32)`, `TreeItemId::new(u64)`, `CheckState`, `TreeItemDescriptor`.
+
+Confirmed serde tags (snake_case enum tags): `Button → "button"`, `ProgressBar → "progress_bar"`, `TreeView → "tree_view"`. The serialized field for the control id is `id` and the parent field is `parent_control_id` (renamed to `parent` by `project_line`). These literals are now verified against the source, so the tests below assert them directly.
 
 **`RecorderCore<W: Write>` state:**
 - `backend: HeadlessBackend` — the shadow model.
 - `sink: W` — generic write sink (a `Vec<u8>` in tests, a `BufWriter<File>` behind the Phase 3 facade).
 - `seq: u64` — monotonic command index; incremented once per `record_command`.
-- `prev: HashMap<(usize, i32), String>` — last-emitted **change form** per `(win_raw, control_id_raw)`. The value is `serde_json::to_string(&ControlSnapshot)` — note it deliberately excludes `seq`/`win`/`depth`, so it is a stable per-command-independent fingerprint of the control's own logical state (matching Spec §5: the change unit is the *serialized control*).
+- `prev: HashMap<(usize, i32), String>` — last-emitted **change form** per `(win_raw, control_id_raw)`. The value is `serde_json::to_string(&ControlSnapshot)` — note it deliberately excludes `seq`/`win`/`depth` (those are not part of `ControlSnapshot`), so it is a stable per-command-independent fingerprint of the control's own logical state (matching Spec §5: the change unit is the *serialized control*).
 
 **`record_command(&mut self, command: PlatformCommand) -> io::Result<RecordOutcome>`:**
 1. `self.seq += 1`.
-2. `let shadow_result = self.backend.execute_platform_command(command);` — runs the existing interpreter. On `Err` the shadow validates-before-mutates, so no state changed and step 3 finds nothing to emit (this is the tee-ordering guarantee, Spec §6/finding 3).
-3. Walk `self.backend.windows` (BTreeMap → ascending `win`); for each control build `ControlSnapshot::from(control)`, serialize to the change form, and compare to `prev[(win, id)]`. Collect changed/first-seen controls as `(win, id, creation_order, depth, snapshot, change_form)`.
-4. Sort collected lines by `(win, creation_order)` so a parent (created first) precedes its children deterministically.
-5. For each: update `prev`, build the projected line via `project_line`, write `"  ".repeat(depth)` + line + `\n`. Propagate any `io::Error` (drives Phase 3's disable path).
-6. `self.sink.flush()?` (per-command flush — Spec/Phase 3 durability).
-7. `Ok(RecordOutcome { lines_emitted, shadow_result })`.
+2. `let shadow_result = self.backend.execute_platform_command(command);` — runs the existing interpreter.
+3. **If `shadow_result` is `Err`, return `Ok(RecordOutcome { lines_emitted: 0, shadow_result })` immediately, before any scan or write.** A rejected command mutated nothing: every handler validates-before-mutates (funnelling through `with_window_mut`/`with_control_mut`/`ensure_*` before any mutation — see [backend.rs:1800-1840](../src/headless/backend.rs#L1800-L1840) and the `validate_*` helpers). Short-circuiting here makes the tee-ordering guarantee (Spec §6/finding 3) an explicit contract rather than an emergent property of "the scan happens to find no changes," so it stays correct even if a future handler ever mutated partially before returning `Err` (review M1).
+4. Walk `self.backend.windows` (`BTreeMap<usize, _>` -> ascending `win`); for each control in `window.controls.values()` build `ControlSnapshot::from(control)`, serialize to the change form, and compare to `prev[(win, id)]`. Collect changed/first-seen controls as `(win, id, creation_order, depth, snapshot, change_form)`.
+5. Sort collected lines by `(win, creation_order)` so a parent (created first -> lower `creation_order`) precedes its children deterministically.
+6. For each: update `prev`, build the projected line via `project_line`, write `"  ".repeat(depth)` + line + `\n`. Propagate any `io::Error` (drives Phase 3's disable path).
+7. `self.sink.flush()?` (per-command flush — Spec/Phase 3 durability).
+8. `Ok(RecordOutcome { lines_emitted, shadow_result })`.
 
 `RecordOutcome { lines_emitted: usize, shadow_result: PlatformResult<()> }` surfaces both the emit count (test ergonomics) and the shadow accept/reject (the Phase 3 facade logs a rejected `shadow_result` as a discrepancy and keeps going — never fatal). The outer `io::Result` is *only* the write/flush outcome, so a failing `Write` sink in tests drives the exact path Phase 3's facade turns into "warn + disable".
 
 **`record_window_created(&mut self, window_id, title, width, height)`** mirrors the window into the shadow via the Phase 1 seam (`backend.create_window_with_id`). It emits **no** line and does **not** touch `seq` — windows have no row in the format (§4); the first *control* creation establishes the baseline line. (Phase 3's facade wraps this; the core method stays infallible by construction — `create_window_with_id` cannot fail.)
 
-**`project_line(seq, win, depth, &ControlSnapshot) -> String`** (pure): `serde_json::to_value(snapshot)` → object map → remove `parent_control_id`, insert it back as `parent`; insert `seq`, `win`, `depth`. `kind` is already present from `#[serde(tag = "kind")]`. Serialize to a compact string. Key order is not asserted (serde_json `Map` is ordered alphabetically without the `preserve_order` feature) — it is cosmetic and both `rg` substring search and `jq` are order-insensitive. Tests parse the line back with `serde_json` and assert on fields, never on byte-exact output.
+**`project_line(seq, win, depth, &ControlSnapshot) -> String`** (pure): `serde_json::to_value(snapshot)` → object map (the internally-tagged enum serializes to a flat `Value::Object`) → remove `parent_control_id`, insert it back as `parent`; insert `seq`, `win`, `depth`. `kind` is already present from `#[serde(tag = "kind")]`. Key order is not asserted (serde_json `Map` is ordered alphabetically without the `preserve_order` feature) — it is cosmetic and both `rg` substring search and `jq` are order-insensitive. Tests parse the line back with `serde_json` and assert on fields, never on byte-exact output.
 
 **`control_depth(window: &WindowState, control: &ControlState) -> u32`** (pure): walk `parent_control_id` via `window.controls.get(&parent.raw())`, counting hops; `0` = top-level. Bounded by `window.controls.len()` as a cycle guard (cycles are impossible in this model, but the bound keeps the function total).
 
-**Nesting semantics (Spec §5), for free.** Internal sub-structure (tree items, list rows, chart lines) is already part of the owning control's `ControlSnapshot`, so a sub-item change changes that control's change form → the owner emits. A *child control* changing only changes the child's `(win, id)` fingerprint → only the child emits; the parent's change form is untouched, so it stays silent. Hierarchy travels via the `parent`/`depth` fields, never via re-emission.
+**Nesting semantics (Spec §5), for free.** Internal sub-structure (tree items, list rows, chart lines) is already part of the owning control's `ControlSnapshot` (e.g. `ControlSnapshot::TreeView { items, .. }` carries the full `Vec<TreeItemSnapshot>` — [snapshot.rs:194-204](../src/headless/snapshot.rs#L194-L204)), so a sub-item change changes that control's change form → the owner emits. A *child control* changing only changes the child's `(win, id)` fingerprint → only the child emits; the parent's change form is untouched, so it stays silent. Hierarchy travels via the `parent`/`depth` fields, never via re-emission.
 
 ---
 
@@ -102,7 +109,7 @@ This plan follows the repo's rolling-wave convention (see memory: *Iterative roa
 
 - [ ] **Step 1: Declare the module (test-gated)**
 
-In `src/headless.rs`, near the other private submodule declarations (`mod backend; mod state; mod snapshot;`), add:
+In `src/headless.rs`, near the existing private submodule declarations at the bottom of the file (`mod backend;`, `mod state;`, `mod snapshot;`, `#[cfg(test)] mod tests;` — [src/headless.rs:952-961](../src/headless.rs#L952-L961)), add:
 
 ```rust
 #[cfg(test)]
@@ -116,7 +123,7 @@ Create `src/headless/flight_recorder.rs`:
 ```rust
 //! Pure, platform-agnostic flight-recorder core (Phase 2). Owns a shadow `HeadlessBackend`
 //! and a generic `Write` sink; on each command it emits one flat JSON-line per *changed*
-//! control (Spec.FlightRecorder §4/§5). No `HWND`, no file I/O — fully CI-testable.
+//! control (Spec.FlightRecorder sections 4/5). No `HWND`, no file I/O - fully CI-testable.
 //!
 //! Gated `#[cfg(test)]` until Phase 3 wires the `pub(crate)` facade and Win32 tap.
 
@@ -132,8 +139,8 @@ use std::io::{self, Write};
 pub(super) struct RecordOutcome {
     /// Number of trace lines written for this command (one per changed control).
     pub(super) lines_emitted: usize,
-    /// The shadow's accept/reject of the command. An `Err` is a headless↔Win32 fidelity
-    /// discrepancy the Phase 3 facade logs and ignores — never fatal.
+    /// The shadow's accept/reject of the command. An `Err` is a headless/Win32 fidelity
+    /// discrepancy the Phase 3 facade logs and ignores - never fatal.
     pub(super) shadow_result: PlatformResult<()>,
 }
 
@@ -155,7 +162,7 @@ impl<W: Write> RecorderCore<W> {
     }
 
     /// Mirror a window the Win32 side created, preserving the exact id (Phase 1 seam).
-    /// Emits nothing and does not advance `seq` — windows have no row in the format.
+    /// Emits nothing and does not advance `seq` - windows have no row in the format.
     pub(super) fn record_window_created(
         &mut self,
         window_id: WindowId,
@@ -180,6 +187,16 @@ impl<W: Write> RecorderCore<W> {
     ) -> io::Result<RecordOutcome> {
         self.seq += 1;
         let shadow_result = self.backend.execute_platform_command(command);
+
+        // A rejected command mutated nothing (validate-before-mutate), so there is
+        // nothing to emit. Short-circuit to make the tee-ordering guarantee explicit
+        // instead of relying on the scan finding no changes.
+        if shadow_result.is_err() {
+            return Ok(RecordOutcome {
+                lines_emitted: 0,
+                shadow_result,
+            });
+        }
 
         // Collect changes first (immutable borrow of the backend), then write.
         let mut changed: Vec<(usize, i32, usize, u32, ControlSnapshot, String)> = Vec::new();
@@ -239,10 +256,11 @@ fn control_depth(window: &WindowState, control: &ControlState) -> u32 {
     depth
 }
 
-/// Flat trace projection of a `ControlSnapshot` (Spec §4): rename `parent_control_id` → `parent`
-/// and inject `seq`/`win`/`depth`. `kind` and the per-kind logical fields come from the snapshot.
+/// Flat trace projection of a `ControlSnapshot` (Spec section 4): rename `parent_control_id`
+/// -> `parent` and inject `seq`/`win`/`depth`. `kind` and the per-kind logical fields come
+/// from the snapshot.
 fn project_line(seq: u64, win: usize, depth: u32, snapshot: &ControlSnapshot) -> String {
-    let mut value = serde_json::to_value(snapshot).expect("ControlSnapshot → Value");
+    let mut value = serde_json::to_value(snapshot).expect("ControlSnapshot -> Value");
     if let Value::Object(map) = &mut value {
         let parent = map.remove("parent_control_id").unwrap_or(Value::Null);
         map.insert("parent".to_string(), parent);
@@ -250,7 +268,7 @@ fn project_line(seq: u64, win: usize, depth: u32, snapshot: &ControlSnapshot) ->
         map.insert("win".to_string(), Value::from(win));
         map.insert("depth".to_string(), Value::from(depth));
     }
-    serde_json::to_string(&value).expect("Value → String")
+    serde_json::to_string(&value).expect("Value -> String")
 }
 
 #[cfg(test)]
@@ -260,7 +278,7 @@ mod tests {
 
     /// Build a recorder over an in-memory sink with one mirrored window (id 1).
     /// No `ShowWindow` is needed: control creation only requires the window to be
-    /// not-closed (`create_control` → `WindowState::ensure_not_closed`), and a mirrored
+    /// not-closed (`create_control` -> `WindowState::ensure_not_closed`), and a mirrored
     /// window defaults to `closed = false`.
     fn recorder_with_window() -> RecorderCore<Vec<u8>> {
         let mut core = RecorderCore::new("test", Vec::new());
@@ -294,7 +312,6 @@ mod tests {
         assert_eq!(outcome.lines_emitted, 1);
         assert!(outcome.shadow_result.is_ok());
 
-        let emitted = &lines(&core)[..];
         // Re-parse only the line(s) written by this command.
         let new_text = String::from_utf8(core.sink[before..].to_vec()).unwrap();
         let line: Value = serde_json::from_str(new_text.trim()).unwrap();
@@ -304,7 +321,10 @@ mod tests {
         assert_eq!(line["depth"], serde_json::json!(0));
         assert_eq!(line["kind"], serde_json::json!("button"));
         assert_eq!(line["text"], serde_json::json!("OK"));
-        let _ = emitted; // full-stream parse exercised by later tests
+        assert_eq!(line["seq"], serde_json::json!(1));
+
+        // Full-stream parse: the mirrored window adds no row, so this is the only line.
+        assert_eq!(lines(&core).len(), 1);
     }
 }
 ```
@@ -314,7 +334,7 @@ mod tests {
 - [ ] **Step 3: Run and verify**
 
 Run: `cargo test --lib headless::flight_recorder`
-Expected: PASS — the baseline line carries `win`/`id`/`parent`/`depth`/`kind`/`text`.
+Expected: PASS — the baseline line carries `win`/`id`/`parent`/`depth`/`kind`/`text`/`seq`.
 
 - [ ] **Step 4: Commit**
 
@@ -344,7 +364,7 @@ fn setting_a_control_to_its_current_value_emits_no_line() {
     })
     .expect("create progress");
 
-    // A real change → exactly one line.
+    // A real change -> exactly one line.
     let changed = core
         .record_command(PlatformCommand::SetProgressBarPosition {
             window_id: WindowId::new(1),
@@ -354,7 +374,7 @@ fn setting_a_control_to_its_current_value_emits_no_line() {
         .expect("set position 40");
     assert_eq!(changed.lines_emitted, 1);
 
-    // Setting the same value again → no line.
+    // Setting the same value again -> no line.
     let noop = core
         .record_command(PlatformCommand::SetProgressBarPosition {
             window_id: WindowId::new(1),
@@ -383,6 +403,8 @@ git commit -m "test(headless): flight-recorder emits only on real change"
 ### Task 3: Nesting semantics — child emits alone; tree-item change emits the owning TreeView
 
 **Files:** Test: `src/headless/flight_recorder.rs` (`mod tests`)
+
+> **Source-confirmed literals.** Child-of-panel emission and depth come from `control_depth` walking `parent_control_id`. The TreeView serde tag is `"tree_view"` ([snapshot.rs:80,194](../src/headless/snapshot.rs#L80)). `TreeItemDescriptor` fields are `{ id: TreeItemId, text: String, is_folder: bool, state: CheckState, style_override: Option<StyleId>, children: Vec<TreeItemDescriptor> }` ([types.rs:192-200](../src/types.rs#L192)). `UpdateTreeItemVisualState` mutates the item's `state` inside the owning TreeView ([backend.rs:1163-1185](../src/headless/backend.rs#L1163-L1185)), so the owner's change form changes and the owner re-emits.
 
 - [ ] **Step 1: Add both nesting tests**
 
@@ -443,13 +465,13 @@ fn tree_item_change_emits_the_owning_treeview() {
             text: "node".to_string(),
             is_folder: false,
             state: CheckState::Unchecked,
-            children: Vec::new(),
             style_override: None,
+            children: Vec::new(),
         }],
     })
     .expect("populate tree");
 
-    // Changing a *sub-item* is a change to the owning control → the TreeView emits.
+    // Changing a *sub-item* is a change to the owning control -> the TreeView emits.
     let before = core.sink.len();
     let outcome = core
         .record_command(PlatformCommand::UpdateTreeItemVisualState {
@@ -468,7 +490,7 @@ fn tree_item_change_emits_the_owning_treeview() {
 }
 ```
 
-> **Before coding, verify the constructor fields** of `TreeItemDescriptor` / `TreeItemId` and the `kind` tag string for TreeView against the current source (`grep '"tree' src/headless/snapshot.rs` shows the `rename_all = "snake_case"` tag — `TreeView` → `tree_view`). Adjust the literal `"tree_view"` / descriptor fields if the source differs; the *assertion intent* (owner emits, child emits alone) is what matters.
+> If the `TreeItemDescriptor` literal fails to compile because a field has been added/reordered since this plan was written, fix the literal — the *assertion intent* (owner emits, child emits alone) is what matters, not the exact descriptor shape.
 
 - [ ] **Step 2: Run**
 
@@ -487,6 +509,8 @@ git commit -m "test(headless): flight-recorder nesting semantics (child vs sub-i
 ### Task 4: Motivating regression — two-scale progress series is reproducible from the trace
 
 **Files:** Test: `src/headless/flight_recorder.rs` (`mod tests`)
+
+> **Source-confirmed.** `CreateProgressBar` defaults to `min: 0, max: 100, position: 0` ([backend.rs:374-387](../src/headless/backend.rs#L374-L387)); `SetProgressBarPosition` clamps to `min..=max` ([backend.rs:409-426](../src/headless/backend.rs#L409-L426)), so the inputs below are unclamped. The serde tag is `"progress_bar"` and the field is `position` ([snapshot.rs:226-237](../src/headless/snapshot.rs#L226-L237)).
 
 - [ ] **Step 1: Add the regression test (the Spec §1 bug)**
 
@@ -525,8 +549,6 @@ fn progress_two_scale_series_is_reproducible_from_trace() {
 }
 ```
 
-> Confirm the ProgressBar `kind` tag (`grep -A1 'ProgressBar {' src/headless/snapshot.rs` → `progress_bar` under `rename_all = "snake_case"`) and that default range is 0..100 (so the inputs are not clamped — see `CreateProgressBar` defaults in `backend.rs`). Adjust the literal tag if needed.
-
 - [ ] **Step 2: Run**
 
 Run: `cargo test --lib headless::flight_recorder::tests::progress_two_scale_series_is_reproducible_from_trace`
@@ -543,7 +565,9 @@ git commit -m "test(headless): flight-recorder reproduces two-scale progress ser
 
 ### Task 5: Tee ordering + write-failure robustness
 
-This pins the two Spec §6 contracts the Phase 3 facade depends on: a command the shadow rejects mutates nothing (and emits nothing), and a failing sink surfaces an `io::Error` (which Phase 3 turns into warn-and-disable).
+This pins the two Spec §6 contracts the Phase 3 facade depends on: a command the shadow rejects mutates nothing (and emits nothing), and a failing sink surfaces an `io::Error` (which Phase 3 turns into warn-and-disable). The rejected-command test below also pins the explicit `Err` short-circuit added to `record_command` (review M1), so the no-emit contract holds even if a handler were ever to mutate partially before failing — not merely because the post-command scan happens to find nothing changed.
+
+> **Source-confirmed.** `SetProgressBarPosition` against an unknown control routes through `with_control_mut` -> control-not-found `Err` *before* any mutation ([backend.rs:1873-1888](../src/headless/backend.rs#L1873-L1888)), so the shadow is untouched and the sink is unchanged. With the M1 short-circuit, `record_command` returns `lines_emitted: 0` without even scanning the shadow.
 
 **Files:** Test: `src/headless/flight_recorder.rs` (`mod tests`)
 
@@ -555,7 +579,7 @@ Append inside `mod tests`:
 #[test]
 fn rejected_command_mutates_nothing_and_emits_nothing() {
     let mut core = recorder_with_window();
-    // No control 99 exists → the shadow rejects this command.
+    // No control 99 exists -> the shadow rejects this command.
     let before = core.sink.len();
     let outcome = core
         .record_command(PlatformCommand::SetProgressBarPosition {
@@ -566,7 +590,7 @@ fn rejected_command_mutates_nothing_and_emits_nothing() {
         .expect("write itself must not fail");
 
     assert!(outcome.shadow_result.is_err(), "shadow rejects unknown control");
-    assert_eq!(outcome.lines_emitted, 0, "no state reached → no trace line");
+    assert_eq!(outcome.lines_emitted, 0, "no state reached -> no trace line");
     assert_eq!(core.sink.len(), before, "sink unchanged");
 }
 ```
@@ -591,7 +615,7 @@ fn write_failure_surfaces_io_error_without_panicking() {
     let mut core = RecorderCore::new("test", FailingSink);
     core.record_window_created(WindowId::new(1), "Main", 800, 600);
 
-    // Creating a control forces a line write → the failing sink returns Err, which
+    // Creating a control forces a line write -> the failing sink returns Err, which
     // record_command propagates (Phase 3's facade turns this into warn-and-disable).
     let result = core.record_command(PlatformCommand::CreateButton {
         window_id: WindowId::new(1),
@@ -636,14 +660,22 @@ Expected: clean; `git diff --stat` shows only `src/headless.rs` and `src/headles
 
 - [ ] **Step 4: Commit any formatting changes**
 
+Stage only the Phase 2 files — never `git add -A` (review M2). A blanket add risks staging unrelated worktree changes or transient `Review.`/plan documents, which the repo rules say are never committed. Inspect `git status` first; if anything other than the two Phase 2 files appears, stage explicitly rather than with a wildcard.
+
 ```bash
-git add -A
+git add src/headless.rs src/headless/flight_recorder.rs
 git commit -m "style: cargo fmt after flight-recorder phase 2"
 ```
 
 > No `Cargo.toml`/`CHANGELOG.md` bump in Phase 2 — the core is `#[cfg(test)]`-only with no production or public surface. The version bump happens once in Phase 4.
+>
+> **EngineeringDiary deferral (deliberate — review L1).** The repo asks for diary entries on noteworthy implementations and reusable lessons. Phase 2 ships a `#[cfg(test)]`-only scaffold with no production-reachable behavior yet, so its reusable lessons (the shadow-tee design, the per-control change-fingerprint strategy, the native-first / feed-on-success tee ordering, and the explicit `Err` short-circuit) only become real once Phase 3 wires the facade into the live path. To avoid a diary entry describing behavior that does not yet run — and to keep one coherent entry rather than two partial ones — the diary update is intentionally deferred to Phase 4 (it is an explicit task there). This is a conscious deferral, not an oversight.
 
 **Phase 2 done-when:** `cargo build`, `cargo test --lib`, `cargo clippy --all-targets -- -D warnings`, and `cargo fmt --check` all pass; the five Spec §7 behaviors (first-appearance baseline, only-on-change, nesting child-vs-sub-item, two-scale progress reproduction, tee-ordering + write robustness) are each covered by a passing test; no production code path references `RecorderCore` yet (that is Phase 3).
+
+### Open questions for Phase 2
+
+None blocking. Every type, field, and serde tag referenced above was verified against the current source (`src/headless/{backend,state,snapshot}.rs`, `src/types.rs`). The one place where the implementer must re-check at coding time is the `TreeItemDescriptor` struct literal in Task 3 — if a field is added/reordered upstream, fix the literal; the assertion intent is unchanged.
 
 ---
 
@@ -670,10 +702,10 @@ git commit -m "style: cargo fmt after flight-recorder phase 2"
 **Win32 wiring (`src/app.rs`).**
 - `Win32ApiInternalState::new` ([src/app.rs:1311](../src/app.rs#L1311)) builds `recorder` from env var `COMMANDUCTUI_FLIGHT_RECORDER` (absent → `None`).
 - `PlatformInterface::create_window` ([src/app.rs:1320](../src/app.rs#L1320)): after a **successful** native window creation, call `self.internal_state` to mirror via `record_window_created`, preserving the exact `WindowId`/title/width/height.
-- `Win32ApiInternalState::execute_platform_command` ([src/app.rs:448](../src/app.rs#L448)): clone the command (`PlatformCommand: Clone`), run the native executor **first**, and feed the clone to the recorder **only on `Ok`**. Because the facade is infallible, this is a single guarded, non-`?` block; all logic stays in the testable core.
+- `Win32ApiInternalState::execute_platform_command` ([src/app.rs:448](../src/app.rs#L448)): clone the command (`PlatformCommand: Clone`), run the native executor **first**, and feed the clone to the recorder **only on `Ok`**. Because the facade is infallible, this is a single guarded, non-`?` block; all logic stays in the testable core. Note this Win32-level "feed only on `Ok`" guard composes with — and is belt-and-suspenders to — the core's own M1 short-circuit: even if a command were fed after a native failure, the shadow's `Err` short-circuit would still emit nothing.
 
 **Key tests (from Spec §6/§7).**
-- Tee ordering: a command the shadow/native would reject does not mutate the shadow (no trace line for a state never reached) — tested at the core level (no `HWND` needed).
+- Tee ordering: a command the shadow/native would reject does not mutate the shadow (no trace line for a state never reached) — tested at the core level (no `HWND` needed), now reinforced by the M1 early-return.
 - Best-effort robustness: `from_path` on an unopenable path returns `None` and never panics; a `record_command` write failure disables the recorder and returns `()` without panicking; command execution is unaffected. (Test the core with a `Write` sink that returns `io::Error` to drive the disable path.)
 - The `app.rs` tap itself is one guarded, infallible line — verified by build + existing app tests, not a new unit test (it needs Win32).
 
@@ -689,7 +721,7 @@ git commit -m "style: cargo fmt after flight-recorder phase 2"
 - `Cargo.toml`: minor version bump (new user-facing env-var capability, no public API change — Spec §8).
 - `CHANGELOG.md`: one user-facing entry describing `COMMANDUCTUI_FLIGHT_RECORDER` and the JSON-lines trace, added in the same change as the version bump.
 - `docs/HeadlessMode.md`: short pointer to the flight recorder as a sibling diagnostic of headless mode.
-- `docs/EngineeringDiary.md`: entry covering the shadow-tee design, the `create_window_with_id` finding-1 fix, and the native-first / feed-on-success tee ordering (reusable lessons).
+- `docs/EngineeringDiary.md`: the consolidated diary entry deferred from Phase 2 (review L1), now that the recorder is production-reachable — covering the shadow-tee design, the per-control change-fingerprint strategy, the `create_window_with_id` finding-1 fix, the native-first / feed-on-success tee ordering, and the explicit `Err` short-circuit (M1) as reusable lessons.
 - Final `cargo clippy --all-targets -- -D warnings` + `cargo fmt`.
 
 ---
@@ -702,10 +734,12 @@ git commit -m "style: cargo fmt after flight-recorder phase 2"
 
 **Phase 2 (detailed above).**
 - **Spec coverage:** §4 flat projection (`project_line`), §5 change detection + nesting (per-control change form + `control_depth`), §7 tests one-for-one (first-appearance, only-on-change, child-vs-sub-item nesting, two-scale progress regression, tee-ordering + write robustness).
+- **Tee-ordering is an explicit contract (review M1):** `record_command` short-circuits with `lines_emitted: 0` the moment the shadow returns `Err`, before any scan or write. A rejected command therefore can never produce a trace line — and this holds by construction, not merely because the post-command scan happens to find no changes, so it survives a hypothetical future partially-mutating handler.
 - **Reuse, no second model:** the line is derived from the existing `ControlSnapshot` (`Serialize`) via `serde_json` — one interpreter, one DTO, exactly as the spec insists.
-- **Visibility:** no `pub(super)` widening needed — `flight_recorder` is a child of `headless`, so the `pub(in headless)` backend/state/snapshot items are already in scope.
+- **Visibility:** no `pub(super)` widening needed — `flight_recorder` is a child of `headless`, so the `pub(in crate::headless)` backend/state/snapshot items are already in scope (verified).
 - **`-D warnings` trap handled:** the module is `#[cfg(test)]`-gated in Phase 2 (no production caller yet); Phase 3 removes the gate when the facade + tap consume the core.
 - **Assertions are order-insensitive:** tests parse each line with `serde_json` and assert on fields, not byte-exact output (serde_json key order is cosmetic; `rg`/`jq` are order-insensitive).
-- **Verify-before-coding flags:** a few literals (`kind` tag strings like `tree_view`/`progress_bar`, `TreeItemDescriptor` field names) are called out inline to re-check against the live source before pasting — the *assertion intent* is fixed, the literal may need a one-word tweak.
+- **Source snippet stays ASCII (review N1):** the `flight_recorder.rs` code blocks use plain-ASCII comments and string literals (`->`, `headless/Win32`, plain hyphens, "sections 4/5"); typographic characters are confined to the surrounding Markdown prose, never the generated source file.
+- **Literals verified:** `kind` tags (`button`/`progress_bar`/`tree_view`), the snapshot `id`/`position`/`parent_control_id` fields, the `WindowConfig`/`TreeItemDescriptor`/`*Id::new` signatures, and the validate-before-mutate ordering were all checked against current source; the only re-check at coding time is the `TreeItemDescriptor` struct literal in Task 3.
 
 **Phases 3–4** remain overview-level per the rolling-wave workflow and will be detailed just-in-time after Phase 2 merges.

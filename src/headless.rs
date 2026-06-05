@@ -958,4 +958,6 @@ mod state;
 mod snapshot;
 
 #[cfg(test)]
+mod flight_recorder;
+#[cfg(test)]
 mod tests;
