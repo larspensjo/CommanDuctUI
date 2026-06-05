@@ -17,6 +17,15 @@ compiled, on every platform** — Windows, Linux, and CI. On Windows a single bi
 proper Win32 mode by default and headless mode behind a flag; on Linux/CI the same app-core
 builds as a headless-only target.
 
+## Flight recorder (opt-in live tracing)
+
+The same logical model powers an opt-in **flight recorder** for the live Win32 app. Set
+`COMMANDUCTUI_FLIGHT_RECORDER=<path>` and a read-only shadow of this backend runs alongside
+the real GUI, writing a time-ordered JSON-lines trace — one line per *changed* control per
+command — that you investigate afterward with `rg`/`jq`. It records logical state only (no
+geometry), is off by default (zero cost when unset), and never affects the live app. Design
+rationale and the on-disk format are in [Spec.FlightRecorder.md](Spec.FlightRecorder.md).
+
 > This is the consumer how-to. For the design rationale, fidelity contracts, and the
 > divergence register, see [Spec.HeadlessRenderBackend.md](Spec.HeadlessRenderBackend.md).
 > Because the protocol is a frozen external contract, this guide stays at the overview level
@@ -136,3 +145,4 @@ rectangles. The exact serialized schema is the snapshot DTO in
 - [`src/headless.rs`](../src/headless.rs) — `HeadlessHarness` public API.
 - [`src/headless/protocol.rs`](../src/headless/protocol.rs) — the stdio JSON contract.
 - [Spec.HeadlessRenderBackend.md](Spec.HeadlessRenderBackend.md) — design rationale and fidelity contracts.
+- [Spec.FlightRecorder.md](Spec.FlightRecorder.md) — opt-in live flight recorder (logical-state tracing).

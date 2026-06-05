@@ -6,6 +6,9 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.10.0 - 2026-06-05
+- **Feature**: Add an opt-in flight recorder. Set `COMMANDUCTUI_FLIGHT_RECORDER=<path>` to run a read-only shadow of the headless backend alongside the live Win32 app and write a time-ordered JSON-lines trace of logical UI-state changes (one line per changed control per command, carrying `seq`/`win`/`id`/`parent`/`depth`/`kind` plus the control's logical fields) for offline investigation with `rg`/`jq`. Off by default: no shadow, no file, and no behavior change when the variable is unset; no public API change.
+
 ## 2.9.0 - 2026-06-02
 - **Feature**: Add headless listbox scroll, listbox key-down, and input key-down actions so in-process and protocol drivers can cover the broader Win32 input vocabulary.
 - **API**: Extend the headless stdio protocol to version 3 with `scroll_listbox`, `key_listbox`, and `key_input` action requests.
