@@ -3264,9 +3264,9 @@ fn key_modifiers_from_states(ctrl: i16, shift: i16, alt: i16) -> KeyModifiers {
 fn current_key_modifiers() -> KeyModifiers {
     unsafe {
         key_modifiers_from_states(
-            GetKeyState(VK_CONTROL.0 as i32) as i16,
-            GetKeyState(VK_SHIFT.0 as i32) as i16,
-            GetKeyState(VK_MENU.0 as i32) as i16,
+            GetKeyState(VK_CONTROL.0 as i32),
+            GetKeyState(VK_SHIFT.0 as i32),
+            GetKeyState(VK_MENU.0 as i32),
         )
     }
 }
