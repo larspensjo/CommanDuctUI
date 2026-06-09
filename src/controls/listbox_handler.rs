@@ -939,32 +939,34 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
         if rect.right <= rect.left {
             break; // _font drops here, restoring previous selection
         }
-        unsafe {
-            let fill = CreateSolidBrush(color_to_colorref(&pair.background));
-            let null_pen = GetStockObject(windows::Win32::Graphics::Gdi::NULL_PEN);
-            let _pen = SelectedObject::select(hdc, null_pen);
-            let _brush = SelectedObject::select(hdc, fill.into());
-            let _ = RoundRect(
-                hdc,
-                rect.left,
-                rect.top,
-                rect.right,
-                rect.bottom,
-                BADGE_RADIUS,
-                BADGE_RADIUS,
-            );
-            // _brush and _pen drop here, restoring previous pen/brush
-            drop(_brush);
-            drop(_pen);
-            let _ = DeleteObject(fill.into());
-            SetTextColor(hdc, color_to_colorref(&pair.text));
-            let mut text_rect = badge_text_rect(rect);
-            let _ = DrawTextW(
-                hdc,
-                &mut text[..],
-                &mut text_rect,
-                windows::Win32::Graphics::Gdi::DRAW_TEXT_FORMAT(badge_text_flags()),
-            );
+        if !badge.text.is_empty() {
+            unsafe {
+                let fill = CreateSolidBrush(color_to_colorref(&pair.background));
+                let null_pen = GetStockObject(windows::Win32::Graphics::Gdi::NULL_PEN);
+                let _pen = SelectedObject::select(hdc, null_pen);
+                let _brush = SelectedObject::select(hdc, fill.into());
+                let _ = RoundRect(
+                    hdc,
+                    rect.left,
+                    rect.top,
+                    rect.right,
+                    rect.bottom,
+                    BADGE_RADIUS,
+                    BADGE_RADIUS,
+                );
+                // _brush and _pen drop here, restoring previous pen/brush
+                drop(_brush);
+                drop(_pen);
+                let _ = DeleteObject(fill.into());
+                SetTextColor(hdc, color_to_colorref(&pair.text));
+                let mut text_rect = badge_text_rect(rect);
+                let _ = DrawTextW(
+                    hdc,
+                    &mut text[..],
+                    &mut text_rect,
+                    windows::Win32::Graphics::Gdi::DRAW_TEXT_FORMAT(badge_text_flags()),
+                );
+            }
         }
         x += badge_width + BADGE_GAP;
     }

@@ -6,6 +6,9 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.3.2 - 2026-06-09
+- **Fix**: Empty-text badges in owner-drawn list rows now skip pill rendering and act purely as column spacers, letting host apps align multi-badge columns without visible placeholders.
+
 ## 2.3.1 - 2026-05-30
 - **Fix**: Owner-drawn list boxes now size badge slots by the widest badge at each position, keeping multi-badge rows aligned in columns and avoiding avoidable ellipsizing of shorter rows.
 
