@@ -216,6 +216,14 @@ pub(crate) fn handle_set_rich_edit_content_command(
     }
 
     if edit_stream.dwError != 0 {
+        let rtf_snippet: String = rtf_text.chars().take(400).collect();
+        log::error!(
+            "EM_STREAMIN failed: control_id={} error={} (0x{:08X}) rtf_prefix={:?}",
+            control_id.raw(),
+            edit_stream.dwError,
+            edit_stream.dwError,
+            rtf_snippet
+        );
         return Err(PlatformError::OperationFailed(format!(
             "EM_STREAMIN failed with error code {}",
             edit_stream.dwError
