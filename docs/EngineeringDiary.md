@@ -74,3 +74,11 @@ Type: Feature
 Context: Host apps needed a generic way to react to keys pressed inside edit controls and to move focus/select text without adding app-specific Win32 code to the toolkit.
 Change: Added `AppEvent::InputKeyDown` with modifier state, an edit-control subclass that forwards `WM_KEYDOWN` through the existing app-event flow, and `PlatformCommand::SetFocus { select_all }` with a command-executor seam for optional full-text selection. Bumped the crate to 2.3.0 and covered the pure translation/focus-selection contracts with unit tests.
 Refs: src/types.rs, src/controls/input_handler.rs, src/window_common.rs, src/command_executor.rs, src/app.rs, CHANGELOG.md, Cargo.toml
+
+## 2026-07-17 - Atomic dirty-region list-box painting
+Type: Bug Fix
+Context: Direct painting of owner-drawn list rows let an intermediate background-only state reach the screen during hover transitions, while repeated renders recalculated badge slots and invalidated unchanged controls.
+Change: Added a compatible memory-DC/bitmap RAII paint buffer that restores selected objects and releases every GDI handle, paints client-coordinate dirty rectangles off-screen, and presents each completed region with one `BitBlt`; direct paint remains the allocation-failure fallback. Added pure dirty-row planning, cached badge-slot measurements, and idempotent density/population/selection update decisions. We deliberately chose explicit GDI ownership over `BufferedPaintInit`/`BeginBufferedPaint` to avoid uxtheme process-lifetime coupling and retain a clear fallback path.
+Lessons Learned: Suppressing erase avoids one source of flicker, but atomic presentation is required when a row has multiple visible paint operations; cache invalidation belongs to item/font inputs rather than interaction state.
+Prevention: Keep paint geometry and native-update decisions pure and unit-tested, and review every new GDI owner for selected-object restoration plus all early-return cleanup paths.
+Refs: src/controls/gdi_utils.rs, src/controls/listbox_handler.rs, CHANGELOG.md, Cargo.toml

@@ -10,7 +10,7 @@
  */
 
 use crate::app::Win32ApiInternalState;
-use crate::controls::gdi_utils::SelectedObject;
+use crate::controls::gdi_utils::{PaintBuffer, SelectedObject};
 use crate::controls::keyboard_navigation::{
     KeyboardNavigation, apply_window_style, dialog_code, focus_on_click,
 };
@@ -185,6 +185,67 @@ struct ListBoxState {
     palette: ListBoxPalette,
     title_font: HGDIOBJ,
     meta_font: HGDIOBJ,
+    badge_slot_widths: Option<Vec<i32>>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ListBoxUpdateDecision {
+    replace_items: bool,
+    rebuild_badge_cache: bool,
+    update_scroll_info: bool,
+    ensure_selection_visible: bool,
+    invalidate: bool,
+}
+
+fn row_density_update_decision(
+    current_row_height: i32,
+    requested_row_height: i32,
+) -> ListBoxUpdateDecision {
+    if current_row_height != requested_row_height {
+        ListBoxUpdateDecision {
+            update_scroll_info: true,
+            invalidate: true,
+            ..Default::default()
+        }
+    } else {
+        ListBoxUpdateDecision::default()
+    }
+}
+
+fn populate_list_box_update_decision(
+    current_items: &[ListBoxItemDescriptor],
+    current_badge_column_width: i32,
+    requested_items: &[ListBoxItemDescriptor],
+    requested_badge_column_width: i32,
+) -> ListBoxUpdateDecision {
+    if current_items != requested_items
+        || current_badge_column_width != requested_badge_column_width
+    {
+        ListBoxUpdateDecision {
+            replace_items: true,
+            rebuild_badge_cache: true,
+            update_scroll_info: true,
+            invalidate: true,
+            ..Default::default()
+        }
+    } else {
+        ListBoxUpdateDecision::default()
+    }
+}
+
+fn selection_update_decision(
+    current_selection: Option<usize>,
+    requested_selection: usize,
+) -> ListBoxUpdateDecision {
+    if current_selection != Some(requested_selection) {
+        ListBoxUpdateDecision {
+            ensure_selection_visible: true,
+            invalidate: true,
+            ..Default::default()
+        }
+    } else {
+        ListBoxUpdateDecision::default()
+    }
 }
 
 impl ListBoxState {
@@ -206,6 +267,7 @@ impl ListBoxState {
             palette: ListBoxPalette::default(),
             title_font: font,
             meta_font: font,
+            badge_slot_widths: None,
         }
     }
 }
@@ -267,7 +329,26 @@ unsafe extern "system" fn list_box_wnd_proc(
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
                 if !hdc.is_invalid() {
-                    unsafe { paint_list_box(hwnd, hdc) };
+                    let mut client = RECT::default();
+                    let _ = unsafe { GetClientRect(hwnd, &mut client) };
+                    if let Some(state_ptr) = unsafe { get_state(hwnd) } {
+                        let state = unsafe { &mut *state_ptr };
+                        if let Some(buffer) = unsafe { PaintBuffer::new(hdc, ps.rcPaint) } {
+                            unsafe { paint_list_box(buffer.hdc(), state, client, ps.rcPaint) };
+                            if let Err(error) = unsafe { buffer.present() } {
+                                log::warn!(
+                                    "ListBox buffered paint presentation failed for hwnd {hwnd:?}: {error}."
+                                );
+                            }
+                        } else if ps.rcPaint.right > ps.rcPaint.left
+                            && ps.rcPaint.bottom > ps.rcPaint.top
+                        {
+                            log::warn!(
+                                "ListBox paint buffer allocation failed for hwnd {hwnd:?}; using direct paint fallback."
+                            );
+                            unsafe { paint_list_box(hdc, state, client, ps.rcPaint) };
+                        }
+                    }
                 }
                 let _ = unsafe { EndPaint(hwnd, &ps) };
                 LRESULT(0)
@@ -554,6 +635,34 @@ fn row_rect(state: &ListBoxState, row_index: usize, width: i32) -> Option<RECT> 
     })
 }
 
+/// Returns the visible item indices whose client-coordinate row rectangles
+/// intersect `dirty`. This deliberately uses intersection, rather than the
+/// scrollbar's floor-based visible-row count, so a partially visible bottom
+/// row is painted when the dirty area reaches it.
+fn visible_row_range(
+    item_count: usize,
+    scroll_row: usize,
+    row_height: i32,
+    client_height: i32,
+    dirty: RECT,
+) -> std::ops::Range<usize> {
+    let row_height = row_height.max(1);
+    let client_bottom = client_height.max(0);
+    let dirty_top = dirty.top.max(0);
+    let dirty_bottom = dirty.bottom.min(client_bottom);
+    if item_count == 0 || dirty_bottom <= dirty_top || scroll_row >= item_count {
+        return 0..0;
+    }
+
+    let first_offset = (dirty_top / row_height).max(0) as usize;
+    let last_offset_exclusive = ((dirty_bottom - 1) / row_height + 1).max(0) as usize;
+    let start = scroll_row.saturating_add(first_offset).min(item_count);
+    let end = scroll_row
+        .saturating_add(last_offset_exclusive)
+        .min(item_count);
+    start.min(end)..end
+}
+
 unsafe fn invalidate_row(hwnd: HWND, row_index: usize) {
     let Some(state_ptr) = get_state(hwnd) else {
         return;
@@ -788,14 +897,7 @@ fn badge_colors(style: StyleId, disabled: bool) -> ColorPair {
     }
 }
 
-unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
-    let state_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut ListBoxState;
-    if state_ptr.is_null() {
-        return;
-    }
-    let state = unsafe { &mut *state_ptr };
-    let mut client = RECT::default();
-    let _ = unsafe { GetClientRect(hwnd, &mut client) };
+unsafe fn paint_list_box(hdc: HDC, state: &mut ListBoxState, client: RECT, dirty: RECT) {
     let width = client.right - client.left;
     let height = client.bottom - client.top;
     if width <= 0 || height <= 0 {
@@ -803,16 +905,25 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
     }
 
     let bg_brush = unsafe { CreateSolidBrush(color_to_colorref(&state.palette.row_background)) };
-    let _ = unsafe { FillRect(hdc, &client, bg_brush) };
+    let _ = unsafe { FillRect(hdc, &dirty, bg_brush) };
     let _ = unsafe { DeleteObject(bg_brush.into()) };
     unsafe { SetBkMode(hdc, TRANSPARENT) };
 
-    let start = state.scroll_row.min(state.items.len());
-    let end = (start + visible_rows(hwnd).max(1)).min(state.items.len());
+    ensure_badge_slot_widths(hdc, state);
+    let badge_slot_widths = state.badge_slot_widths.as_deref().unwrap_or_default();
+    let row_range = visible_row_range(
+        state.items.len(),
+        state.scroll_row,
+        state.row_height,
+        height,
+        dirty,
+    );
     let row_height = state.row_height.max(1);
-    for (offset, item) in state.items[start..end].iter().enumerate() {
-        let row_index = start + offset;
-        let top = (offset as i32) * row_height;
+    for row_index in row_range {
+        let item = &state.items[row_index];
+        let top = i32::try_from(row_index.saturating_sub(state.scroll_row))
+            .unwrap_or(i32::MAX)
+            .saturating_mul(row_height);
         let row_rect = RECT {
             left: 0,
             top,
@@ -844,7 +955,7 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
             let _ = unsafe { DeleteObject(accent.into()) };
         }
 
-        draw_badges(hdc, state, item, top);
+        draw_badges(hdc, state, item, top, badge_slot_widths);
 
         let has_metadata = !item.metadata.trim().is_empty();
         let title_color = if item.enabled {
@@ -907,7 +1018,13 @@ unsafe fn paint_list_box(hwnd: HWND, hdc: HDC) {
     }
 }
 
-fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top: i32) {
+fn draw_badges(
+    hdc: HDC,
+    state: &ListBoxState,
+    item: &ListBoxItemDescriptor,
+    top: i32,
+    badge_slot_widths: &[i32],
+) {
     if item.badges.is_empty() {
         return;
     }
@@ -915,21 +1032,13 @@ fn draw_badges(hdc: HDC, state: &ListBoxState, item: &ListBoxItemDescriptor, top
     let badge_column_right = ROW_PAD_LEFT + state.badge_column_width - BADGE_GAP;
     let y = top + (state.row_height.max(1) - BADGE_HEIGHT) / 2;
     let _font = unsafe { SelectedObject::select(hdc, state.meta_font) };
-    let badge_slot_widths = badge_slot_widths(hdc, state);
     for (index, badge) in item.badges.iter().enumerate() {
         if x >= badge_column_right {
             break;
         }
         let pair = badge_colors(badge.style, !item.enabled);
+        let badge_width = badge_slot_widths.get(index).copied().unwrap_or_default();
         let mut text: Vec<u16> = badge.text.encode_utf16().collect();
-        let mut size = SIZE::default();
-        unsafe {
-            let _ = GetTextExtentPoint32W(hdc, &text, &mut size);
-        }
-        let badge_width = badge_slot_widths
-            .get(index)
-            .copied()
-            .unwrap_or_else(|| badge_width_from_text_width(size.cx));
         let rect = RECT {
             left: x,
             top: y,
@@ -987,7 +1096,11 @@ fn badge_slot_widths_from_measured_rows(rows: &[Vec<i32>]) -> Vec<i32> {
     widths
 }
 
-fn badge_slot_widths(hdc: HDC, state: &ListBoxState) -> Vec<i32> {
+fn ensure_badge_slot_widths(hdc: HDC, state: &mut ListBoxState) {
+    if state.badge_slot_widths.is_some() {
+        return;
+    }
+    let _font = unsafe { SelectedObject::select(hdc, state.meta_font) };
     let measured_rows = state
         .items
         .iter()
@@ -1005,7 +1118,11 @@ fn badge_slot_widths(hdc: HDC, state: &ListBoxState) -> Vec<i32> {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    badge_slot_widths_from_measured_rows(&measured_rows)
+    state.badge_slot_widths = Some(badge_slot_widths_from_measured_rows(&measured_rows));
+}
+
+fn invalidate_badge_slot_widths(state: &mut ListBoxState) {
+    state.badge_slot_widths = None;
 }
 
 fn badge_text_rect(rect: RECT) -> RECT {
@@ -1133,12 +1250,25 @@ pub(crate) fn handle_populate_list_box_command(
             ))
         })?;
         let state = &mut *state;
+        let requested_badge_column_width = i32::from(badge_column_width);
+        let decision = populate_list_box_update_decision(
+            &state.items,
+            state.badge_column_width,
+            &items,
+            requested_badge_column_width,
+        );
+        if !decision.replace_items {
+            return Ok(());
+        }
         let selected_id = state
             .selected_index
             .and_then(|index| state.items.get(index))
             .map(|item| item.id);
         state.items = items;
-        state.badge_column_width = i32::from(badge_column_width);
+        state.badge_column_width = requested_badge_column_width;
+        if decision.rebuild_badge_cache {
+            invalidate_badge_slot_widths(state);
+        }
         state.selected_index =
             selected_id.and_then(|id| state.items.iter().position(|item| item.id == id));
         if state.items.is_empty() {
@@ -1147,8 +1277,12 @@ pub(crate) fn handle_populate_list_box_command(
             let max = state.items.len().saturating_sub(visible_rows(hwnd));
             state.scroll_row = state.scroll_row.min(max);
         }
-        update_scroll_info(hwnd);
-        let _ = InvalidateRect(Some(hwnd), None, false);
+        if decision.update_scroll_info {
+            update_scroll_info(hwnd);
+        }
+        if decision.invalidate {
+            let _ = InvalidateRect(Some(hwnd), None, false);
+        }
     }
     Ok(())
 }
@@ -1175,14 +1309,21 @@ pub(crate) fn handle_set_list_box_row_density_command(
             ))
         })?;
         let state = &mut *state;
-        state.row_height = row_height_for_density(density);
+        let requested_row_height = row_height_for_density(density);
+        let decision = row_density_update_decision(state.row_height, requested_row_height);
+        if !decision.invalidate {
+            return Ok(());
+        }
+        state.row_height = requested_row_height;
         if state.items.is_empty() {
             state.scroll_row = 0;
         } else {
             let max = state.items.len().saturating_sub(visible_rows(hwnd));
             state.scroll_row = state.scroll_row.min(max);
         }
-        update_scroll_info(hwnd);
+        if decision.update_scroll_info {
+            update_scroll_info(hwnd);
+        }
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
     Ok(())
@@ -1217,8 +1358,14 @@ pub(crate) fn handle_set_list_box_selection_command(
                 control_id.raw()
             )));
         };
+        let decision = selection_update_decision(state.selected_index, index);
+        if !decision.invalidate {
+            return Ok(());
+        }
         state.selected_index = Some(index);
-        ensure_row_visible(hwnd, index);
+        if decision.ensure_selection_visible {
+            ensure_row_visible(hwnd, index);
+        }
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
     Ok(())
@@ -1241,6 +1388,161 @@ pub(crate) fn handle_apply_style_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(id: u64) -> ListBoxItemDescriptor {
+        ListBoxItemDescriptor {
+            id: ListBoxItemId::new(id),
+            badges: Vec::new(),
+            title: format!("item {id}"),
+            metadata: String::new(),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn visible_row_range_includes_a_single_hovered_row() {
+        assert_eq!(
+            visible_row_range(
+                10,
+                0,
+                30,
+                180,
+                RECT {
+                    left: 0,
+                    top: 60,
+                    right: 320,
+                    bottom: 90,
+                },
+            ),
+            2..3
+        );
+    }
+
+    #[test]
+    fn visible_row_range_covers_bounding_rect_for_separated_dirty_rows() {
+        assert_eq!(
+            visible_row_range(
+                10,
+                0,
+                30,
+                180,
+                RECT {
+                    left: 0,
+                    top: 30,
+                    right: 320,
+                    bottom: 150,
+                },
+            ),
+            1..5
+        );
+    }
+
+    #[test]
+    fn visible_row_range_handles_partial_dirty_rectangles_and_scrolling() {
+        assert_eq!(
+            visible_row_range(
+                12,
+                4,
+                30,
+                150,
+                RECT {
+                    left: 0,
+                    top: 17,
+                    right: 320,
+                    bottom: 64,
+                },
+            ),
+            4..7
+        );
+    }
+
+    #[test]
+    fn visible_row_range_includes_partially_visible_bottom_row() {
+        assert_eq!(
+            visible_row_range(
+                10,
+                0,
+                30,
+                75,
+                RECT {
+                    left: 0,
+                    top: 60,
+                    right: 320,
+                    bottom: 75,
+                },
+            ),
+            2..3
+        );
+    }
+
+    #[test]
+    fn visible_row_range_is_empty_for_empty_lists_and_rectangles_below_items() {
+        let dirty = RECT {
+            left: 0,
+            top: 90,
+            right: 320,
+            bottom: 120,
+        };
+        assert_eq!(visible_row_range(0, 0, 30, 120, dirty), 0..0);
+        assert_eq!(visible_row_range(3, 0, 30, 120, dirty), 3..3);
+    }
+
+    #[test]
+    fn row_density_update_decision_is_idempotent() {
+        assert_eq!(
+            row_density_update_decision(30, 30),
+            ListBoxUpdateDecision::default()
+        );
+        assert_eq!(
+            row_density_update_decision(44, 30),
+            ListBoxUpdateDecision {
+                update_scroll_info: true,
+                invalidate: true,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn populate_list_box_update_decision_only_reacts_to_content_or_width_changes() {
+        let current = vec![item(1)];
+        assert_eq!(
+            populate_list_box_update_decision(&current, 130, &current, 130),
+            ListBoxUpdateDecision::default()
+        );
+        let changed = vec![item(2)];
+        let expected = ListBoxUpdateDecision {
+            replace_items: true,
+            rebuild_badge_cache: true,
+            update_scroll_info: true,
+            invalidate: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            populate_list_box_update_decision(&current, 130, &changed, 130),
+            expected
+        );
+        assert_eq!(
+            populate_list_box_update_decision(&current, 130, &current, 131),
+            expected
+        );
+    }
+
+    #[test]
+    fn selection_update_decision_is_idempotent() {
+        assert_eq!(
+            selection_update_decision(Some(2), 2),
+            ListBoxUpdateDecision::default()
+        );
+        assert_eq!(
+            selection_update_decision(Some(1), 2),
+            ListBoxUpdateDecision {
+                ensure_selection_visible: true,
+                invalidate: true,
+                ..Default::default()
+            }
+        );
+    }
 
     #[test]
     fn palette_is_dark() {
@@ -1332,6 +1634,25 @@ mod tests {
                 badge_width_from_text_width(60),
             ]
         );
+    }
+
+    #[test]
+    fn badge_slot_width_cache_is_reused_until_item_or_font_inputs_change() {
+        let mut state = ListBoxState::new();
+        state.badge_slot_widths = Some(vec![48, 64]);
+
+        assert_eq!(state.badge_slot_widths.as_deref(), Some(&[48, 64][..]));
+
+        // Hover, selection, density, and scrolling do not call the invalidation seam.
+        state.hover_index = Some(0);
+        state.selected_index = Some(0);
+        state.scroll_row = 1;
+        state.row_height = COMPACT_ROW_HEIGHT;
+        assert_eq!(state.badge_slot_widths.as_deref(), Some(&[48, 64][..]));
+
+        // Item replacement (and any future font replacement) must invalidate it.
+        invalidate_badge_slot_widths(&mut state);
+        assert!(state.badge_slot_widths.is_none());
     }
 
     #[test]

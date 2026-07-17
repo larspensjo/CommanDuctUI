@@ -6,6 +6,10 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.3.3 - 2026-07-17
+- **Fix**: Owner-drawn list boxes now paint dirty regions into a compatible off-screen GDI buffer and present the completed result atomically, eliminating transient blank or partially drawn hover rows.
+- **Fix**: List-box painting now limits work to dirty rows, caches badge-slot measurements, and ignores unchanged density, population, and selection commands to avoid redundant repaint work.
+
 ## 2.3.2 - 2026-06-09
 - **Fix**: Empty-text badges in owner-drawn list rows now skip pill rendering and act purely as column spacers, letting host apps align multi-badge columns without visible placeholders.
 
