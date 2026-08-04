@@ -1186,7 +1186,6 @@ unsafe extern "system" fn form_dialog_proc(
                             edit_control_id,
                             warning_control_id,
                             live_warning,
-                            validation: _,
                             ..
                         } => {
                             if let Ok(hwnd_edit) =

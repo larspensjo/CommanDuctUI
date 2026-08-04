@@ -6,6 +6,9 @@ Skip changelog entries for internal-only refactors, plans, review docs, diary up
 
 ## Unreleased
 
+## 2.3.4 - 2026-08-04
+- **Fix**: Drop a redundant wildcard field pattern in the form-dialog init handler so strict clippy checks (`-D warnings`) no longer fail for downstream crates building this library.
+
 ## 2.3.3 - 2026-07-17
 - **Fix**: Owner-drawn list boxes now paint dirty regions into a compatible off-screen GDI buffer and present the completed result atomically, eliminating transient blank or partially drawn hover rows.
 - **Fix**: List-box painting now limits work to dirty rows, caches badge-slot measurements, and ignores unchanged density, population, and selection commands to avoid redundant repaint work.
